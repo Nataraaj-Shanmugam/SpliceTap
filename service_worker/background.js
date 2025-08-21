@@ -4,7 +4,11 @@
  */
 
 // Import utilities
-importScripts('src/utils.js', 'src/storage.js');
+importScripts(
+  chrome.runtime.getURL('src/utils.js'),
+  chrome.runtime.getURL('src/storage.js')
+);
+
 
 class TurboMockBackground {
     constructor() {

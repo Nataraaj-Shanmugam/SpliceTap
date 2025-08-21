@@ -9,7 +9,7 @@ class TurboMockContent {
         this.ruleEditor = null;
         this.networkMonitor = null;
         this.styleElement = null;
-        
+
         this.init();
     }
 
@@ -18,7 +18,7 @@ class TurboMockContent {
             this.setupMessageListeners();
             this.injectRequestInterception();
             this.injectNetworkMonitor();
-            
+
             console.log('🎭 TurboMock content script initialized');
         } catch (error) {
             console.error('Failed to initialize content script:', error);
@@ -127,7 +127,7 @@ class TurboMockContent {
                 };
             })();
         `;
-        
+
         // Inject the script
         (document.head || document.documentElement).appendChild(script);
         script.remove();
@@ -135,7 +135,7 @@ class TurboMockContent {
         // Listen for intercepted requests
         window.addEventListener('message', (event) => {
             if (event.source !== window) return;
-            
+
             if (event.data.type === 'TURBOMOCK_REQUEST_STARTED') {
                 this.handleRequestStarted(event.data.data);
             } else if (event.data.type === 'TURBOMOCK_REQUEST_COMPLETED') {
@@ -149,7 +149,7 @@ class TurboMockContent {
      */
     handleRequestStarted(requestData) {
         this.interceptedRequests.set(requestData.id, requestData);
-        
+
         // Notify background script
         chrome.runtime.sendMessage({
             type: 'requestIntercepted',
@@ -167,10 +167,10 @@ class TurboMockContent {
         if (stored) {
             Object.assign(stored, requestData);
         }
-        
+
         // Update network monitor
         this.updateNetworkMonitor();
-        
+
         // Notify background script
         chrome.runtime.sendMessage({
             type: 'requestCompleted',
@@ -200,18 +200,18 @@ class TurboMockContent {
                     await this.openRuleEditor(message.rule);
                     sendResponse({ success: true });
                     break;
-                    
+
                 case 'getInterceptedRequests':
-                    sendResponse({ 
+                    sendResponse({
                         success: true,
-                        requests: Array.from(this.interceptedRequests.values()) 
+                        requests: Array.from(this.interceptedRequests.values())
                     });
                     break;
-                    
+
                 case 'ping':
                     sendResponse({ success: true, pong: true });
                     break;
-                    
+
                 default:
                     sendResponse({ success: false, error: 'Unknown message type' });
             }
@@ -228,11 +228,11 @@ class TurboMockContent {
         if (this.ruleEditor) {
             this.ruleEditor.remove();
         }
-        
+
         this.injectModalStyles();
         this.ruleEditor = this.createRuleEditorModal(rule);
         document.body.appendChild(this.ruleEditor);
-        
+
         // Focus the modal
         setTimeout(() => {
             const firstInput = this.ruleEditor.querySelector('input, textarea');
@@ -246,7 +246,7 @@ class TurboMockContent {
     createRuleEditorModal(rule) {
         const isNewRule = !rule;
         const ruleData = rule || TurboMockUtils.createRuleTemplate();
-        
+
         const modal = document.createElement('div');
         modal.className = 'turbomock-modal';
         modal.innerHTML = `
@@ -263,24 +263,29 @@ class TurboMockContent {
                             <input type="text" id="turbomock-rule-name" value="${TurboMockUtils.escapeHtml(ruleData.name)}" required>
                         </div>
                         
-                        <div class="turbomock-form-group">
-                            <label>Match Conditions</label>
-                            <div class="turbomock-form-row">
-                                <select id="turbomock-rule-method">
-                                    <option value="*" ${ruleData.match.method === '*' ? 'selected' : ''}>Any</option>
-                                    <option value="GET" ${ruleData.match.method === 'GET' ? 'selected' : ''}>GET</option>
-                                    <option value="POST" ${ruleData.match.method === 'POST' ? 'selected' : ''}>POST</option>
-                                    <option value="PUT" ${ruleData.match.method === 'PUT' ? 'selected' : ''}>PUT</option>
-                                    <option value="DELETE" ${ruleData.match.method === 'DELETE' ? 'selected' : ''}>DELETE</option>
-                                    <option value="PATCH" ${ruleData.match.method === 'PATCH' ? 'selected' : ''}>PATCH</option>
-                                </select>
-                                <input type="text" id="turbomock-rule-url" placeholder="URL pattern (e.g., */api/users/*)" value="${TurboMockUtils.escapeHtml(ruleData.match.url)}" required>
-                            </div>
+                    <div class="turbomock-form-group">
+                        <label>Match Conditions</label>
+                        <div class="turbomock-form-row vertical">
+                            <select id="turbomock-rule-method">
+                                <option value="GET" ${ruleData.match.method === 'GET' ? 'selected' : ''}>GET</option>
+                                <option value="POST" ${ruleData.match.method === 'POST' ? 'selected' : ''}>POST</option>
+                                <option value="PUT" ${ruleData.match.method === 'PUT' ? 'selected' : ''}>PUT</option>
+                                <option value="DELETE" ${ruleData.match.method === 'DELETE' ? 'selected' : ''}>DELETE</option>
+                                <option value="PATCH" ${ruleData.match.method === 'PATCH' ? 'selected' : ''}>PATCH</option>
+                            </select>
+                            <input
+                            type="text"
+                            id="turbomock-rule-url"
+                            placeholder="https://api.example.com/v1/*"
+                            value="${TurboMockUtils.escapeHtml(ruleData.match.url)}"
+                            required
+                            >
                         </div>
+                    </div>
                         
                         <div class="turbomock-form-group">
                             <label>Response Configuration</label>
-                            <div class="turbomock-form-row">
+                            <div class="turbomock-form-row vertical">
                                 <select id="turbomock-response-status">
                                     <option value="200" ${ruleData.response.statusCode === 200 ? 'selected' : ''}>200 OK</option>
                                     <option value="201" ${ruleData.response.statusCode === 201 ? 'selected' : ''}>201 Created</option>
@@ -312,10 +317,10 @@ class TurboMockContent {
                 </div>
             </div>
         `;
-        
+
         // Add event listeners
         this.setupModalEventListeners(modal, ruleData, isNewRule);
-        
+
         return modal;
     }
 
@@ -327,24 +332,24 @@ class TurboMockContent {
         const closeBtn = modal.querySelector('.turbomock-close-btn');
         const backdrop = modal.querySelector('.turbomock-modal-backdrop');
         const cancelBtn = modal.querySelector('#turbomock-cancel-btn');
-        
+
         [closeBtn, backdrop, cancelBtn].forEach(element => {
             element.addEventListener('click', () => {
                 modal.remove();
                 this.ruleEditor = null;
             });
         });
-        
+
         // Test rule
         modal.querySelector('#turbomock-test-btn').addEventListener('click', () => {
             this.testRuleFromModal(modal);
         });
-        
+
         // Save rule
         modal.querySelector('#turbomock-save-btn').addEventListener('click', () => {
             this.saveRuleFromModal(modal, ruleData, isNewRule);
         });
-        
+
         // Keyboard shortcuts
         modal.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
@@ -363,25 +368,25 @@ class TurboMockContent {
     async testRuleFromModal(modal) {
         const testBtn = modal.querySelector('#turbomock-test-btn');
         const originalText = testBtn.textContent;
-        
+
         try {
             testBtn.textContent = '⏳ Testing...';
             testBtn.disabled = true;
-            
+
             const rule = this.collectRuleFromModal(modal);
-            
+
             // Send test request to background script
             const response = await chrome.runtime.sendMessage({
                 type: 'testRule',
                 rule: rule
             });
-            
+
             if (response.success) {
                 this.showTestResults(modal, response.results);
             } else {
                 this.showModalError(modal, 'Test failed: ' + response.error);
             }
-            
+
         } catch (error) {
             this.showModalError(modal, 'Test failed: ' + error.message);
         } finally {
@@ -396,35 +401,35 @@ class TurboMockContent {
     async saveRuleFromModal(modal, originalRule, isNewRule) {
         const saveBtn = modal.querySelector('#turbomock-save-btn');
         const originalText = saveBtn.textContent;
-        
+
         try {
             saveBtn.textContent = '💾 Saving...';
             saveBtn.disabled = true;
-            
+
             const rule = this.collectRuleFromModal(modal);
-            
+
             // Validate rule
             const validation = this.validateRule(rule);
             if (!validation.isValid) {
                 this.showModalError(modal, 'Validation failed: ' + validation.errors.join(', '));
                 return;
             }
-            
+
             // Preserve original rule properties
             if (!isNewRule) {
                 rule.id = originalRule.id;
                 rule.created = originalRule.created;
                 rule.hitCount = originalRule.hitCount || 0;
             }
-            
+
             rule.lastModified = new Date().toISOString();
-            
+
             // Send to background script
             const response = await chrome.runtime.sendMessage({
                 type: 'saveRule',
                 rule: rule
             });
-            
+
             if (response.success) {
                 this.showModalSuccess(modal, 'Rule saved successfully');
                 setTimeout(() => {
@@ -434,7 +439,7 @@ class TurboMockContent {
             } else {
                 this.showModalError(modal, 'Failed to save rule: ' + response.error);
             }
-            
+
         } catch (error) {
             this.showModalError(modal, 'Save failed: ' + error.message);
         } finally {
@@ -467,7 +472,7 @@ class TurboMockContent {
             testStatus: 'pending',
             hitCount: 0
         };
-        
+
         return rule;
     }
 
@@ -487,25 +492,25 @@ class TurboMockContent {
      */
     validateRule(rule) {
         const errors = [];
-        
+
         if (!rule.name || rule.name.trim().length === 0) {
             errors.push('Rule name is required');
         }
-        
+
         if (!rule.match.url || rule.match.url.trim().length === 0) {
             errors.push('URL pattern is required');
         }
-        
+
         const urlValidation = TurboMockUtils.validateUrlPattern(rule.match.url);
         if (!urlValidation.isValid) {
             errors.push(urlValidation.error);
         }
-        
+
         const statusValidation = TurboMockUtils.validateStatusCode(rule.response.statusCode);
         if (!statusValidation.isValid) {
             errors.push(statusValidation.error);
         }
-        
+
         return {
             isValid: errors.length === 0,
             errors: errors
@@ -520,17 +525,17 @@ class TurboMockContent {
         if (existingResults) {
             existingResults.remove();
         }
-        
+
         const resultsDiv = document.createElement('div');
         resultsDiv.className = 'turbomock-test-results';
-        
+
         const status = results.passed ? 'passed' : 'failed';
         const icon = results.passed ? '✅' : '❌';
-        
+
         let html = `<div class="turbomock-test-result turbomock-test-${status}">
             <strong>${icon} Test ${status.charAt(0).toUpperCase() + status.slice(1)}</strong>
         </div>`;
-        
+
         if (results.errors && results.errors.length > 0) {
             html += '<div class="turbomock-test-result turbomock-test-error"><strong>Errors:</strong><ul>';
             results.errors.forEach(error => {
@@ -538,7 +543,7 @@ class TurboMockContent {
             });
             html += '</ul></div>';
         }
-        
+
         if (results.warnings && results.warnings.length > 0) {
             html += '<div class="turbomock-test-result turbomock-test-warning"><strong>Warnings:</strong><ul>';
             results.warnings.forEach(warning => {
@@ -546,7 +551,7 @@ class TurboMockContent {
             });
             html += '</ul></div>';
         }
-        
+
         resultsDiv.innerHTML = html;
         modal.querySelector('.turbomock-modal-footer').before(resultsDiv);
     }
@@ -573,13 +578,13 @@ class TurboMockContent {
         if (existingMessage) {
             existingMessage.remove();
         }
-        
+
         const messageDiv = document.createElement('div');
         messageDiv.className = `turbomock-modal-message turbomock-modal-message-${type}`;
         messageDiv.textContent = message;
-        
+
         modal.querySelector('.turbomock-modal-footer').before(messageDiv);
-        
+
         setTimeout(() => {
             if (messageDiv.parentNode) {
                 messageDiv.remove();
@@ -597,11 +602,11 @@ class TurboMockContent {
             <div class="turbomock-monitor-icon">🎭</div>
             <div class="turbomock-monitor-count">0</div>
         `;
-        
+
         this.injectNetworkMonitorStyles();
         document.body.appendChild(monitor);
         this.networkMonitor = monitor;
-        
+
         this.updateNetworkMonitor();
     }
 
@@ -610,20 +615,20 @@ class TurboMockContent {
      */
     async updateNetworkMonitor() {
         if (!this.networkMonitor) return;
-        
+
         try {
             const count = this.interceptedRequests.size;
             const countElement = this.networkMonitor.querySelector('.turbomock-monitor-count');
             if (countElement) {
                 countElement.textContent = count.toString();
             }
-            
+
             if (count > 0) {
                 this.networkMonitor.style.opacity = '1';
             } else {
                 this.networkMonitor.style.opacity = '0.3';
             }
-            
+
         } catch (error) {
             // Ignore errors
         }
@@ -634,7 +639,7 @@ class TurboMockContent {
      */
     injectModalStyles() {
         if (document.getElementById('turbomock-modal-styles')) return;
-        
+
         const style = document.createElement('style');
         style.id = 'turbomock-modal-styles';
         style.textContent = `
@@ -876,8 +881,15 @@ class TurboMockContent {
                 color: #991b1b;
                 border: 1px solid #fecaca;
             }
+
+            .turbomock-form-row.vertical {
+                flex-direction: column;
+            }
+            .turbomock-form-row.vertical > * {
+                width: 100%;
+            }
         `;
-        
+
         document.head.appendChild(style);
         this.styleElement = style;
     }
@@ -887,7 +899,7 @@ class TurboMockContent {
      */
     injectNetworkMonitorStyles() {
         if (document.getElementById('turbomock-monitor-styles')) return;
-        
+
         const style = document.createElement('style');
         style.id = 'turbomock-monitor-styles';
         style.textContent = `
@@ -925,7 +937,7 @@ class TurboMockContent {
                 text-align: center;
             }
         `;
-        
+
         document.head.appendChild(style);
     }
 }
