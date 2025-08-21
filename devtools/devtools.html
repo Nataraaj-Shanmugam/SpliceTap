@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TurboMock DevTools</title>
+</head>
+<body>
+    <script>
+        // Create DevTools panel
+        chrome.devtools.panels.create(
+            'TurboMock',
+            '/assets/icons/icon-16.png',
+            '/devtools/panel.html',
+            function(panel) {
+                console.log('TurboMock DevTools panel created');
+            }
+        );
+        
+        // Listen for network events
+        chrome.devtools.network.onRequestFinished.addListener(function(request) {
+            // Check if this request was mocked
+            const isMocked = request.response && 
+                request.response.headers && 
+                request.response.headers.some(header => 
+                    header.name.toLowerCase() === 'x-turbomock' && header.value === 'true'
+                );
+            
+            if (isMocked) {
+                console.log('TurboMock: Detected mocked request', request.request.url);
+            }
+        });
+    </script>
+</body>
+</html>

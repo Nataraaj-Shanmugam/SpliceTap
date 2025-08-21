@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Mocker DevTools</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 12px;
+            background: #1e1e1e;
+            color: #cccccc;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .devtools-header {
+            background: #2d2d30;
+            border-bottom: 1px solid #3e3e42;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 32px;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo {
+            font-size: 14px;
+            font-weight: 600;
+            color: #569cd6;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.disabled {
+            background: #dc3545;
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: #1177bb;
+        }
+
+        .btn.secondary {
+            background: #3c3c3c;
+            color: #cccccc;
+        }
+
+        .btn.secondary:hover {
+            background: #464647;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        .sidebar {
+            width: 300px;
+            background: #252526;
+            border-right: 1px solid #3e3e42;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .sidebar-section {
+            border-bottom: 1px solid #3e3e42;
+        }
+
+        .section-header {
+            background: #2d2d30;
+            padding: 8px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: #969696;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .section-header:hover {
+            background: #37373d;
+        }
+
+        .collapse-icon {
+            font-size: 10px;
+            transition: transform 0.2s;
+        }
+
+        .section-header.collapsed .collapse-icon {
+            transform: rotate(-90deg);
+        }
+
+        .section-content {
+            max-height: 300px;
+            overflow-y: auto;
+            transition: max-height 0.3s ease;
+        }
+
+        .section-content.collapsed {
+            max-height: 0;
+            overflow: hidden;
+        }
+
+        .search-box {
+            padding: 8px;
+            border-bottom: 1px solid #3e3e42;
+        }
+
+        .search-input {
+            width: 100%;
+            background: #3c3c3c;
+            border: 1px solid #464647;
+            color: #cccccc;
+            padding: 6px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #569cd6;
+            box-shadow: 0 0 0 1px #569cd6;
+        }
+
+        .rule-list {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .rule-item {
+            padding: 8px 12px;
+            border-bottom: 1px solid #2d2d30;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            position: relative;
+        }
+
+        .rule-item:hover {
+            background: #2a2d2e;
+        }
+
+        .rule-item.active {
+            background: #094771;
+            border-left: 3px solid #569cd6;
+        }
+
+        .rule-item.disabled {
+            opacity: 0.6;
+        }
+
+        .rule-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        .rule-name {
+            font-weight: 500;
+            color: #ffffff;
+            font-size: 12px;
+        }
+
+        .rule-status {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .status-icon {
+            font-size: 10px;
+        }
+
+        .rule-details {
+            font-size: 10px;
+            color: #969696;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .rule-url {
+            font-family: 'Consolas', monospace;
+            background: #1e1e1e;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+
+        .rule-stats {
+            display: flex;
+            gap: 12px;
+            margin-top: 4px;
+        }
+
+        .stat {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .main-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-tabs {
+            background: #2d2d30;
+            border-bottom: 1px solid #3e3e42;
+            display: flex;
+            overflow-x: auto;
+        }
+
+        .tab {
+            padding: 8px 16px;
+            background: none;
+            border: none;
+            color: #cccccc;
+            font-size: 11px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .tab:hover {
+            background: #37373d;
+            color: #ffffff;
+        }
+
+        .tab.active {
+            color: #ffffff;
+            border-bottom-color: #569cd6;
+        }
+
+        .tab-content {
+            flex: 1;
+            overflow: hidden;
+            display: none;
+            flex-direction: column;
+        }
+
+        .tab-content.active {
+            display: flex;
+        }
+
+        .request-inspector {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+            overflow-y: auto;
+        }
+
+        .inspector-section {
+            margin-bottom: 24px;
+        }
+
+        .inspector-header {
+            font-size: 13px;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .code-block {
+            background: #1e1e1e;
+            border: 1px solid #3e3e42;
+            border-radius: 4px;
+            padding: 12px;
+            font-family: 'Consolas', monospace;
+            font-size: 11px;
+            color: #dcdcaa;
+            overflow-x: auto;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .json-key {
+            color: #9cdcfe;
+        }
+
+        .json-string {
+            color: #ce9178;
+        }
+
+        .json-number {
+            color: #b5cea8;
+        }
+
+        .json-boolean {
+            color: #569cd6;
+        }
+
+        .rule-editor {
+            padding: 16px;
+            overflow-y: auto;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 11px;
+            font-weight: 600;
+            color: #cccccc;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+
+        .form-input {
+            width: 100%;
+            background: #3c3c3c;
+            border: 1px solid #464647;
+            color: #cccccc;
+            padding: 6px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #569cd6;
+            box-shadow: 0 0 0 1px #569cd6;
+        }
+
+        .form-select {
+            width: 100%;
+            background: #3c3c3c;
+            border: 1px solid #464647;
+            color: #cccccc;
+            padding: 6px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+
+        .form-textarea {
+            width: 100%;
+            background: #1e1e1e;
+            border: 1px solid #3e3e42;
+            color: #dcdcaa;
+            padding: 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-family: 'Consolas', monospace;
+            resize: vertical;
+            min-height: 120px;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 12px;
+        }
+
+        .form-col {
+            flex: 1;
+        }
+
+        .header-manager {
+            border: 1px solid #3e3e42;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .header-row {
+            display: flex;
+            border-bottom: 1px solid #3e3e42;
+            background: #2d2d30;
+        }
+
+        .header-row:last-child {
+            border-bottom: none;
+        }
+
+        .header-row input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #cccccc;
+            padding: 6px 8px;
+            font-size: 11px;
+        }
+
+        .header-row input:focus {
+            outline: none;
+            background: #3c3c3c;
+        }
+
+        .header-row .separator {
+            width: 1px;
+            background: #3e3e42;
+        }
+
+        .header-row .remove-btn {
+            background: none;
+            border: none;
+            color: #f44747;
+            padding: 6px 8px;
+            cursor: pointer;
+            font-size: 10px;
+        }
+
+        .header-row .remove-btn:hover {
+            background: #f44747;
+            color: white;
+        }
+
+        .add-header-btn {
+            background: #2d2d30;
+            border: 1px solid #3e3e42;
+            color: #cccccc;
+            padding: 6px 12px;
+            border-radius: 3px;
+            font-size: 11px;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+
+        .add-header-btn:hover {
+            background: #37373d;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 24px;
+            padding-top: 16px;
+            border-top: 1px solid #3e3e42;
+        }
+
+        .btn-primary {
+            background: #0e639c;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #1177bb;
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .btn-warning:hover {
+            background: #e0a800;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .network-monitor {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+        }
+
+        .monitor-controls {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+            align-items: center;
+        }
+
+        .request-table {
+            flex: 1;
+            border: 1px solid #3e3e42;
+            border-radius: 4px;
+            overflow: hidden;
+            background: #1e1e1e;
+        }
+
+        .table-header {
+            background: #2d2d30;
+            display: flex;
+            border-bottom: 1px solid #3e3e42;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .table-cell {
+            padding: 8px 12px;
+            border-right: 1px solid #3e3e42;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .table-cell:last-child {
+            border-right: none;
+        }
+
+        .table-body {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .request-row {
+            display: flex;
+            border-bottom: 1px solid #2d2d30;
+            font-size: 11px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .request-row:hover {
+            background: #2a2d2e;
+        }
+
+        .request-row.mocked {
+            background: #1a3a1a;
+        }
+
+        .method-badge {
+            background: #569cd6;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 2px;
+            font-size: 9px;
+            font-weight: 600;
+        }
+
+        .method-badge.post {
+            background: #28a745;
+        }
+
+        .method-badge.put {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .method-badge.delete {
+            background: #dc3545;
+        }
+
+        .status-badge {
+            padding: 2px 6px;
+            border-radius: 2px;
+            font-size: 9px;
+            font-weight: 600;
+        }
+
+        .status-badge.success {
+            background: #28a745;
+            color: white;
+        }
+
+        .status-badge.error {
+            background: #dc3545;
+            color: white;
+        }
+
+        .status-badge.redirect {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .mock-indicator {
+            color: #569cd6;
+            font-size: 10px;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex: 1;
+            text-align: center;
+            color: #969696;
+            padding: 40px;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .empty-state-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .empty-state-description {
+            font-size: 11px;
+            max-width: 300px;
+            line-height: 1.4;
+        }
+
+        /* Scrollbar styling for dark theme */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #2d2d30;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #464647;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #5a5a5a;
+        }
+    </style>
+</head>
+<body>
+    <div class="devtools-header">
+        <div class="header-left">
+            <div class="logo">🎭 API Mocker</div>
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Active (0 rules)</span>
+            </div>
+        </div>
+        <div class="header-controls">
+            <button class="btn secondary" id="refreshBtn">🔄 Refresh</button>
+            <button class="btn secondary" id="clearBtn">🧹 Clear</button>
+            <button class="btn secondary" id="importBtn">📁 Import</button>
+            <button class="btn secondary" id="exportBtn">💾 Export</button>
+            <button class="btn" id="newRuleBtn">+ New Rule</button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="sidebar">
+            <div class="sidebar-section">
+                <div class="section-header" data-section="rules">
+                    Rules
+                    <span class="collapse-icon">▼</span>
+                </div>
+                <div class="section-content" data-section="rules">
+                    <div class="search-box">
+                        <input type="text" class="search-input" placeholder="Search rules..." id="ruleSearch">
+                    </div>
+                    <div class="rule-list" id="ruleList">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">🎭</div>
+                            <div class="empty-state-title">No Rules Created</div>
+                            <div class="empty-state-description">
+                                Create your first mock rule to get started
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-panel">
+            <div class="panel-tabs">
+                <button class="tab active" data-tab="inspector">Request Inspector</button>
+                <button class="tab" data-tab="editor">Rule Editor</button>
+                <button class="tab" data-tab="monitor">Network Monitor</button>
+                <button class="tab" data-tab="analytics">Analytics</button>
+            </div>
+
+            <div class="tab-content active" data-tab="inspector">
+                <div class="request-inspector">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">🔍</div>
+                        <div class="empty-state-title">No Rule Selected</div>
+                        <div class="empty-state-description">
+                            Select a rule from the sidebar to inspect its configuration and test results
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-content" data-tab="editor">
+                <div class="rule-editor">
+                    <div class="form-group">
+                        <label class="form-label">Rule Name</label>
+                        <input type="text" class="form-input" id="ruleName" placeholder="Enter rule name">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Match Conditions</label>
+                        <div class="form-row">
+                            <div class="form-col">
+                                <input type="text" class="form-input" id="ruleUrl" placeholder="URL pattern (e.g., */api/users/*)">
+                            </div>
+                            <div class="form-col" style="flex: 0 0 100px;">
+                                <select class="form-select" id="ruleMethod">
+                                    <option value="*">Any</option>
+                                    <option value="GET">GET</option>
+                                    <option value="POST">POST</option>
+                                    <option value="PUT">PUT</option>
+                                    <option value="DELETE">DELETE</option>
+                                    <option value="PATCH">PATCH</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Response Configuration</label>
+                        <div class="form-row">
+                            <div class="form-col" style="flex: 0 0 80px;">
+                                <select class="form-select" id="responseStatus">
+                                    <option value="200">200</option>
+                                    <option value="201">201</option>
+                                    <option value="400">400</option>
+                                    <option value="401">401</option>
+                                    <option value="403">403</option>
+                                    <option value="404">404</option>
+                                    <option value="500">500</option>
+                                    <option value="502">502</option>
+                                    <option value="503">503</option>
+                                </select>
+                            </div>
+                            <div class="form-col">
+                                <input type="text" class="form-input" id="responseStatusText" placeholder="Status text (optional)">
+                            </div>
+                            <div class="form-col" style="flex: 0 0 100px;">
+                                <input type="number" class="form-input" id="responseDelay" placeholder="Delay (ms)" min="0">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Response Headers</label>
+                        <div class="header-manager" id="headerManager">
+                            <div class="header-row">
+                                <input type="text" placeholder="Header name" data-header="name">
+                                <div class="separator"></div>
+                                <input type="text" placeholder="Header value" data-header="value">
+                                <button class="remove-btn" onclick="removeHeader(this)">×</button>
+                            </div>
+                        </div>
+                        <button class="add-header-btn" onclick="addHeader()">+ Add Header</button>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Response Body</label>
+                        <textarea class="form-textarea" id="responseBody" placeholder='Enter JSON response body...'>{
+  "message": "Mock response",
+  "success": true
+}</textarea>
+                    </div>
+
+                    <div class="action-buttons">
+                        <button class="btn btn-primary" id="saveRuleBtn">💾 Save Rule</button>
+                        <button class="btn btn-success" id="testRuleBtn">🧪 Test Rule</button>
+                        <button class="btn btn-warning" id="duplicateRuleBtn">📋 Duplicate</button>
+                        <button class="btn btn-danger" id="deleteRuleBtn">🗑️ Delete</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-content" data-tab="monitor">
+                <div class="network-monitor">
+                    <div class="monitor-controls">
+                        <button class="btn" id="startMonitorBtn">▶️ Start Monitoring</button>
+                        <button class="btn secondary" id="clearMonitorBtn">🧹 Clear</button>
+                        <button class="btn secondary" id="exportLogsBtn">📤 Export Logs</button>
+                        <label style="color: #cccccc; font-size: 11px;">
+                            <input type="checkbox" id="autoScrollCheckbox" checked> Auto-scroll
+                        </label>
+                    </div>
+
+                    <div class="request-table">
+                        <div class="table-header">
+                            <div class="table-cell" style="flex: 0 0 60px;">Method</div>
+                            <div class="table-cell" style="flex: 1;">URL</div>
+                            <div class="table-cell" style="flex: 0 0 80px;">Status</div>
+                            <div class="table-cell" style="flex: 0 0 80px;">Size</div>
+                            <div class="table-cell" style="flex: 0 0 80px;">Time</div>
+                            <div class="table-cell" style="flex: 0 0 60px;">Mock</div>
+                        </div>
+                        <div class="table-body" id="requestTableBody">
+                            <div class="empty-state">
+                                <div class="empty-state-icon">📡</div>
+                                <div class="empty-state-title">No Requests Monitored</div>
+                                <div class="empty-state-description">
+                                    Click "Start Monitoring" to track network requests
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-content" data-tab="analytics">
+                <div class="request-inspector">
+                    <div class="inspector-section">
+                        <div class="inspector-header">
+                            📊 Usage Analytics
+                        </div>
+                        <div class="code-block" id="analyticsData">
+                            Loading analytics data...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="devtools.js"></script>
+</body>
+</html>

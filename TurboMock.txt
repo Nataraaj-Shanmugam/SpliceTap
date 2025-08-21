@@ -1,0 +1,744 @@
+# Live API Mocking Browser Extension - Complete PRD & UI Specifications
+
+## 🎯 Product Overview
+
+### Core Value Proposition
+**"Mock any API in 30 seconds, directly in your browser"**
+
+A lightweight Chrome/Firefox extension that intercepts HTTP requests and allows developers to:
+- Override API responses with custom data
+- Simulate error conditions and network delays
+- Modify specific JSON fields without replacing entire responses
+- Test frontend behavior without backend dependencies
+
+### Target Users
+- **Frontend Developers** - Primary audience, need quick API mocking for development
+- **Solo Developers** - Building full-stack apps, need to test UI before backend is ready
+- **Students/Bootcampers** - Learning API integration without complex tooling
+
+## 🏗️ Technical Architecture
+
+### Extension Structure
+```
+api-mocker-extension/
+├── manifest.json (Manifest V3)
+├── background.js (Service Worker - Request interception)
+├── popup/
+│   ├── popup.html (Extension popup UI)
+│   ├── popup.js (Popup logic)
+│   └── popup.css (Styles)
+├── content/
+│   ├── content.js (Inject into pages for context menu)
+│   └── devtools.js (DevTools integration)
+├── test/
+│   ├── unit/ (Unit tests for core logic)
+│   ├── integration/ (Extension integration tests)
+│   └── fixtures/ (Test data and mock responses)
+└── assets/
+    ├── icons/ (16x16, 48x48, 128x128)
+    └── screenshots/ (For store listing)
+```
+
+### Core Components
+1. **Service Worker** - Intercepts requests via `chrome.webRequest` API
+2. **Popup Interface** - Main rule management UI (400x600px)
+3. **Context Menu** - Right-click on requests to create rules
+4. **DevTools Panel** - Optional advanced rule editor
+5. **Storage** - Chrome storage API for rule persistence
+6. **Test Engine** - Built-in rule validation and testing system
+
+## 🎨 User Interface Design
+
+### 1. Extension Popup (Main Interface)
+
+#### Header Section (60px height)
+```
+┌─────────────────────────────────────┐
+│ 🎭 API Mocker    [⚙️] [📁] [🔄]     │
+│ ● Active (3 rules)                  │
+└─────────────────────────────────────┘
+```
+
+**Elements:**
+- **Logo + Title**: "API Mocker" with small icon
+- **Status Indicator**: Green dot + "Active (X rules)" or Red dot + "Disabled"
+- **Action Buttons**: Settings, Import/Export, Refresh
+- **Global Toggle**: Master on/off switch
+
+#### Rules List Section (400px height)
+```
+┌─────────────────────────────────────┐
+│ 🔍 Search rules...                  │
+├─────────────────────────────────────┤
+│ ☑️ User Profile Success  ✅         │
+│ GET */api/users/* → 200 OK          │
+│ [✏️] [📋] [🧪] [🗑️]                │
+├─────────────────────────────────────┤
+│ ☐ Payment Error          ⚠️         │
+│ POST */api/payments → 402 Error     │
+│ [✏️] [📋] [🧪] [🗑️]                │
+├─────────────────────────────────────┤
+│ ☑️ Slow Network Test     🔄         │
+│ GET */api/* → +3s delay             │
+│ [✏️] [📋] [🧪] [🗑️]                │
+└─────────────────────────────────────┘
+```
+
+**Elements:**
+- **Search Bar**: Filter rules by name or URL pattern
+- **Rule Cards**: Checkbox + name + URL pattern + response summary
+- **Status Indicators**: ✅ (tested & working), ⚠️ (needs validation), 🔄 (never tested)
+- **Action Icons**: Edit (pencil), Copy (clipboard), Test (flask), Delete (trash)
+- **Quick Info**: Shows method, URL pattern, and response type
+
+#### Footer Section (80px height)
+```
+┌─────────────────────────────────────┐
+│ [+ New Rule] [🧪 Test All] [❓ Help]│
+│                                     │
+│ 📈 Intercepted: 23 requests today   │
+└─────────────────────────────────────┘
+```
+
+**Elements:**
+- **New Rule Button**: Primary CTA button
+- **Test All Button**: Validate all enabled rules
+- **Help Button**: Link to documentation
+- **Activity Counter**: Number of intercepted requests
+
+### 2. Rule Editor Modal (Overlay)
+
+#### Basic Rule Editor (500x450px)
+```
+┌─────────────── Edit Rule ──────────────┐
+│ Name: [User Profile Success________]    │
+│                                        │
+│ Match Conditions:                      │
+│ URL: [*/api/users/*_______________]    │
+│ Method: [GET ▼]                        │
+│                                        │
+│ Response Override:                     │
+│ Status: [200 ▼] Text: [OK_______]      │
+│ Delay: [0___] ms                       │
+│                                        │
+│ Headers: [+ Add Header]                │
+│ ┌ X-Mock-Source: browser-extension     │
+│                                        │
+│ Response Body: [📄 JSON] [📝 Text]     │
+│ ┌─────────────────────────────────────┐ │
+│ │ {                                   │ │
+│ │   "id": "user_123",                 │ │
+│ │   "name": "John Doe",               │ │
+│ │   "email": "john@example.com"       │ │
+│ │ }                                   │ │
+│ └─────────────────────────────────────┘ │
+│                                        │
+│ [Cancel] [🧪 Test] [💾 Save]           │
+└────────────────────────────────────────┘
+```
+
+**Features:**
+- **Form Fields**: Simple inputs for all rule properties
+- **Dropdown Menus**: Pre-populated HTTP methods and status codes
+- **JSON Editor**: Syntax-highlighted JSON textarea with validation
+- **Header Management**: Add/remove custom headers
+- **Test Button**: Comprehensive rule testing (see Testing section)
+- **Real-time Validation**: Live validation of JSON, URL patterns, and HTTP codes
+
+### 3. Test Results Panel
+
+#### Test Execution Interface (500x300px)
+```
+┌──────── Test Results ────────────────────┐
+│ 🧪 Testing Rule: "User Profile Success"  │
+│                                          │
+│ ✅ URL Pattern Match                     │
+│ ✅ JSON Validation                       │
+│ ✅ Response Headers                      │
+│ ✅ Simulated Request                     │
+│                                          │
+│ 📋 Mock Response Preview:                │
+│ ┌──────────────────────────────────────┐ │
+│ │ Status: 200 OK                       │ │
+│ │ Content-Type: application/json       │ │
+│ │                                      │ │
+│ │ {                                    │ │
+│ │   "id": "user_123",                  │ │
+│ │   "name": "John Doe"                 │ │
+│ │ }                                    │ │
+│ └──────────────────────────────────────┘ │
+│                                          │
+│ [❌ Close] [🔄 Test Again] [✅ Looks Good]│
+└──────────────────────────────────────────┘
+```
+
+### 4. Context Menu Integration
+
+#### Right-Click on Network Request
+```
+┌─── Context Menu ───┐
+│ Copy                │
+│ Copy as cURL        │
+├─────────────────────┤
+│ 🎭 Mock this Request│ ← New option
+│ 🎭 Mock with Error  │ ← Quick error option
+│ 🧪 Test Mock Rule   │ ← Test existing mock
+└─────────────────────┘
+```
+
+**Behavior:**
+- **Mock this Request**: Opens rule editor pre-filled with request details
+- **Mock with Error**: Quick-create error response (400/500/timeout)
+- **Test Mock Rule**: If request has existing mock, run validation test
+- **Context Detection**: Only show on actual API requests (not assets)
+
+### 5. DevTools Integration (Optional)
+
+#### Network Panel Enhancement
+```
+┌─ DevTools Network Panel ────────────────────┐
+│ Name          Method  Status  Type   Size    │
+│ users/123     GET     200     XHR    2.1KB 🎭│ ← Mock indicator
+│ products      GET     404     XHR    0.5KB   │
+│ orders        POST    500     XHR    1.2KB 🎭│
+└──────────────────────────────────────────────┘
+```
+
+**Features:**
+- **Mock Indicators**: Show which requests are being mocked
+- **Quick Actions**: Right-click options in DevTools
+- **Rule Status**: Visual indication of active mocks
+
+## 🔧 Core Functionality Specifications
+
+### Request Interception Engine
+
+#### 1. Matching System
+```javascript
+const matchingLogic = {
+  url: {
+    exact: "https://api.example.com/users/123",
+    wildcard: "*/api/users/*",
+    regex: "/api/users/\\d+"
+  },
+  method: {
+    specific: "GET",
+    wildcard: "*"
+  },
+  headers: {
+    contains: { "Content-Type": "application/json" }
+  }
+};
+```
+
+#### 2. Response Modification
+```javascript
+const responseTypes = {
+  override: {
+    statusCode: 200,
+    headers: { "Content-Type": "application/json" },
+    body: { "id": 123, "name": "John" }
+  },
+  patch: {
+    path: "$.user.name",
+    value: "Modified Name"
+  },
+  delay: 2000, // milliseconds
+  abort: true // Cancel request
+};
+```
+
+### Data Storage Schema
+
+#### Rules Storage
+```javascript
+const ruleSchema = {
+  id: "uuid-string",
+  name: "Human readable name",
+  enabled: boolean,
+  created: "2024-08-20T15:30:00Z",
+  lastUsed: "2024-08-20T15:30:00Z",
+  lastTested: "2024-08-20T15:30:00Z",
+  testStatus: "passed|failed|pending|never",
+  hitCount: 0,
+  match: {
+    url: "string pattern",
+    method: "GET|POST|PUT|DELETE|*",
+    headers: {}
+  },
+  response: {
+    statusCode: 200,
+    headers: {},
+    body: {},
+    delay: 0
+  },
+  patches: [
+    { path: "$.field", value: "new value" }
+  ],
+  testResults: {
+    lastRun: "2024-08-20T15:30:00Z",
+    passed: boolean,
+    errors: ["validation error messages"]
+  }
+};
+```
+
+#### User Preferences
+```javascript
+const preferences = {
+  theme: "light|dark|auto",
+  notifications: boolean,
+  autoBackup: boolean,
+  autoTest: boolean, // Run tests when saving rules
+  shortcuts: {
+    toggle: "Ctrl+Shift+M",
+    newRule: "Ctrl+Shift+N"
+  }
+};
+```
+
+## 🧪 Testing & Validation System
+
+### Rule Testing Engine
+
+#### 1. Test Button Functionality
+When the "Test" button is clicked, the system performs:
+
+```javascript
+const testRule = async (rule) => {
+  const testResults = {
+    urlPattern: validateUrlPattern(rule.match.url),
+    jsonSyntax: validateJson(rule.response.body),
+    httpStatus: validateStatusCode(rule.response.statusCode),
+    headers: validateHeaders(rule.response.headers),
+    simulation: await simulateRequest(rule)
+  };
+  
+  return {
+    passed: Object.values(testResults).every(result => result.valid),
+    results: testResults
+  };
+};
+```
+
+#### 2. Validation Types
+
+**URL Pattern Validation:**
+- Check regex syntax for regex patterns
+- Validate wildcard patterns
+- Test against sample URLs
+- Warn about overly broad patterns
+
+**JSON Validation:**
+- Parse JSON for syntax errors
+- Validate against JSON schema if provided
+- Check for common JSON issues (trailing commas, etc.)
+- Size validation (warn if > 1MB)
+
+**HTTP Status Validation:**
+- Ensure status codes are valid (100-599)
+- Warn about unusual status codes
+- Validate status text matches code
+
+**Header Validation:**
+- Check header name formatting
+- Validate header values
+- Warn about conflicting headers
+
+**Simulation Testing:**
+- Create mock XMLHttpRequest/fetch
+- Apply rule transformation
+- Verify response structure
+- Test delay functionality
+
+#### 3. Test Results Display
+
+The test results panel shows:
+- **Visual Indicators**: ✅ Pass, ❌ Fail, ⚠️ Warning
+- **Error Messages**: Specific validation failures
+- **Response Preview**: What the mocked response will look like
+- **Performance Metrics**: Response time with delays
+- **Recommendations**: Suggestions for rule improvements
+
+### Automated Testing (Extension Development)
+
+#### Unit Tests
+```javascript
+// test/unit/matching.test.js
+describe('URL Matching', () => {
+  test('wildcard patterns match correctly', () => {
+    expect(matchUrl('*/api/users/*', 'https://api.example.com/api/users/123')).toBe(true);
+  });
+  
+  test('regex patterns work with complex URLs', () => {
+    expect(matchUrl('/api/users/\\d+', 'https://api.example.com/api/users/123')).toBe(true);
+  });
+});
+
+// test/unit/response.test.js
+describe('Response Modification', () => {
+  test('JSON patching works correctly', () => {
+    const original = { user: { name: 'John' } };
+    const patched = applyPatch(original, '$.user.name', 'Jane');
+    expect(patched.user.name).toBe('Jane');
+  });
+});
+```
+
+#### Integration Tests
+```javascript
+// test/integration/extension.test.js
+describe('Extension Integration', () => {
+  test('rules are applied to intercepted requests', async () => {
+    await createRule({
+      url: '*/api/test',
+      response: { statusCode: 200, body: { success: true } }
+    });
+    
+    const response = await fetch('/api/test');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true });
+  });
+});
+```
+
+#### Performance Tests
+```javascript
+// test/performance/matching.test.js
+describe('Performance', () => {
+  test('rule matching completes within 10ms', () => {
+    const startTime = performance.now();
+    matchRule(complexRule, testRequest);
+    const endTime = performance.now();
+    expect(endTime - startTime).toBeLessThan(10);
+  });
+});
+```
+
+## 🎮 User Experience Flow
+
+### Primary User Journey: "Mock a Failing API"
+
+#### Step 1: Problem Discovery
+```
+Developer notices API returning 500 error
+↓
+Opens DevTools to see failing request
+```
+
+#### Step 2: Quick Mock Creation
+```
+Right-click on failing request
+→ "Mock this Request"
+→ Rule editor opens with URL pre-filled
+→ Change status code to 200
+→ Add success response body
+→ Click "Test" to validate
+→ See test results and preview
+→ Click "Save"
+```
+
+#### Step 3: Immediate Testing
+```
+Refresh page
+→ Request is intercepted
+→ Mock response returned
+→ UI shows success state
+→ Rule shows ✅ status (working)
+```
+
+### Secondary Journey: "Test Error Scenarios"
+
+#### Step 1: Preparation
+```
+Click extension icon
+→ Popup opens
+→ Click "New Rule"
+```
+
+#### Step 2: Configuration
+```
+Enter API endpoint pattern
+→ Set status code to 400
+→ Add error message body
+→ Click "Test" to validate
+→ Review test results
+→ Save rule
+```
+
+#### Step 3: Validation
+```
+Trigger API call in application
+→ Error response returned
+→ Test error handling in UI
+→ Rule automatically marked as ✅ (tested & working)
+```
+
+## 📱 Responsive Design Considerations
+
+### Popup Sizing
+- **Minimum**: 350x400px (mobile-friendly)
+- **Optimal**: 400x600px (desktop)
+- **Maximum**: 500x800px (large screens)
+
+### Mobile Browser Support
+- **Android Chrome**: Full functionality
+- **iOS Safari**: Limited (no webRequest API)
+- **Mobile Firefox**: Partial support
+
+## 🔐 Security & Privacy
+
+### Permissions Required
+```json
+{
+  "permissions": [
+    "webRequest",
+    "webRequestBlocking",
+    "storage",
+    "activeTab",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}
+```
+
+### Data Handling
+- **Local Storage Only**: All rules stored locally
+- **No Data Collection**: No analytics or tracking
+- **Request Privacy**: Only intercept, never log request contents
+- **User Control**: Easy export/delete of all data
+
+## 🚀 Performance Requirements
+
+### Response Time
+- **Rule Matching**: < 10ms per request
+- **Response Modification**: < 50ms per request
+- **UI Responsiveness**: < 100ms for all interactions
+- **Test Execution**: < 2s for complete rule validation
+
+### Memory Usage
+- **Maximum**: 50MB extension memory
+- **Rule Limit**: 100 active rules
+- **Storage Limit**: 10MB local storage
+
+### Browser Compatibility
+- **Chrome**: 88+ (Manifest V3 support)
+- **Firefox**: 109+ (Manifest V3 support)
+- **Edge**: 88+ (Chromium-based)
+
+## 📊 Analytics & Metrics
+
+### Privacy-First Analytics Approach
+
+All metrics are stored in the **user's cache folder** and persist across updates, serving to improve user experience without compromising privacy:
+
+#### Metrics Storage Location
+```javascript
+// Platform-specific cache directories:
+// Windows: %LOCALAPPDATA%\Google\Chrome\User Data\Default\Extension Data\{extension-id}\metrics.json
+// macOS: ~/Library/Caches/Google/Chrome/Default/Extension Data/{extension-id}/metrics.json  
+// Linux: ~/.cache/google-chrome/Default/Extension Data/{extension-id}/metrics.json
+
+const metricsFilePath = {
+  chrome: `${chrome.runtime.getPackageDirectoryEntry()}/cache/metrics.json`,
+  firefox: `${browser.runtime.getPackageDirectoryEntry()}/cache/metrics.json`
+};
+```
+
+#### Usage Metrics (Cache Folder Storage)
+```javascript
+const persistentMetrics = {
+  metadata: {
+    version: "1.2.0",
+    created: "2024-08-20T10:00:00Z",
+    lastUpdated: "2024-08-20T15:30:00Z",
+    extensionUpdates: [
+      { from: "1.1.0", to: "1.2.0", date: "2024-08-20T15:30:00Z" }
+    ]
+  },
+  rulesCreated: {
+    total: 42,
+    thisWeek: 7,
+    byType: { "success": 25, "error": 10, "delay": 7 }
+  },
+  requestsIntercepted: {
+    today: 23,
+    thisWeek: 156,
+    allTime: 1337
+  },
+  testResults: {
+    passed: 35,
+    failed: 7,
+    averageTestTime: 1.2 // seconds
+  },
+  performance: {
+    averageMatchTime: 3.2, // milliseconds
+    averageResponseTime: 45.1 // milliseconds
+  }
+};
+```
+
+#### Update Handling & Migration
+```javascript
+const handleExtensionUpdate = async (previousVersion, currentVersion) => {
+  try {
+    // Load existing metrics from cache folder
+    const existingMetrics = await loadMetricsFromCache();
+    
+    if (existingMetrics) {
+      // Migrate metrics to new version format
+      const migratedMetrics = migrateMetrics(existingMetrics, currentVersion);
+      
+      // Add update record
+      migratedMetrics.metadata.extensionUpdates.push({
+        from: previousVersion,
+        to: currentVersion,
+        date: new Date().toISOString()
+      });
+      
+      // Save updated metrics
+      await saveMetricsToCache(migratedMetrics);
+    } else {
+      // Initialize new metrics file
+      await initializeMetrics(currentVersion);
+    }
+  } catch (error) {
+    console.warn('Failed to migrate metrics:', error);
+    // Fallback: Initialize fresh metrics
+    await initializeMetrics(currentVersion);
+  }
+};
+
+const migrateMetrics = (oldMetrics, newVersion) => {
+  // Version-specific migrations
+  switch (newVersion) {
+    case '1.2.0':
+      // Add new testResults field if missing
+      if (!oldMetrics.testResults) {
+        oldMetrics.testResults = { passed: 0, failed: 0, averageTestTime: 0 };
+      }
+      break;
+    case '2.0.0':
+      // Major version migration - restructure data
+      return restructureMetricsV2(oldMetrics);
+    default:
+      // Minor updates - no migration needed
+      break;
+  }
+  
+  // Update version and timestamp
+  oldMetrics.metadata.version = newVersion;
+  oldMetrics.metadata.lastUpdated = new Date().toISOString();
+  
+  return oldMetrics;
+};
+```
+
+#### Cache Management
+```javascript
+const cacheManager = {
+  // Write metrics to cache folder
+  saveMetrics: async (metrics) => {
+    const cacheDir = await getCacheDirectory();
+    const filePath = `${cacheDir}/api-mocker-metrics.json`;
+    await writeFile(filePath, JSON.stringify(metrics, null, 2));
+  },
+  
+  // Read metrics from cache folder  
+  loadMetrics: async () => {
+    try {
+      const cacheDir = await getCacheDirectory();
+      const filePath = `${cacheDir}/api-mocker-metrics.json`;
+      const data = await readFile(filePath);
+      return JSON.parse(data);
+    } catch (error) {
+      return null; // File doesn't exist or corrupted
+    }
+  },
+  
+  // Clean up old metrics (privacy compliance)
+  cleanup: async () => {
+    const metrics = await this.loadMetrics();
+    if (metrics) {
+      // Remove data older than 30 days
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      
+      // Clean up daily data
+      Object.keys(metrics.requestsIntercepted.daily || {}).forEach(date => {
+        if (new Date(date) < thirtyDaysAgo) {
+          delete metrics.requestsIntercepted.daily[date];
+        }
+      });
+      
+      await this.saveMetrics(metrics);
+    }
+  }
+};
+```
+- **Rule Optimization**: Identify which rule types are most commonly created to improve templates
+- **Performance Monitoring**: Track response times to identify performance bottlenecks
+- **Feature Usage**: Understand which features are most/least used for UI improvements
+- **Error Tracking**: Monitor test failure rates to improve validation logic
+
+#### User Benefits
+- **Personal Dashboard**: Show user their own usage patterns and productivity gains
+- **Performance Insights**: Alert users if rules are causing significant delays
+- **Rule Health**: Identify rules that frequently fail tests or are never used
+- **Backup Recommendations**: Suggest backup when user has many valuable rules
+
+#### Data Minimization Strategy
+- **No Personal Data**: Never store URLs, response content, or personally identifiable information
+- **Aggregated Only**: Store only counts and averages, never individual request details
+- **Time-Limited**: Automatically expire metrics older than 30 days
+- **User Control**: Easy one-click deletion of all metrics data
+- **Opt-Out Available**: Users can disable all metrics collection
+
+### Optional Anonymous Telemetry (Opt-In Only)
+
+If users explicitly consent, minimal anonymous data may be collected:
+- Extension version usage (for deprecation planning)
+- Browser version compatibility (for support prioritization)
+- Feature adoption rates (for development focus)
+
+**Strict Requirements:**
+- Explicit user consent required
+- No personal or identifiable data
+- Easy opt-out at any time
+- Clear data retention policy (90 days max)
+
+## 🔄 Update & Maintenance
+
+### Version Control
+- **Semantic Versioning**: 1.0.0, 1.1.0, 2.0.0
+- **Auto-Updates**: Chrome Web Store automatic
+- **Backward Compatibility**: Support 2 major versions
+
+### Data Migration
+- **Rule Schema Changes**: Automatic migration with validation
+- **User Preferences**: Preserve across updates
+- **Export Compatibility**: Maintain JSON format
+- **Test Results**: Migrate test status and results
+- **Metrics Continuity**: Seamless metrics migration from cache folder across all updates
+- **Version Tracking**: Maintain history of extension versions and migration events
+
+### Quality Assurance
+
+#### Pre-Release Testing
+- **Automated Test Suite**: 95%+ code coverage
+- **Cross-Browser Testing**: Chrome, Firefox, Edge
+- **Performance Regression Tests**: Ensure no slowdowns
+- **User Acceptance Testing**: Beta testing with real developers
+
+#### Release Process
+1. **Development**: Feature development with unit tests
+2. **Integration Testing**: Full extension testing
+3. **Performance Validation**: Benchmark against previous version
+4. **Security Review**: Code and permission audit
+5. **Beta Release**: Limited rollout to test users
+6. **Production Release**: Full rollout with monitoring
+
+---
+
+This enhanced PRD provides a comprehensive blueprint for building a privacy-focused, well-tested API mocking extension that delivers real value to developers while maintaining the highest standards of quality and user experience.

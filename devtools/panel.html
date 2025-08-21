@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TurboMock Panel</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f8fafc;
+            color: #1e293b;
+        }
+        
+        .panel-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .panel-icon {
+            font-size: 24px;
+        }
+        
+        .panel-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin: 0;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: 600;
+            color: #2563eb;
+            margin-bottom: 4px;
+        }
+        
+        .stat-label {
+            font-size: 14px;
+            color: #64748b;
+            margin: 0;
+        }
+        
+        .requests-section {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .section-header {
+            padding: 16px 20px;
+            background: #f1f5f9;
+            border-bottom: 1px solid #e2e8f0;
+            font-weight: 600;
+        }
+        
+        .requests-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .request-item {
+            padding: 12px 20px;
+            border-bottom: 1px solid #f1f5f9;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .request-item:last-child {
+            border-bottom: none;
+        }
+        
+        .request-method {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .method-get {
+            background: #dcfce7;
+            color: #166534;
+        }
+        
+        .method-post {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+        
+        .request-url {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            flex: 1;
+            color: #475569;
+        }
+        
+        .request-status {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-success {
+            background: #dcfce7;
+            color: #166534;
+        }
+        
+        .status-error {
+            background: #fecaca;
+            color: #991b1b;
+        }
+        
+        .mock-indicator {
+            color: #2563eb;
+            font-size: 16px;
+        }
+        
+        .empty-state {
+            padding: 40px 20px;
+            text-align: center;
+            color: #64748b;
+        }
+        
+        .empty-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+        
+        .empty-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        
+        .empty-description {
+            font-size: 14px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="panel-header">
+        <div class="panel-icon">🎭</div>
+        <h1 class="panel-title">TurboMock DevTools</h1>
+    </div>
+    
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-value" id="totalRequests">0</div>
+            <div class="stat-label">Total Requests</div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-value" id="mockedRequests">0</div>
+            <div class="stat-label">Mocked Requests</div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-value" id="activeRules">0</div>
+            <div class="stat-label">Active Rules</div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-value" id="successRate">0%</div>
+            <div class="stat-label">Mock Success Rate</div>
+        </div>
+    </div>
+    
+    <div class="requests-section">
+        <div class="section-header">Recent Network Requests</div>
+        <div class="requests-list" id="requestsList">
+            <div class="empty-state">
+                <div class="empty-icon">📡</div>
+                <div class="empty-title">No Requests Monitored</div>
+                <div class="empty-description">
+                    Network requests will appear here as they are intercepted by TurboMock
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        class TurboMockDevPanel {
+            constructor() {
+                this.requests = [];
+                this.stats = {
+                    total: 0,
+                    mocked: 0,
+                    activeRules: 0,
+                    successRate: 0
+                };
+                
+                this.init();
+            }
+            
+            init() {
+                this.loadData();
+                this.setupNetworkListener();
+                this.updateStats();
+                this.renderRequests();
+                
+                // Update every 2 seconds
+                setInterval(() => {
+                    this.loadData();
+                    this.updateStats();
+                    this.renderRequests();
+                }, 2000);
+            }
+            
+            async loadData() {
+                try {
+                    // Get data from background script
+                    const response = await new Promise((resolve) => {
+                        chrome.runtime.sendMessage({ type: 'getDevToolsData' }, resolve);
+                    });
+                    
+                    if (response) {
+                        this.stats = response.stats || this.stats;
+                        this.requests = response.requests || this.requests;
+                    }
+                } catch (error) {
+                    console.warn('Failed to load data from background script:', error);
+                }
+            }
+            
+            setupNetworkListener() {
+                // Listen for network events from DevTools
+                chrome.devtools.network.onRequestFinished.addListener((request) => {
+                    const isMocked = request.response && 
+                        request.response.headers && 
+                        request.response.headers.some(header => 
+                            header.name.toLowerCase() === 'x-turbomock' && header.value === 'true'
+                        );
+                    
+                    const requestData = {
+                        id: Date.now(),
+                        method: request.request.method,
+                        url: request.request.url,
+                        status: request.response ? request.response.status : 0,
+                        timestamp: Date.now(),
+                        isMocked: isMocked
+                    };
+                    
+                    this.addRequest(requestData);
+                });
+            }
+            
+            addRequest(request) {
+                this.requests.unshift(request);
+                
+                // Keep only last 50 requests
+                if (this.requests.length > 50) {
+                    this.requests = this.requests.slice(0, 50);
+                }
+                
+                // Update stats
+                this.stats.total = this.requests.length;
+                this.stats.mocked = this.requests.filter(r => r.isMocked).length;
+                this.stats.successRate = this.stats.total > 0 
+                    ? Math.round((this.stats.mocked / this.stats.total) * 100)
+                    : 0;
+                
+                this.updateStats();
+                this.renderRequests();
+            }
+            
+            updateStats() {
+                document.getElementById('totalRequests').textContent = this.stats.total;
+                document.getElementById('mockedRequests').textContent = this.stats.mocked;
+                document.getElementById('activeRules').textContent = this.stats.activeRules;
+                document.getElementById('successRate').textContent = this.stats.successRate + '%';
+            }
+            
+            renderRequests() {
+                const container = document.getElementById('requestsList');
+                
+                if (this.requests.length === 0) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-icon">📡</div>
+                            <div class="empty-title">No Requests Monitored</div>
+                            <div class="empty-description">
+                                Network requests will appear here as they are intercepted by TurboMock
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                container.innerHTML = this.requests.map(request => `
+                    <div class="request-item">
+                        <div class="request-method method-${request.method.toLowerCase()}">${request.method}</div>
+                        <div class="request-url">${this.escapeHtml(this.truncateUrl(request.url))}</div>
+                        <div class="request-status status-${request.status >= 200 && request.status < 300 ? 'success' : 'error'}">
+                            ${request.status}
+                        </div>
+                        ${request.isMocked ? '<div class="mock-indicator" title="Mocked by TurboMock">🎭</div>' : ''}
+                    </div>
+                `).join('');
+            }
+            
+            truncateUrl(url) {
+                if (url.length > 80) {
+                    return url.substring(0, 77) + '...';
+                }
+                return url;
+            }
+            
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        }
+        
+        // Initialize DevTools panel
+        new TurboMockDevPanel();
+    </script>
+</body>
+</html>

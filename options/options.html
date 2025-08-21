@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TurboMock Settings</title>
+    <link rel="stylesheet" href="options.css">
+</head>
+<body class="theme-auto">
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <span class="logo-icon">🎭</span>
+                    <h1>TurboMock Settings</h1>
+                </div>
+                <div class="header-actions">
+                    <button class="btn-secondary" id="exportBtn">📤 Export</button>
+                    <button class="btn-secondary" id="importBtn">📥 Import</button>
+                    <button class="btn-primary" id="saveBtn">💾 Save Settings</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Message Container -->
+        <div class="message-container" id="messageContainer"></div>
+
+        <!-- Navigation Tabs -->
+        <div class="nav-tabs">
+            <button class="tab-btn active" data-tab="general">General</button>
+            <button class="tab-btn" data-tab="rules">Rules Management</button>
+            <button class="tab-btn" data-tab="shortcuts">Keyboard Shortcuts</button>
+            <button class="tab-btn" data-tab="data">Data & Privacy</button>
+            <button class="tab-btn" data-tab="advanced">Advanced</button>
+        </div>
+
+        <!-- Main Content -->
+        <div class="content">
+            <!-- General Settings Tab -->
+            <div class="tab-content active" data-tab="general">
+                <div class="settings-section">
+                    <h2>🎨 Appearance</h2>
+                    <p class="section-description">Customize the look and feel of TurboMock</p>
+                    
+                    <div class="setting-group">
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <label>Theme</label>
+                                <p class="setting-description">Choose your preferred color scheme</p>
+                            </div>
+                            <div class="setting-control">
+                                <div class="theme-selector">
+                                    <div class="theme-option">
+                                        <input type="radio" name="theme" value="light" id="theme-light">
+                                        <label for="theme-light">
+                                            <div class="theme-preview light"></div>
+                                            <span>Light</span>
+                                        </label>
+                                    </div>
+                                    <div class="theme-option">
+                                        <input type="radio" name="theme" value="dark" id="theme-dark">
+                                        <label for="theme-dark">
+                                            <div class="theme-preview dark"></div>
+                                            <span>Dark</span>
+                                        </label>
+                                    </div>
+                                    <div class="theme-option">
+                                        <input type="radio" name="theme" value="auto" id="theme-auto" checked>
+                                        <label for="theme-auto">
+                                            <div class="theme-preview auto"></div>
+                                            <span>Auto</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h2>🔔 Notifications</h2>
+                    <p class="section-description">Control when and how TurboMock notifies you</p>
+                    
+                    <div class="setting-group">
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <label>Show Notifications</label>
+                                <p class="setting-description">Display notifications for rule matches and updates</p>
+                            </div>
+                            <div class="setting-control">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="notifications" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <label>Auto Backup</label>
+                                <p class="setting-description">Automatically backup your rules to local storage</p>
+                            </div>
+                            <div class="setting-control">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="autoBackup" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <label>Debug Mode</label>
+                                <p class="setting-description">Enable detailed console logging for troubleshooting</p>
+                            </div>
+                            <div class="setting-control">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="debugMode">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rules Management Tab -->
+            <div class="tab-content" data-tab="rules">
+                <div class="settings-section">
+                    <h2>📋 Rules Management</h2>
+                    <p class="section-description">Manage your mock rules and templates</p>
+                    
+                    <div class="import-export-grid">
+                        <div class="action-card">
+                            <div class="card-icon">📥</div>
+                            <h3>Import Rules</h3>
+                            <p>Import mock rules from a JSON file</p>
+                            <div class="card-actions">
+                                <button class="btn-primary" id="importRulesBtn">Choose File</button>
+                            </div>
+                            <div class="import-options">
+                                <label>
+                                    <input type="checkbox" id="mergeImport" checked>
+                                    Merge with existing rules
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="action-card">
+                            <div class="card-icon">📤</div>
+                            <h3>Export Rules</h3>
+                            <p>Export all your mock rules to a JSON file</p>
+                            <div class="card-actions">
+                                <button class="btn-primary" id="exportRulesBtn">Download JSON</button>
+                            </div>
+                            <div class="card-stats">
+                                <span id="rulesCount">0</span> rules ready for export
+                            </div>
+                        </div>
+
+                        <div class="action-card">
+                            <div class="card-icon">🔄</div>
+                            <h3>Backup & Restore</h3>
+                            <p>Create or restore from local backups</p>
+                            <div class="card-actions">
+                                <button class="btn-secondary" id="createBackupBtn">Create Backup</button>
+                                <button class="btn-secondary" id="restoreBackupBtn">Restore Backup</button>
+                            </div>
+                            <div class="backup-info">
+                                Last backup: <span id="lastBackup">Never</span>
+                            </div>
+                        </div>
+
+                        <div class="action-card">
+                            <div class="card-icon">🗂️</div>
+                            <h3>Templates</h3>
+                            <p>Manage and create rule templates</p>
+                            <div class="card-actions">
+                                <button class="btn-primary" id="manageTemplatesBtn">Manage Templates</button>
+                            </div>
+                            <div class="template-list">
+                                <select id="templateSelect">
+                                    <option value="">Select a template...</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Keyboard Shortcuts Tab -->
+            <div class="tab-content" data-tab="shortcuts">
+                <div class="settings-section">
+                    <h2>⌨️ Keyboard Shortcuts</h2>
+                    <p class="section-description">Customize keyboard shortcuts for quick access</p>
+                    
+                    <div class="setting-group">
+                        <div class="shortcut-item">
+                            <div class="shortcut-info">
+                                <label>Toggle Extension</label>
+                                <p>Enable or disable TurboMock</p>
+                            </div>
+                            <div class="shortcut-key">
+                                <div class="key-display" id="toggleShortcut">Ctrl+Shift+M</div>
+                                <button class="btn-edit" onclick="editShortcut('toggle')">Edit</button>
+                            </div>
+                        </div>
+                        
+                        <div class="shortcut-item">
+                            <div class="shortcut-info">
+                                <label>New Rule</label>
+                                <p>Create a new mock rule</p>
+                            </div>
+                            <div class="shortcut-key">
+                                <div class="key-display" id="newRuleShortcut">Ctrl+Shift+N</div>
+                                <button class="btn-edit" onclick="editShortcut('newRule')">Edit</button>
+                            </div>
+                        </div>
+                        
+                        <div class="shortcut-item">
+                            <div class="shortcut-info">
+                                <label>Open Popup</label>
+                                <p>Open the extension popup</p>
+                            </div>
+                            <div class="shortcut-key">
+                                <div class="key-display">Alt+Shift+T</div>
+                                <span class="text-muted">(Browser default)</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="shortcut-help">
+                        <h3>Available Shortcuts in Popup</h3>
+                        <ul>
+                            <li><kbd>Ctrl+N</kbd> - Create new rule</li>
+                            <li><kbd>Ctrl+F</kbd> - Focus search box</li>
+                            <li><kbd>Ctrl+T</kbd> - Test all rules</li>
+                            <li><kbd>Ctrl+R</kbd> - Refresh data</li>
+                            <li><kbd>Escape</kbd> - Close popup</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Data & Privacy Tab -->
+            <div class="tab-content" data-tab="data">
+                <div class="settings-section">
+                    <h2>📊 Data Overview</h2>
+                    <p class="section-description">Overview of your stored data</p>
+                    
+                    <div class="data-overview">
+                        <div class="data-card">
+                            <h4>Total Rules</h4>
+                            <div class="data-value" id="totalRulesCount">0</div>
+                            <div class="data-count">mock rules</div>
+                        </div>
+                        
+                        <div class="data-card">
+                            <h4>Enabled Rules</h4>
+                            <div class="data-value" id="enabledRulesCount">0</div>
+                            <div class="data-count">active rules</div>
+                        </div>
+                        
+                        <div class="data-card">
+                            <h4>Rules Data</h4>
+                            <div class="data-value" id="rulesDataSize">0</div>
+                            <div class="data-count">KB stored</div>
+                        </div>
+                        
+                        <div class="data-card">
+                            <h4>Metrics Data</h4>
+                            <div class="data-value" id="metricsDataSize">0</div>
+                            <div class="data-count">KB stored</div>
+                        </div>
+                        
+                        <div class="data-card">
+                            <h4>Request Logs</h4>
+                            <div class="data-value" id="logsCount">0</div>
+                            <div class="data-count">log entries</div>
+                        </div>
+                    </div>
+                    
+                    <div class="data-actions">
+                        <button class="btn-secondary" id="viewDataBtn">🔍 View All Data</button>
+                        <button class="btn-secondary" id="exportDataBtn">📤 Export Data</button>
+                        <button class="btn-danger" id="clearDataBtn">🗑️ Clear All Data</button>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h2>🔒 Privacy Settings</h2>
+                    <p class="section-description">Control how TurboMock handles your data</p>
+                    
+                    <div class="privacy-summary">
+                        <h4>Data Collection</h4>
+                        <ul>
+                            <li>All data is stored locally on your device</li>
+                            <li>No personal information is transmitted to external servers</li>
+                            <li>Request URLs may be logged locally for debugging</li>
+                            <li>Usage statistics are collected anonymously</li>
+                        </ul>
+                        <a href="#" class="privacy-link" onclick="showPrivacyPolicy()">View Full Privacy Policy</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Advanced Settings Tab -->
+            <div class="tab-content" data-tab="advanced">
+                <div class="settings-section">
+                    <h2>⚙️ Advanced Configuration</h2>
+                    <p class="section-description">Advanced options for power users</p>
+                    
+                    <div class="setting-group">
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <label>Default Headers</label>
+                                <p class="setting-description">Default headers to add to all mock responses (JSON format)</p>
+                            </div>
+                            <div class="setting-control">
+                                <textarea id="defaultHeaders" placeholder='{"X-Mock-Source": "TurboMock"}' rows="3"></textarea>
+                            </div>
+                        </div>
+                        
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <label>Max Response Size</label>
+                                <p class="setting-description">Maximum size for mock responses (KB)</p>
+                            </div>
+                            <div class="setting-control">
+                                <input type="number" id="maxResponseSize" value="1024" min="1" max="10240">
+                            </div>
+                        </div>
+                        
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <label>Request Timeout</label>
+                                <p class="setting-description">Timeout for mock responses (milliseconds)</p>
+                            </div>
+                            <div class="setting-control">
+                                <input type="number" id="requestTimeout" value="30000" min="100" max="60000">
+                            </div>
+                        </div>
+                        
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <label>Cache Size</label>
+                                <p class="setting-description">Maximum number of rules to keep in memory</p>
+                            </div>
+                            <div class="setting-control">
+                                <input type="number" id="cacheSize" value="100" min="10" max="1000">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h2>🔄 Reset Options</h2>
+                    <p class="section-description">Reset various parts of TurboMock to defaults</p>
+                    
+                    <div class="reset-options">
+                        <div class="reset-card">
+                            <h4>Reset Settings</h4>
+                            <p>Reset all settings to default values (rules will be preserved)</p>
+                            <button class="btn-secondary" onclick="resetSettingsOnly()">Reset Settings Only</button>
+                        </div>
+                        
+                        <div class="reset-card">
+                            <h4>Clear Rules</h4>
+                            <p>Delete all mock rules (settings will be preserved)</p>
+                            <button class="btn-danger" onclick="clearRules()">Clear All Rules</button>
+                        </div>
+                        
+                        <div class="reset-card">
+                            <h4>Factory Reset</h4>
+                            <p>Reset everything to default state (cannot be undone)</p>
+                            <button class="btn-danger" onclick="factoryReset()">Factory Reset</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Data Viewer Modal -->
+    <div class="modal" id="dataModal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h3>All Stored Data</h3>
+                <button class="modal-close" onclick="closeModal('dataModal')">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="data-viewer">
+                    <div class="data-tabs">
+                        <button class="data-tab active" onclick="switchDataTab('rules')">Rules</button>
+                        <button class="data-tab" onclick="switchDataTab('settings')">Settings</button>
+                        <button class="data-tab" onclick="switchDataTab('stats')">Statistics</button>
+                        <button class="data-tab" onclick="switchDataTab('raw')">Raw Data</button>
+                    </div>
+                    <div class="data-content">
+                        <textarea id="dataDisplay" readonly></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div class="modal" id="confirmModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="confirmTitle">Confirm Action</h3>
+                <button class="modal-close" onclick="closeConfirmModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <p id="confirmMessage">Are you sure you want to proceed?</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeConfirmModal()">Cancel</button>
+                <button class="btn-danger" id="confirmBtn" onclick="executeConfirmAction()">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shortcut Editor Modal -->
+    <div class="modal" id="shortcutModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Edit Keyboard Shortcut</h3>
+                <button class="modal-close" onclick="closeModal('shortcutModal')">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="shortcut-input">
+                    <label>Press the key combination you want to use:</label>
+                    <input type="text" id="shortcutInput" placeholder="Press keys..." readonly>
+                </div>
+                <div class="shortcut-warning" id="shortcutWarning" style="display: none;">
+                    This shortcut may conflict with browser or system shortcuts.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('shortcutModal')">Cancel</button>
+                <button class="btn-primary" onclick="saveShortcut()">Save Shortcut</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="options.js"></script>
+</body>
+</html>

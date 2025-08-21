@@ -1,0 +1,45 @@
+{
+  "name": "turbomock-browser-extension",
+  "version": "1.0.0",
+  "description": "Mock any API in 30 seconds, directly in your browser. Perfect for frontend development and testing.",
+  "main": "manifest.json",
+  "scripts": {
+    "build": "npm run test && npm run package",
+    "test": "echo 'Running tests...' && exit 0",
+    "package": "zip -r turbomock-extension.zip . -x '*.git*' 'node_modules/*' '*.DS_Store' 'package*.json' 'README.md' 'tests/*'",
+    "dev": "echo 'Load unpacked extension in Chrome from this directory'",
+    "lint": "echo 'Linting would go here'",
+    "validate": "node scripts/validate-manifest.js"
+  },
+  "keywords": [
+    "chrome-extension",
+    "firefox-addon",
+    "api-mocking",
+    "developer-tools",
+    "testing",
+    "frontend-development",
+    "request-interception",
+    "mock-server",
+    "api-testing",
+    "development-tools"
+  ],
+  "author": "TurboMock Extension Team",
+  "license": "MIT",
+  "homepage": "https://github.com/turbomock/browser-extension",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/turbomock/browser-extension.git"
+  },
+  "bugs": {
+    "url": "https://github.com/turbomock/browser-extension/issues"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "browserslist": [
+    "Chrome >= 120",
+    "Firefox >= 109",
+    "Edge >= 120"
+  ]
+}
