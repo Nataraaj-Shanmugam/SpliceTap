@@ -1,627 +1,480 @@
 /**
  * TurboMock Background Service Worker
- * Manifest V3 compliant request interception and rule management
+ * Manages extension state, rules storage, and communication with content scripts.
+ * 
+ * NOTE: Interception logic has moved to content/content.js (Monkey Patching) 
+ * to support dynamic responses and chaos mode in Manifest V3 without blocking permissions.
  */
 
-// Import utilities
-importScripts(
-  chrome.runtime.getURL('src/utils.js'),
-  chrome.runtime.getURL('src/storage.js')
-);
+import { TurboMockStorage } from '../src/storage.js';
+import { TurboMockUtils } from '../src/utils.js';
+// dnr.js is UMD-only (see its file header for why) — side-effect import it,
+// then read the API off globalThis, the same pattern injected.js uses for
+// the G1 shared modules via `window.TurboMockMatcher` etc.
+import './dnr.js';
 
+const { syncDnrRules } = globalThis.TurboMockDnr;
 
 class TurboMockBackground {
     constructor() {
         this.storage = new TurboMockStorage();
-        this.rules = [];
         this.isActive = true;
-        this.stats = { intercepted: 0, rulesCount: 0 };
-        this.requestCache = new Map();
-        this.contextMenuCreated = false;
-        this.declarativeRules = [];
-        
-        this.init();
+        this.rules = [];
+        this.stats = {
+            intercepted: 0,
+            lastReset: new Date().toISOString()
+        };
+        this.settings = {};
+        this.broadcastRetryCount = new Map(); // Track retry attempts per tab
+        this.MAX_BROADCAST_RETRIES = 3;
+
+        // Ring buffer of applied-rule log entries (TODO.md §1.5 / §G4.4).
+        // Backed by chrome.storage.session so it survives service-worker
+        // suspensions within a browser session (the SW is ephemeral in MV3).
+        this.interceptionLog = [];
+        this.MAX_INTERCEPTION_LOG = 200;
+
+        // Throttle for persisting stats + the interception log, to avoid a
+        // storage write on every single intercepted request.
+        this._lastPersist = 0;
+        this.PERSIST_THROTTLE_MS = 1500;
+
+        // Register event listeners synchronously, in the first turn of the
+        // service-worker script. MV3 workers are ephemeral; a listener added
+        // only after an `await` can miss the very event that woke the worker.
+        // Handlers await `this.ready` before reading state.
+        this.setupMessageHandlers();
+        this.setupContextMenus();
+        this.setupExtensionLifecycle();
+
+        this.ready = this.loadStoredData()
+            .then(() => console.log('TurboMock background service worker initialized (Config Mode)'))
+            .catch((error) => console.error('Failed to initialize background service worker:', error));
     }
 
-    async init() {
-        try {
-            await this.loadStoredData();
-            await this.setupDeclarativeNetRequest();
-            this.setupMessageHandlers();
-            this.setupContextMenus();
-            this.setupExtensionLifecycle();
-            
-            console.log('🎭 TurboMock background service worker initialized');
-        } catch (error) {
-            console.error('Failed to initialize background service worker:', error);
-        }
-    }
-
-    // Data Management
     async loadStoredData() {
         try {
             const data = await this.storage.loadAll();
-            this.rules = data.rules;
             this.isActive = data.active;
-            this.stats = data.stats;
-            this.settings = data.settings;
-            
-            this.updateBadge();
-            
-        } catch (error) {
-            console.error('Error loading stored data:', error);
-        }
-    }
+            this.rules = data.rules || [];
+            this.stats = data.stats || {
+                intercepted: 0,
+                lastReset: new Date().toISOString()
+            };
+            this.settings = data.settings || {};
 
-    async saveData() {
-        try {
-            await this.storage.saveRules(this.rules);
-            await this.storage.saveActiveState(this.isActive);
-            await this.storage.updateStats(this.stats);
-        } catch (error) {
-            console.error('Error saving data:', error);
-        }
-    }
-
-    // Manifest V3 Request Interception using DeclarativeNetRequest
-    async setupDeclarativeNetRequest() {
-        try {
-            // Clear existing rules
-            const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
-            if (existingRules.length > 0) {
-                await chrome.declarativeNetRequest.updateDynamicRules({
-                    removeRuleIds: existingRules.map(rule => rule.id)
-                });
+            // Restore the volatile interception log from session storage so the
+            // DevTools panel keeps its history across SW suspensions.
+            try {
+                const sess = await chrome.storage.session.get('turboMockInterceptionLog');
+                if (Array.isArray(sess.turboMockInterceptionLog)) {
+                    this.interceptionLog = sess.turboMockInterceptionLog;
+                }
+            } catch (e) {
+                // session storage unavailable — non-fatal
             }
 
-            // Create rules for active mock rules
-            await this.updateDeclarativeRules();
-            
+            await this.broadcastState();
+            await syncDnrRules(this.rules, this.isActive);
         } catch (error) {
-            console.error('Failed to setup declarative net request:', error);
+            console.error('Failed to load stored data:', error);
+            // Initialize with defaults on error
+            this.isActive = true;
+            this.rules = [];
+            this.stats = { intercepted: 0, lastReset: new Date().toISOString() };
+            this.settings = {};
         }
     }
 
-    async updateDeclarativeRules() {
-        if (!this.isActive) {
-            await chrome.declarativeNetRequest.updateDynamicRules({
-                removeRuleIds: this.declarativeRules.map(rule => rule.id)
-            });
-            this.declarativeRules = [];
-            return;
-        }
+    setupMessageHandlers() {
+        chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+            this.handleMessage(request, sender)
+                .then(sendResponse)
+                .catch(error => {
+                    console.error('Message handler error:', error);
+                    sendResponse({ success: false, error: error.message });
+                });
+            return true; // Keep channel open for async response
+        });
+    }
 
-        const newRules = [];
-        let ruleId = 1;
+    async handleMessage(request, sender) {
+        try {
+            // Ensure stored state is loaded before serving any message. On a
+            // cold SW start the triggering message can arrive before
+            // loadStoredData() resolves; this makes handlers wait for it.
+            await this.ready;
 
-        for (const rule of this.rules) {
-            if (!rule.enabled) continue;
+            switch (request.type) {
+                case 'getRules':
+                    return {
+                        success: true,
+                        rules: this.rules,
+                        active: this.isActive,
+                        stats: this.stats,
+                        settings: this.settings
+                    };
 
-            try {
-                // Create URL filter from pattern
-                const urlFilter = this.convertPatternToFilter(rule.match.url);
-                if (!urlFilter) continue;
+                case 'toggleExtension':
+                    this.isActive = request.active;
+                    await this.storage.saveActiveState(this.isActive);
+                    await this.broadcastState();
+                    await syncDnrRules(this.rules, this.isActive);
+                    return { success: true, active: this.isActive };
 
-                // Create declarative rule
-                const declarativeRule = {
-                    id: ruleId++,
-                    priority: 1,
-                    action: {
-                        type: 'redirect',
-                        redirect: {
-                            url: this.createMockResponseUrl(rule)
-                        }
-                    },
-                    condition: {
-                        urlFilter: urlFilter,
-                        resourceTypes: ['xmlhttprequest', 'main_frame', 'sub_frame']
+                case 'saveRule': {
+                    if (!request.rule) {
+                        throw new Error('Rule data is required');
                     }
-                };
-
-                // Add method filter if specified
-                if (rule.match.method && rule.match.method !== '*') {
-                    declarativeRule.condition.requestMethods = [rule.match.method.toLowerCase()];
+                    const ruleToSave = { ...request.rule };
+                    if ((ruleToSave.type === 'headers' || ruleToSave.type === 'queryparams') && !ruleToSave.dnrRuleId) {
+                        ruleToSave.dnrRuleId = await this.storage.allocateDnrId();
+                    }
+                    const savedRule = await this.storage.saveRule(ruleToSave);
+                    this.rules = await this.storage.getRules();
+                    await this.broadcastState();
+                    await syncDnrRules(this.rules, this.isActive);
+                    return { success: true, rule: savedRule };
                 }
 
-                newRules.push(declarativeRule);
-            } catch (error) {
-                console.error(`Failed to create declarative rule for ${rule.name}:`, error);
-            }
-        }
-
-        // Update rules
-        try {
-            await chrome.declarativeNetRequest.updateDynamicRules({
-                removeRuleIds: this.declarativeRules.map(rule => rule.id),
-                addRules: newRules
-            });
-            this.declarativeRules = newRules;
-        } catch (error) {
-            console.error('Failed to update declarative rules:', error);
-        }
-    }
-
-    convertPatternToFilter(pattern) {
-        if (!pattern) return null;
-        
-        try {
-            // Convert wildcard patterns to declarativeNetRequest format
-            if (pattern.includes('*')) {
-                return pattern.replace(/\*/g, '*');
-            } else if (pattern.startsWith('/') && pattern.endsWith('/')) {
-                // Regex patterns not directly supported, convert to wildcard
-                const regexBody = pattern.slice(1, -1);
-                return `*${regexBody}*`;
-            } else {
-                return `*${pattern}*`;
-            }
-        } catch (error) {
-            console.error('Error converting pattern to filter:', error);
-            return null;
-        }
-    }
-
-    createMockResponseUrl(rule) {
-        try {
-            // Create a data URL with the mock response
-            const responseBody = typeof rule.response.body === 'string' 
-                ? rule.response.body 
-                : JSON.stringify(rule.response.body);
-
-            const contentType = rule.response.headers?.['Content-Type'] || 'application/json';
-            return `data:${contentType};charset=utf-8,${encodeURIComponent(responseBody)}`;
-        } catch (error) {
-            console.error('Error creating mock response URL:', error);
-            return 'data:application/json;charset=utf-8,{"error":"Mock response generation failed"}';
-        }
-    }
-
-    // Context Menus
-    setupContextMenus() {
-        if (this.contextMenuCreated) return;
-
-        chrome.contextMenus.removeAll(() => {
-            chrome.contextMenus.create({
-                id: 'turbomock-main',
-                title: '🎭 TurboMock',
-                contexts: ['page', 'link']
-            });
-            
-            chrome.contextMenus.create({
-                id: 'turbomock-create-rule',
-                parentId: 'turbomock-main',
-                title: 'Mock this Request',
-                contexts: ['page', 'link']
-            });
-            
-            chrome.contextMenus.create({
-                id: 'turbomock-create-error',
-                parentId: 'turbomock-main',
-                title: 'Mock with Error',
-                contexts: ['page', 'link']
-            });
-            
-            chrome.contextMenus.create({
-                id: 'turbomock-separator',
-                parentId: 'turbomock-main',
-                type: 'separator',
-                contexts: ['page', 'link']
-            });
-            
-            chrome.contextMenus.create({
-                id: 'turbomock-toggle',
-                parentId: 'turbomock-main',
-                title: this.isActive ? 'Disable TurboMock' : 'Enable TurboMock',
-                contexts: ['page', 'link']
-            });
-
-            this.contextMenuCreated = true;
-        });
-        
-        chrome.contextMenus.onClicked.addListener((info, tab) => {
-            this.handleContextMenuClick(info, tab);
-        });
-    }
-
-    handleContextMenuClick(info, tab) {
-        switch (info.menuItemId) {
-            case 'turbomock-create-rule':
-                this.createRuleFromContext(info, tab);
-                break;
-                
-            case 'turbomock-create-error':
-                this.createErrorRuleFromContext(info, tab);
-                break;
-                
-            case 'turbomock-toggle':
-                this.toggleExtension();
-                break;
-        }
-    }
-
-    createRuleFromContext(info, tab) {
-        const rule = TurboMockUtils.createRuleTemplate('success');
-        rule.name = `Mock ${this.extractUrlPath(info.pageUrl)}`;
-        rule.match.url = this.createUrlPattern(info.pageUrl);
-        
-        this.notifyRuleCreation(tab, rule);
-    }
-
-    createErrorRuleFromContext(info, tab) {
-        const rule = TurboMockUtils.createRuleTemplate('error');
-        rule.name = `Error ${this.extractUrlPath(info.pageUrl)}`;
-        rule.match.url = this.createUrlPattern(info.pageUrl);
-        
-        this.notifyRuleCreation(tab, rule);
-    }
-
-    extractUrlPath(url) {
-        try {
-            const urlObj = new URL(url);
-            return urlObj.pathname || '/';
-        } catch {
-            return 'Request';
-        }
-    }
-
-    createUrlPattern(url) {
-        try {
-            const urlObj = new URL(url);
-            return `*${urlObj.pathname}*`;
-        } catch {
-            return '*';
-        }
-    }
-
-    notifyRuleCreation(tab, rule) {
-        chrome.tabs.sendMessage(tab.id, {
-            type: 'openRuleEditor',
-            rule: rule
-        }).catch(() => {
-            console.warn('Could not send rule creation message to tab');
-        });
-    }
-
-    // Message Handling
-    setupMessageHandlers() {
-        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-            this.handleMessage(message, sender, sendResponse);
-            return true; // Keep message channel open for async responses
-        });
-    }
-
-    async handleMessage(message, sender, sendResponse) {
-        try {
-            switch (message.type) {
-                case 'getRules':
-                    sendResponse({ 
-                        success: true,
-                        rules: this.rules, 
-                        active: this.isActive, 
-                        stats: this.stats 
-                    });
-                    break;
-                    
-                case 'saveRule':
-                    const saveResult = await this.storage.saveRule(message.rule);
-                    if (saveResult.success) {
-                        await this.loadStoredData();
-                        await this.updateDeclarativeRules();
-                        this.updateBadge();
+                case 'setRules': {
+                    // Bulk persist path used by the options editor and import.
+                    // Allocates a dnrRuleId for any headers/queryparams rule that
+                    // lacks one (so DNR-backed rules actually register), then
+                    // persists, refreshes in-memory rules, broadcasts, and syncs DNR.
+                    if (!Array.isArray(request.rules)) {
+                        throw new Error('rules array is required');
                     }
-                    sendResponse(saveResult);
-                    break;
-                    
-                case 'deleteRule':
-                    const deleteResult = await this.storage.deleteRule(message.ruleId);
-                    if (deleteResult.success) {
-                        await this.loadStoredData();
-                        await this.updateDeclarativeRules();
-                        this.updateBadge();
+                    const prepared = [];
+                    for (const incoming of request.rules) {
+                        const rule = { ...incoming };
+                        if ((rule.type === 'headers' || rule.type === 'queryparams') && !rule.dnrRuleId) {
+                            rule.dnrRuleId = await this.storage.allocateDnrId();
+                        }
+                        prepared.push(rule);
                     }
-                    sendResponse(deleteResult);
-                    break;
-                    
+                    await this.storage.saveRules(prepared);
+                    this.rules = await this.storage.getRules();
+                    await this.broadcastState();
+                    await syncDnrRules(this.rules, this.isActive);
+                    return { success: true, rules: this.rules };
+                }
+
                 case 'toggleRule':
-                    const toggleResult = await this.storage.toggleRule(message.ruleId, message.enabled);
-                    if (toggleResult.success) {
-                        await this.loadStoredData();
-                        await this.updateDeclarativeRules();
-                        this.updateBadge();
+                    if (!request.ruleId) {
+                        throw new Error('Rule ID is required');
                     }
-                    sendResponse(toggleResult);
-                    break;
-                    
-                case 'updateStats':
-                    const statsResult = await this.storage.updateStats(message.stats);
-                    if (statsResult.success) {
-                        this.stats = statsResult.stats;
+                    await this.storage.toggleRule(request.ruleId, request.enabled);
+                    this.rules = await this.storage.getRules();
+                    await this.broadcastState();
+                    await syncDnrRules(this.rules, this.isActive);
+                    return { success: true };
+
+                case 'deleteRule':
+                    if (!request.ruleId) {
+                        throw new Error('Rule ID is required');
                     }
-                    sendResponse(statsResult);
-                    break;
-                    
-                case 'getStats':
-                    sendResponse({ 
-                        success: true,
-                        stats: this.stats 
-                    });
-                    break;
-                    
-                case 'testRule':
-                    const testResult = await this.testRule(message.rule);
-                    sendResponse(testResult);
-                    break;
-                    
-                case 'toggleExtension':
-                    await this.toggleExtension(message.active);
-                    sendResponse({ 
-                        success: true, 
-                        active: this.isActive 
-                    });
-                    break;
+                    await this.storage.deleteRule(request.ruleId);
+                    this.rules = await this.storage.getRules();
+                    await this.broadcastState();
+                    await syncDnrRules(this.rules, this.isActive);
+                    return { success: true };
 
-                case 'statusChanged':
-                    await this.toggleExtension(message.active);
-                    sendResponse({ success: true });
-                    break;
-
-                case 'ruleToggled':
-                    // Update stats when rule is toggled
-                    await this.storage.updateStats({ 
-                        rulesCount: this.rules.length,
-                        lastUpdated: new Date().toISOString() 
-                    });
-                    sendResponse({ success: true });
-                    break;
-
-                case 'requestIntercepted':
-                    // Update intercept stats
-                    this.stats.intercepted = (this.stats.intercepted || 0) + 1;
+                case 'resetStats':
+                    this.stats = {
+                        intercepted: 0,
+                        lastReset: new Date().toISOString()
+                    };
                     await this.storage.updateStats(this.stats);
-                    sendResponse({ success: true });
-                    break;
+                    return { success: true, stats: this.stats };
 
-                case 'getDevToolsData':
-                    sendResponse({
-                        success: true,
-                        stats: {
-                            total: this.stats.intercepted || 0,
-                            mocked: Math.floor((this.stats.intercepted || 0) * 0.3), // Estimate
-                            activeRules: this.rules.filter(r => r.enabled).length,
-                            successRate: 85 // Estimate
-                        },
-                        requests: [] // Would be populated by content script
-                    });
-                    break;
-                    
+                case 'clearRules':
+                    await this.storage.saveRules([]);
+                    this.rules = [];
+                    await this.broadcastState();
+                    await syncDnrRules(this.rules, this.isActive);
+                    return { success: true };
+
+                case 'testRule':
+                    if (!request.rule) {
+                        throw new Error('Rule data is required');
+                    }
+                    return await this.validateRule(request.rule);
+
+                case 'settingsUpdated':
+                    if (request.settings) {
+                        this.settings = request.settings;
+                        await this.storage.saveSettings(this.settings);
+                        await this.broadcastState();
+                    }
+                    return { success: true };
+
+                case 'logInterception':
+                    if (request.entry) {
+                        this.interceptionLog.push(request.entry);
+                        if (this.interceptionLog.length > this.MAX_INTERCEPTION_LOG) {
+                            this.interceptionLog.splice(0, this.interceptionLog.length - this.MAX_INTERCEPTION_LOG);
+                        }
+                        this._applyStatsIncrement(1);
+                        await this._persistVolatile();
+                    }
+                    return { success: true };
+
+                case 'getInterceptionLog':
+                    return { success: true, entries: this.interceptionLog };
+
+                case 'clearInterceptionLog':
+                    this.interceptionLog = [];
+                    try {
+                        await chrome.storage.session.remove('turboMockInterceptionLog');
+                    } catch (e) {
+                        // non-fatal
+                    }
+                    return { success: true };
+
                 default:
-                    console.warn('Unknown message type:', message.type);
-                    sendResponse({ success: false, error: 'Unknown message type' });
+                    throw new Error(`Unknown message type: ${request.type}`);
             }
         } catch (error) {
             console.error('Error handling message:', error);
-            sendResponse({ success: false, error: error.message });
+            return { success: false, error: error.message };
         }
     }
 
-    async testRule(rule) {
-        try {
-            const testResults = {
-                passed: true,
-                errors: [],
-                warnings: []
+    /**
+     * Apply a stats increment, honoring the daily-reset rule: if a day or
+     * more has passed since `this.stats.lastReset`, stats restart at
+     * `incrementBy` (default 1) instead of accumulating. Called by the
+     * 'logInterception' handler (TODO.md §G4.4).
+     */
+    _applyStatsIncrement(incrementBy) {
+        const amount = incrementBy || 1;
+        const lastReset = new Date(this.stats.lastReset);
+        const now = new Date();
+        const daysSinceReset = Math.floor((now - lastReset) / (1000 * 60 * 60 * 24));
+
+        if (daysSinceReset >= 1) {
+            // Reset stats for new day
+            this.stats = {
+                intercepted: amount,
+                lastReset: now.toISOString()
             };
-            
-            // Test URL pattern
+        } else {
+            // Increment existing stats
+            this.stats.intercepted = (this.stats.intercepted || 0) + amount;
+        }
+    }
+
+    /**
+     * Persist the interception log (to session storage) and stats (to local
+     * storage), throttled so a busy page making many mocked requests doesn't
+     * trigger a storage write per request. In-memory state is always current;
+     * this only bounds how often it is flushed to disk/session.
+     */
+    async _persistVolatile(force = false) {
+        const now = Date.now();
+        if (!force && (now - this._lastPersist) < this.PERSIST_THROTTLE_MS) {
+            return;
+        }
+        this._lastPersist = now;
+
+        try {
+            await chrome.storage.session.set({ turboMockInterceptionLog: this.interceptionLog });
+        } catch (e) {
+            // session storage unavailable — non-fatal
+        }
+        await this.storage.updateStats(this.stats);
+    }
+
+    /**
+     * Validate a rule structure
+     */
+    async validateRule(rule) {
+        const errors = [];
+
+        // Validate required fields
+        if (!rule.name || rule.name.trim().length === 0) {
+            errors.push('Rule name is required');
+        }
+
+        if (!rule.match || !rule.match.url) {
+            errors.push('URL pattern is required');
+        } else {
+            // Validate URL pattern
             const urlValidation = TurboMockUtils.validateUrlPattern(rule.match.url);
             if (!urlValidation.isValid) {
-                testResults.errors.push(`Invalid URL pattern: ${urlValidation.error}`);
-                testResults.passed = false;
+                errors.push(`Invalid URL pattern: ${urlValidation.error}`);
             }
-            
-            // Test response body JSON
-            if (rule.response.body) {
-                const jsonValidation = TurboMockUtils.validateJSON(JSON.stringify(rule.response.body));
-                if (!jsonValidation.isValid) {
-                    testResults.errors.push(`Invalid response body: ${jsonValidation.error}`);
-                    testResults.passed = false;
-                }
-            }
-            
-            // Test status code
+        }
+
+        if (!rule.match || !rule.match.method) {
+            errors.push('HTTP method is required');
+        }
+
+        if (!rule.response) {
+            errors.push('Response configuration is required');
+        } else {
+            // Validate status code
             const statusValidation = TurboMockUtils.validateStatusCode(rule.response.statusCode);
             if (!statusValidation.isValid) {
-                testResults.errors.push(`Invalid status code: ${statusValidation.error}`);
-                testResults.passed = false;
+                errors.push(`Invalid status code: ${statusValidation.error}`);
             }
-            
-            // Test delay
-            if (rule.response.delay && (isNaN(rule.response.delay) || rule.response.delay < 0)) {
-                testResults.errors.push('Invalid delay value: must be a positive number');
-                testResults.passed = false;
+
+            // Validate headers JSON if present
+            if (rule.response.headers) {
+                if (typeof rule.response.headers !== 'object') {
+                    errors.push('Headers must be an object');
+                }
             }
-            
-            // Warnings
-            if (rule.response.delay && rule.response.delay > 10000) {
-                testResults.warnings.push('Very long delay (>10s) may cause timeouts');
+
+            // Validate delay
+            if (rule.response.delay !== undefined) {
+                const delay = parseInt(rule.response.delay, 10);
+                if (isNaN(delay) || delay < 0 || delay > 30000) {
+                    errors.push('Delay must be between 0 and 30000 ms');
+                }
             }
-            
-            if (!rule.response.headers || Object.keys(rule.response.headers).length === 0) {
-                testResults.warnings.push('No response headers specified');
-            }
-            
+        }
+
+        if (errors.length > 0) {
             return {
                 success: true,
-                passed: testResults.passed,
-                results: testResults
+                passed: false,
+                results: errors.map(error => ({
+                    status: 'failed',
+                    message: error
+                }))
             };
+        }
+
+        return {
+            success: true,
+            passed: true,
+            results: [{
+                status: 'passed',
+                message: 'Rule validation passed'
+            }]
+        };
+    }
+
+    /**
+     * Broadcast current rules/settings to all content scripts with retry logic
+     */
+    async broadcastState() {
+        const state = {
+            type: 'syncState',
+            rules: this.rules,
+            active: this.isActive,
+            settings: this.settings
+        };
+
+        try {
+            const tabs = await chrome.tabs.query({});
+            const broadcastPromises = tabs.map(tab => this.broadcastToTab(tab.id, state));
             
+            // Wait for all broadcasts to complete (but don't fail if some tabs fail)
+            await Promise.allSettled(broadcastPromises);
         } catch (error) {
-            return {
-                success: false,
-                error: error.message
-            };
+            console.error('Failed to query tabs for broadcast:', error);
         }
     }
 
-    // Extension Management
-    async toggleExtension(active = null) {
-        this.isActive = active !== null ? active : !this.isActive;
-        await this.storage.saveActiveState(this.isActive);
-        await this.updateDeclarativeRules();
-        this.updateBadge();
-        this.updateContextMenus();
-        
-        // Show notification
+    /**
+     * Broadcast to a specific tab with retry logic
+     */
+    async broadcastToTab(tabId, state) {
         try {
-            await chrome.notifications.create({
-                type: 'basic',
-                iconUrl: 'assets/icons/icon-48.png',
-                title: 'TurboMock',
-                message: `Extension ${this.isActive ? 'enabled' : 'disabled'}`
-            });
+            await chrome.tabs.sendMessage(tabId, state);
+            
+            // Reset retry count on success
+            this.broadcastRetryCount.delete(tabId);
         } catch (error) {
-            // Notifications might be blocked
-            console.warn('Could not show notification:', error);
-        }
-    }
-
-    updateBadge() {
-        const enabledRulesCount = this.rules.filter(r => r.enabled).length;
-        
-        try {
-            if (this.isActive && enabledRulesCount > 0) {
-                chrome.action.setBadgeText({ text: enabledRulesCount.toString() });
-                chrome.action.setBadgeBackgroundColor({ color: '#16a34a' });
-                chrome.action.setTitle({ title: `TurboMock: ${enabledRulesCount} active rules` });
-            } else if (!this.isActive) {
-                chrome.action.setBadgeText({ text: '!' });
-                chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
-                chrome.action.setTitle({ title: 'TurboMock: Disabled' });
+            const retries = this.broadcastRetryCount.get(tabId) || 0;
+            
+            if (retries < this.MAX_BROADCAST_RETRIES) {
+                // Retry after delay
+                this.broadcastRetryCount.set(tabId, retries + 1);
+                console.warn(`Failed to sync state to tab ${tabId}, attempt ${retries + 1}/${this.MAX_BROADCAST_RETRIES}:`, error.message);
+                
+                setTimeout(() => {
+                    this.broadcastToTab(tabId, state);
+                }, 1000 * (retries + 1)); // Exponential backoff
             } else {
-                chrome.action.setBadgeText({ text: '' });
-                chrome.action.setTitle({ title: 'TurboMock: No active rules' });
+                // Max retries reached, give up and log
+                console.error(`Failed to sync state to tab ${tabId} after ${this.MAX_BROADCAST_RETRIES} attempts, giving up`);
+                this.broadcastRetryCount.delete(tabId);
             }
-        } catch (error) {
-            console.warn('Failed to update badge:', error);
         }
     }
 
-    updateContextMenus() {
-        if (!this.contextMenuCreated) return;
-        
-        try {
-            chrome.contextMenus.update('turbomock-toggle', {
-                title: this.isActive ? 'Disable TurboMock' : 'Enable TurboMock'
-            });
-        } catch (error) {
-            console.warn('Failed to update context menus:', error);
-        }
-    }
-
-    // Extension Lifecycle
-    setupExtensionLifecycle() {
-        chrome.runtime.onInstalled.addListener((details) => {
-            this.handleInstall(details);
-        });
-        
-        chrome.runtime.onStartup.addListener(() => {
-            this.loadStoredData();
-        });
-        
-        chrome.tabs.onActivated.addListener(() => {
-            this.updateBadge();
+    setupContextMenus() {
+        chrome.runtime.onInstalled.addListener(() => {
+            try {
+                chrome.contextMenus.create({
+                    id: "turbomock-add-rule",
+                    title: "Mock this request",
+                    contexts: ["action", "page"]
+                });
+            } catch (error) {
+                console.error('Failed to create context menu:', error);
+            }
         });
 
-        // Handle command shortcuts
-        chrome.commands.onCommand.addListener((command) => {
-            this.handleCommand(command);
-        });
-    }
-
-    async handleCommand(command) {
-        switch (command) {
-            case 'toggle-extension':
-                await this.toggleExtension();
-                break;
-            case 'new-rule':
-                // Open popup or options page
+        chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+            if (info.menuItemId === "turbomock-add-rule") {
                 try {
-                    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-                    if (tabs[0]) {
-                        chrome.tabs.sendMessage(tabs[0].id, {
-                            type: 'openRuleEditor',
-                            rule: null
+                    if (tab && tab.url && /^https?:/i.test(tab.url)) {
+                        const host = new URL(tab.url).host;
+                        await chrome.storage.local.set({
+                            turboMockPrefill: { url: `*${host}*`, ts: Date.now() }
                         });
                     }
                 } catch (error) {
-                    chrome.runtime.openOptionsPage();
+                    console.error('Failed to store rule prefill data:', error);
                 }
-                break;
-        }
+                chrome.runtime.openOptionsPage();
+            }
+        });
     }
 
-    handleInstall(details) {
-        if (details.reason === 'install') {
-            this.showWelcomeNotification();
-            this.setupContextMenus();
-            // Open options page on first install
-            chrome.runtime.openOptionsPage();
-        } else if (details.reason === 'update') {
-            this.handleUpdate(details.previousVersion);
-        }
-    }
+    setupExtensionLifecycle() {
+        // Handle installation
+        chrome.runtime.onInstalled.addListener((details) => {
+            if (details.reason === 'install') {
+                console.log('TurboMock installed, opening options page');
+                chrome.runtime.openOptionsPage();
+            } else if (details.reason === 'update') {
+                console.log('TurboMock updated to version', chrome.runtime.getManifest().version);
+                // Could trigger migration here if needed
+            }
+        });
 
-    async showWelcomeNotification() {
-        try {
-            await chrome.notifications.create({
-                type: 'basic',
-                iconUrl: 'assets/icons/icon-48.png',
-                title: '🎭 TurboMock Installed!',
-                message: 'Right-click on any page to start mocking API requests.'
-            });
-        } catch (error) {
-            console.warn('Could not show welcome notification:', error);
-        }
-    }
+        // Handle tab updates - broadcast state to newly loaded pages
+        chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+            if (changeInfo.status === 'complete' && tab.url && !tab.url.startsWith('chrome://')) {
+                const state = {
+                    type: 'syncState',
+                    rules: this.rules,
+                    active: this.isActive,
+                    settings: this.settings
+                };
+                
+                // Give content script time to load
+                setTimeout(() => {
+                    this.broadcastToTab(tabId, state);
+                }, 500);
+            }
+        });
 
-    handleUpdate(previousVersion) {
-        console.log(`TurboMock updated from version ${previousVersion}`);
-        this.setupContextMenus();
-        
-        // Migrate data if needed
-        this.storage.migrateData(previousVersion, chrome.runtime.getManifest().version);
+        // Clean up retry counts when tabs close
+        chrome.tabs.onRemoved.addListener((tabId) => {
+            this.broadcastRetryCount.delete(tabId);
+        });
     }
 }
 
-// Initialize background service worker
-let turboMockBackground;
+// Initialize
+const backgroundService = new TurboMockBackground();
 
-// Handle service worker lifecycle
-self.addEventListener('install', (event) => {
-    console.log('TurboMock service worker installed');
-    self.skipWaiting();
-});
-
-self.addEventListener('activate', (event) => {
-    console.log('TurboMock service worker activated');
-    event.waitUntil(
-        clients.claim().then(() => {
-            turboMockBackground = new TurboMockBackground();
-        })
-    );
-});
-
-// Keep service worker alive
-chrome.runtime.onConnect.addListener((port) => {
-    console.log('Port connected:', port.name);
-    
-    port.onDisconnect.addListener(() => {
-        console.log('Port disconnected:', port.name);
-    });
-});
-
-// Initialize if not already done
-if (!turboMockBackground) {
-    turboMockBackground = new TurboMockBackground();
-}
+// Export for testing if needed
+export default backgroundService;

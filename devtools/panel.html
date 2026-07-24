@@ -5,339 +5,309 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TurboMock Panel</title>
     <style>
+        :root {
+            --bg-app: #0f1420;
+            --bg-card: #1a2130;
+            --bg-elevated: #141b28;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --accent: #4f6ef7;
+            --border: rgba(148, 163, 184, 0.14);
+            --font-main: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, 'Liberation Mono', Menlo, monospace;
+        }
+
+        * { box-sizing: border-box; }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            font-family: var(--font-main);
             margin: 0;
             padding: 20px;
-            background: #f8fafc;
-            color: #1e293b;
+            background: var(--bg-app);
+            color: var(--text-main);
         }
-        
+
         .panel-header {
             display: flex;
             align-items: center;
             gap: 12px;
             margin-bottom: 24px;
             padding-bottom: 16px;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid var(--border);
         }
-        
-        .panel-icon {
-            font-size: 24px;
+
+        .panel-logo {
+            width: 30px;
+            height: 30px;
+            border-radius: 7px;
+            background: var(--accent);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 12px;
+            letter-spacing: -0.3px;
         }
-        
+
         .panel-title {
-            font-size: 20px;
+            font-size: 18px;
             font-weight: 600;
             margin: 0;
         }
-        
+
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 12px;
             margin-bottom: 24px;
         }
-        
+
         .stat-card {
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            background: var(--bg-card);
+            padding: 16px 18px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
         }
-        
+
         .stat-value {
             font-size: 24px;
-            font-weight: 600;
-            color: #2563eb;
-            margin-bottom: 4px;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-bottom: 2px;
         }
-        
+
         .stat-label {
-            font-size: 14px;
-            color: #64748b;
+            font-size: 13px;
+            color: var(--text-muted);
             margin: 0;
         }
-        
+
         .requests-section {
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
             overflow: hidden;
         }
-        
+
         .section-header {
-            padding: 16px 20px;
-            background: #f1f5f9;
-            border-bottom: 1px solid #e2e8f0;
+            padding: 14px 18px;
+            background: var(--bg-elevated);
+            border-bottom: 1px solid var(--border);
             font-weight: 600;
+            font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-        
+
+        .clear-btn {
+            background: rgba(239, 68, 68, 0.12);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.28);
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.15s;
+        }
+
+        .clear-btn:hover {
+            background: rgba(239, 68, 68, 0.2);
+        }
+
         .requests-list {
-            max-height: 400px;
+            max-height: 460px;
             overflow-y: auto;
         }
-        
+
         .request-item {
-            padding: 12px 20px;
-            border-bottom: 1px solid #f1f5f9;
+            padding: 11px 18px;
+            border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
             gap: 12px;
         }
-        
+
         .request-item:last-child {
             border-bottom: none;
         }
-        
+
         .request-method {
             padding: 2px 8px;
             border-radius: 4px;
-            font-size: 12px;
-            font-weight: 600;
+            font-size: 11px;
+            font-weight: 700;
             text-transform: uppercase;
+            letter-spacing: 0.4px;
+            flex-shrink: 0;
+            background: rgba(148, 163, 184, 0.16);
+            color: var(--text-muted);
         }
-        
-        .method-get {
-            background: #dcfce7;
-            color: #166534;
-        }
-        
-        .method-post {
-            background: #dbeafe;
-            color: #1e40af;
-        }
-        
+
+        .method-get { background: rgba(56, 189, 248, 0.18); color: #7dd3fc; }
+        .method-post { background: rgba(34, 197, 94, 0.18); color: #6ee7a0; }
+        .method-put { background: rgba(251, 146, 60, 0.18); color: #fdba74; }
+        .method-delete { background: rgba(244, 63, 94, 0.18); color: #fb7185; }
+
         .request-url {
-            font-family: 'Monaco', 'Menlo', monospace;
-            font-size: 13px;
+            font-family: var(--font-mono);
+            font-size: 12.5px;
             flex: 1;
-            color: #475569;
+            min-width: 0;
+            color: var(--text-main);
+            word-break: break-all;
         }
-        
+
         .request-status {
             padding: 2px 8px;
             border-radius: 4px;
             font-size: 12px;
             font-weight: 600;
+            flex-shrink: 0;
         }
-        
-        .status-success {
-            background: #dcfce7;
-            color: #166534;
+
+        .status-success { background: rgba(34, 197, 94, 0.16); color: #6ee7a0; }
+        .status-error { background: rgba(239, 68, 68, 0.16); color: #f87171; }
+        .status-pending { background: rgba(148, 163, 184, 0.16); color: #94a3b8; }
+
+        .rule-info {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            min-width: 140px;
+            flex-shrink: 0;
+            font-size: 12px;
         }
-        
-        .status-error {
-            background: #fecaca;
-            color: #991b1b;
-        }
-        
-        .mock-indicator {
-            color: #2563eb;
-            font-size: 16px;
-        }
-        
-        .empty-state {
-            padding: 40px 20px;
-            text-align: center;
-            color: #64748b;
-        }
-        
-        .empty-icon {
-            font-size: 48px;
-            margin-bottom: 16px;
-            opacity: 0.5;
-        }
-        
-        .empty-title {
-            font-size: 16px;
+
+        .rule-name {
             font-weight: 600;
-            margin-bottom: 8px;
+            color: var(--text-main);
         }
-        
+
+        .rule-type-badge {
+            display: inline-block;
+            width: fit-content;
+            padding: 1px 7px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            background: rgba(148, 163, 184, 0.16);
+            color: var(--text-muted);
+        }
+
+        .rule-type-badge[data-type="mock"] { background: rgba(79, 110, 247, 0.18); color: #8ea2ff; }
+        .rule-type-badge[data-type="block"] { background: rgba(244, 63, 94, 0.18); color: #fb7185; }
+        .rule-type-badge[data-type="delay"] { background: rgba(251, 146, 60, 0.18); color: #fdba74; }
+        .rule-type-badge[data-type="redirect"] { background: rgba(56, 189, 248, 0.18); color: #7dd3fc; }
+        .rule-type-badge[data-type="headers"] { background: rgba(34, 197, 94, 0.18); color: #6ee7a0; }
+        .rule-type-badge[data-type="queryparams"] { background: rgba(167, 139, 250, 0.18); color: #c4b5fd; }
+
+        .timestamp {
+            font-size: 11px;
+            color: var(--text-muted);
+            flex-shrink: 0;
+            min-width: 60px;
+            text-align: right;
+        }
+
+        .empty-state {
+            padding: 56px 20px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        .empty-icon {
+            width: 40px;
+            height: 40px;
+            margin: 0 auto 16px;
+            opacity: 0.55;
+        }
+
+        .empty-icon svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        .empty-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-main);
+            margin-bottom: 6px;
+        }
+
         .empty-description {
-            font-size: 14px;
+            font-size: 13px;
             line-height: 1.5;
+        }
+
+        .error-state {
+            padding: 12px 16px;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.24);
+            border-radius: 8px;
+            color: #f87171;
+            font-size: 13px;
+            margin-bottom: 20px;
         }
     </style>
 </head>
 <body>
     <div class="panel-header">
-        <div class="panel-icon">🎭</div>
-        <h1 class="panel-title">TurboMock DevTools</h1>
+        <div class="panel-logo">TM</div>
+        <h1 class="panel-title">TurboMock</h1>
     </div>
-    
+
+    <div id="errorContainer"></div>
+
     <div class="stats-grid">
         <div class="stat-card">
             <div class="stat-value" id="totalRequests">0</div>
-            <div class="stat-label">Total Requests</div>
+            <div class="stat-label">Logged (this buffer)</div>
         </div>
-        
+
         <div class="stat-card">
             <div class="stat-value" id="mockedRequests">0</div>
-            <div class="stat-label">Mocked Requests</div>
+            <div class="stat-label">Intercepted (all time)</div>
         </div>
-        
+
         <div class="stat-card">
             <div class="stat-value" id="activeRules">0</div>
             <div class="stat-label">Active Rules</div>
         </div>
-        
+
         <div class="stat-card">
             <div class="stat-value" id="successRate">0%</div>
-            <div class="stat-label">Mock Success Rate</div>
+            <div class="stat-label">2xx Responses</div>
         </div>
     </div>
-    
+
     <div class="requests-section">
-        <div class="section-header">Recent Network Requests</div>
+        <div class="section-header">
+            <span>Intercepted Requests</span>
+            <button class="clear-btn" id="clearRequestsBtn">Clear</button>
+        </div>
         <div class="requests-list" id="requestsList">
-            <div class="empty-state">
-                <div class="empty-icon">📡</div>
-                <div class="empty-title">No Requests Monitored</div>
+            <div class="empty-state" id="emptyState">
+                <div class="empty-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2" />
+                        <path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                        <path d="M9 12h6" />
+                    </svg>
+                </div>
+                <div class="empty-title">No intercepted requests yet</div>
                 <div class="empty-description">
-                    Network requests will appear here as they are intercepted by TurboMock
+                    Trigger a request that matches one of your rules to see it here.
                 </div>
             </div>
+            <div id="requestItems"></div>
         </div>
     </div>
-    
-    <script>
-        class TurboMockDevPanel {
-            constructor() {
-                this.requests = [];
-                this.stats = {
-                    total: 0,
-                    mocked: 0,
-                    activeRules: 0,
-                    successRate: 0
-                };
-                
-                this.init();
-            }
-            
-            init() {
-                this.loadData();
-                this.setupNetworkListener();
-                this.updateStats();
-                this.renderRequests();
-                
-                // Update every 2 seconds
-                setInterval(() => {
-                    this.loadData();
-                    this.updateStats();
-                    this.renderRequests();
-                }, 2000);
-            }
-            
-            async loadData() {
-                try {
-                    // Get data from background script
-                    const response = await new Promise((resolve) => {
-                        chrome.runtime.sendMessage({ type: 'getDevToolsData' }, resolve);
-                    });
-                    
-                    if (response) {
-                        this.stats = response.stats || this.stats;
-                        this.requests = response.requests || this.requests;
-                    }
-                } catch (error) {
-                    console.warn('Failed to load data from background script:', error);
-                }
-            }
-            
-            setupNetworkListener() {
-                // Listen for network events from DevTools
-                chrome.devtools.network.onRequestFinished.addListener((request) => {
-                    const isMocked = request.response && 
-                        request.response.headers && 
-                        request.response.headers.some(header => 
-                            header.name.toLowerCase() === 'x-turbomock' && header.value === 'true'
-                        );
-                    
-                    const requestData = {
-                        id: Date.now(),
-                        method: request.request.method,
-                        url: request.request.url,
-                        status: request.response ? request.response.status : 0,
-                        timestamp: Date.now(),
-                        isMocked: isMocked
-                    };
-                    
-                    this.addRequest(requestData);
-                });
-            }
-            
-            addRequest(request) {
-                this.requests.unshift(request);
-                
-                // Keep only last 50 requests
-                if (this.requests.length > 50) {
-                    this.requests = this.requests.slice(0, 50);
-                }
-                
-                // Update stats
-                this.stats.total = this.requests.length;
-                this.stats.mocked = this.requests.filter(r => r.isMocked).length;
-                this.stats.successRate = this.stats.total > 0 
-                    ? Math.round((this.stats.mocked / this.stats.total) * 100)
-                    : 0;
-                
-                this.updateStats();
-                this.renderRequests();
-            }
-            
-            updateStats() {
-                document.getElementById('totalRequests').textContent = this.stats.total;
-                document.getElementById('mockedRequests').textContent = this.stats.mocked;
-                document.getElementById('activeRules').textContent = this.stats.activeRules;
-                document.getElementById('successRate').textContent = this.stats.successRate + '%';
-            }
-            
-            renderRequests() {
-                const container = document.getElementById('requestsList');
-                
-                if (this.requests.length === 0) {
-                    container.innerHTML = `
-                        <div class="empty-state">
-                            <div class="empty-icon">📡</div>
-                            <div class="empty-title">No Requests Monitored</div>
-                            <div class="empty-description">
-                                Network requests will appear here as they are intercepted by TurboMock
-                            </div>
-                        </div>
-                    `;
-                    return;
-                }
-                
-                container.innerHTML = this.requests.map(request => `
-                    <div class="request-item">
-                        <div class="request-method method-${request.method.toLowerCase()}">${request.method}</div>
-                        <div class="request-url">${this.escapeHtml(this.truncateUrl(request.url))}</div>
-                        <div class="request-status status-${request.status >= 200 && request.status < 300 ? 'success' : 'error'}">
-                            ${request.status}
-                        </div>
-                        ${request.isMocked ? '<div class="mock-indicator" title="Mocked by TurboMock">🎭</div>' : ''}
-                    </div>
-                `).join('');
-            }
-            
-            truncateUrl(url) {
-                if (url.length > 80) {
-                    return url.substring(0, 77) + '...';
-                }
-                return url;
-            }
-            
-            escapeHtml(text) {
-                const div = document.createElement('div');
-                div.textContent = text;
-                return div.innerHTML;
-            }
-        }
-        
-        // Initialize DevTools panel
-        new TurboMockDevPanel();
-    </script>
+
+    <script src="panel.js"></script>
 </body>
 </html>

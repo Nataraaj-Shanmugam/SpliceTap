@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TurboMock Logic Test Bench</title>
+    <style>
+        body { font-family: system-ui; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .box { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 8px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, textarea { width: 100%; padding: 8px; margin-bottom: 15px; box-sizing: border-box; }
+        button { background: #2563eb; color: white; padding: 10px 20px; border: none; cursor: pointer; border-radius: 5px; }
+        button:hover { background: #1d4ed8; }
+        .result { background: #f1f5f9; padding: 10px; border-radius: 4px; white-space: pre-wrap; margin-top: 10px; font-family: monospace; }
+        h2 { margin-top: 0; }
+    </style>
+    <!-- Import Utils Logic -->
+    <script src="../src/utils.js"></script>
+</head>
+<body>
+    <h1>TurboMock Logic Verifier</h1>
+    
+    <div class="box">
+        <h2>1. Test URL Matching</h2>
+        <label>URL Pattern:</label>
+        <input type="text" id="pattern" value="*/api/users/*">
+        <label>Test URL:</label>
+        <input type="text" id="testUrl" value="https://example.com/api/users/123/details">
+        <button onclick="testMatch()">Test Match</button>
+        <div id="matchResult" class="result">Ready</div>
+    </div>
+
+    <div class="box">
+        <h2>2. Test Dynamic Response</h2>
+        <label>Response Body (JSON or String):</label>
+        <textarea id="dynamicBody" rows="6">{
+    "id": "{{guid}}",
+    "timestamp": "{{timestamp}}",
+    "randomScore": "{{randomInt}}"
+}</textarea>
+        <button onclick="testDynamic()">Generate Response</button>
+        <div id="dynamicResult" class="result">Ready</div>
+    </div>
+
+    <script>
+        function testMatch() {
+            try {
+                const pattern = document.getElementById('pattern').value;
+                const url = document.getElementById('testUrl').value;
+                const matches = TurboMockUtils.matchUrl(url, pattern);
+                
+                const resultDiv = document.getElementById('matchResult');
+                resultDiv.textContent = matches ? "✅ MATCHED" : "❌ NO MATCH";
+                resultDiv.style.color = matches ? "green" : "red";
+            } catch (e) {
+                document.getElementById('matchResult').textContent = "Error: " + e.message;
+            }
+        }
+
+        function testDynamic() {
+            try {
+                const bodyInput = document.getElementById('dynamicBody').value;
+                const body = JSON.parse(bodyInput);
+                const processed = TurboMockUtils.processDynamicResponse(body);
+                
+                document.getElementById('dynamicResult').textContent = JSON.stringify(processed, null, 2);
+            } catch (e) {
+                // Try as string if JSON parse fails
+                 try {
+                    const processed = TurboMockUtils.processDynamicResponse(document.getElementById('dynamicBody').value);
+                    document.getElementById('dynamicResult').textContent = processed;
+                 } catch (e2) {
+                     document.getElementById('dynamicResult').textContent = "Error: " + e.message;
+                 }
+            }
+        }
+    </script>
+</body>
+</html>

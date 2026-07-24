@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>TurboMock Interception Simulation</title>
+    <style>
+        body {
+            font-family: system-ui;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .box {
+            border: 1px solid #ccc;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            background: #f8fafc;
+        }
+
+        button {
+            background: #2563eb;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        .log {
+            background: #1e293b;
+            color: #cbd5e1;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            height: 300px;
+            overflow-y: auto;
+        }
+
+        h2 {
+            margin-top: 0;
+        }
+
+        .status-ok {
+            color: green;
+            font-weight: bold;
+        }
+
+        .status-fail {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>TurboMock Interception Simulator</h1>
+    <p>This page loads the <code>content/injected.js</code> script to simulate how it hijacks <code>window.fetch</code>.
+    </p>
+
+    <div class="box">
+        <h2>1. Configure Extension (Simulated)</h2>
+        <p>Click to send a "syncState" message with 3 test rules (GET, POST, Wildcard).</p>
+        <button onclick="activateRules()">Activate Mock Rules</button>
+        <div id="ruleStatus">No rule active</div>
+    </div>
+
+    <div class="box">
+        <h2>2. Run Test Suite</h2>
+        <p>Executes a series of fetches to verify routing, methods, and dynamic templates.</p>
+        <button onclick="runDeepTest()">Run Deep Suite</button>
+    </div>
+
+    <h3>Console Log:</h3>
+    <div id="consoleLog" class="log"></div>
+
+    <!-- 1. Load the Interceptor -->
+    <script src="../content/injected.js"></script>
+
+    <script>
+        // Logger helper
+        function log(msg, type = 'info') {
+            const el = document.getElementById('consoleLog');
+            const span = document.createElement('span');
+            span.textContent = `> ${msg}\n`;
+            if (type === 'success') span.style.color = 'lightgreen';
+            if (type === 'error') span.style.color = 'salmon';
+            if (type === 'warn') span.style.color = 'gold';
+            el.appendChild(span);
+            el.scrollTop = el.scrollHeight;
+        }
+
+        const TEST_RULES = [
+            {
+                id: 'rule-get',
+                name: 'GET User',
+                enabled: true,
+                match: { url: '*/api/users/123', method: 'GET' },
+                response: {
+                    statusCode: 200,
+                    body: { id: 123, name: "Test User", guid: "{{guid}}" }
+                }
+            },
+            {
+                id: 'rule-post',
+                name: 'POST Data',
+                enabled: true,
+                match: { url: '*/api/data', method: 'POST' },
+                response: {
+                    statusCode: 201,
+                    body: { success: true, timestamp: "{{timestamp}}" }
+                }
+            },
+            {
+                id: 'rule-wildcard',
+                name: 'Wildcard Search',
+                enabled: true,
+                match: { url: '*/api/search*', method: 'GET' },
+                response: {
+                    statusCode: 200,
+                    body: { results: [] }
+                }
+            }
+        ];
+
+        function activateRules(chaos = false) {
+            window.postMessage({
+                source: 'turbomock-extension',
+                type: 'syncState',
+                payload: {
+                    active: true,
+                    rules: TEST_RULES,
+                    settings: { chaosMode: chaos, chaosRate: 0.5 }
+                }
+            }, '*');
+            document.getElementById('ruleStatus').textContent = `✅ Active: ${TEST_RULES.length} Rules | Chaos: ${chaos}`;
+            log(`Synced ${TEST_RULES.length} rules. Chaos Mode: ${chaos}`, 'info');
+        }
+
+        async function runDeepTest() {
+            log('🚀 Starting Deep Verification Suite...', 'info');
+
+            // 1. Test GET with Exact Match & Dynamic Template
+            log('TEST 1: GET /api/users/123 (Dynamic GUID)', 'info');
+            try {
+                const res = await fetch('/api/users/123');
+                const data = await res.json();
+                if (res.status === 200 && data.id === 123 && data.guid.length > 10) {
+                    log(`PASSED: Got 200 OK & GUID: ${data.guid}`, 'success');
+                } else {
+                    log(`FAILED: Invalid response: ${JSON.stringify(data)}`, 'error');
+                }
+            } catch (e) { log(`FAILED: ${e.message}`, 'error'); }
+
+            // 2. Test POST Match
+            log('TEST 2: POST /api/data (Method Check)', 'info');
+            try {
+                const res = await fetch('/api/data', { method: 'POST' });
+                const data = await res.json();
+                if (res.status === 201 && data.success) {
+                    log('PASSED: Got 201 Created', 'success');
+                } else {
+                    log(`FAILED: Status ${res.status}`, 'error');
+                }
+            } catch (e) { log(`FAILED: ${e.message}`, 'error'); }
+
+            // 3. Test Wildcard Match
+            log('TEST 3: GET /api/search?q=test (Wildcard)', 'info');
+            try {
+                const res = await fetch('/api/search?query=anything');
+                if (res.status === 200) {
+                    log('PASSED: Wildcard matched', 'success');
+                } else {
+                    log('FAILED: Wildcard did not match', 'error');
+                }
+            } catch (e) { log(`FAILED: ${e.message}`, 'error'); }
+
+            // 4. Test Miss (Should Fail or go to network)
+            log('TEST 4: GET /api/unknown (Should Bypass)', 'info');
+            try {
+                await fetch('/api/unknown');
+                log('WARNING: /api/unknown succeeded? Should have 404d via network.', 'warn');
+            } catch (e) {
+                log('PASSED: Request bypassed interceptor (Network Error expected in file://)', 'success');
+            }
+
+            log('🏁 Deep Verification Complete', 'info');
+        }
+    </script>
+</body>
+
+</html>

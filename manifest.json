@@ -1,35 +1,36 @@
 {
   "manifest_version": 3,
   "name": "TurboMock - API Mocker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Mock any API in 30 seconds, directly in your browser. Perfect for frontend development and testing.",
-  
   "permissions": [
     "storage",
     "activeTab",
     "contextMenus",
-    "notifications",
-    "declarativeNetRequest",
-    "declarativeNetRequestWithHostAccess"
+    "declarativeNetRequest"
   ],
-  
   "host_permissions": [
     "<all_urls>"
   ],
-  
   "background": {
-    "service_worker": "service_worker/background.js"
+    "service_worker": "service_worker/background.js",
+    "type": "module"
   },
-  
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["src/utils.js", "src/storage.js", "content/content.js"],
+      "js": ["src/placeholders.js", "src/matcher.js", "src/patch.js", "content/injected.js"],
       "run_at": "document_start",
-      "all_frames": false
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/content.js"],
+      "run_at": "document_start",
+      "all_frames": true
     }
   ],
-  
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "TurboMock - API Mocker",
@@ -40,28 +41,17 @@
       "128": "assets/icons/icon-128.png"
     }
   },
-  
   "icons": {
     "16": "assets/icons/icon-16.png",
-    "32": "assets/icons/icon-32.png", 
+    "32": "assets/icons/icon-32.png",
     "48": "assets/icons/icon-48.png",
     "128": "assets/icons/icon-128.png"
   },
-  
-  "web_accessible_resources": [
-    {
-      "resources": ["assets/*", "src/*"],
-      "matches": ["<all_urls>"]
-    }
-  ],
-  
   "options_ui": {
     "page": "options/options.html",
     "open_in_tab": true
   },
-  
   "devtools_page": "devtools/devtools.html",
-  
   "commands": {
     "toggle-extension": {
       "suggested_key": {
@@ -72,22 +62,11 @@
     },
     "new-rule": {
       "suggested_key": {
-        "default": "Ctrl+Shift+N", 
+        "default": "Ctrl+Shift+N",
         "mac": "Command+Shift+N"
       },
       "description": "Create new mock rule"
     }
   },
-  
-  "minimum_chrome_version": "120",
-  
-  "homepage_url": "https://github.com/turbomock/browser-extension",
-  
-  "author": "TurboMock Extension Team",
-  
-  "short_name": "TurboMock",
-
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
-  }
+  "minimum_chrome_version": "120"
 }

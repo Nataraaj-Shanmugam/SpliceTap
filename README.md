@@ -1,19 +1,18 @@
 # 🎭 TurboMock - API Mocker Browser Extension
 
-Mock any API in 30 seconds, directly in your browser. Perfect for frontend development and testing.
+Mock, block, delay, redirect, and rewrite any API call directly in your browser. Perfect for frontend development, testing, and debugging — no proxy, no backend changes, no build step.
 
 ## ✨ Features
 
-- **Quick API Mocking**: Create mock responses for any API endpoint in seconds
-- **Pattern Matching**: Support for wildcards, regex, and exact URL matching
-- **Comprehensive Testing**: Built-in rule validation and testing system
+- **Six rule types**: Mock, Block, Delay, Redirect, Modify Headers, and Query Params
+- **Static & patch mocking**: Return a full synthetic response, or fetch the real one and surgically patch a few fields (RFC 7386 JSON Merge Patch)
+- **GraphQL-aware matching**: Target a single `operationName` on a shared `/graphql` endpoint
+- **Pattern Matching**: Wildcard, regex, and substring URL matching, plus optional header and GraphQL conditions
+- **Dynamic placeholders**: Inject timestamps, GUIDs, random data, and request details into responses
+- **Live DevTools panel**: A "TurboMock" panel that logs every intercepted request
 - **Dark/Light Theme**: Automatic theme detection or manual selection
-- **Import/Export**: Backup and share your mock rules
-- **DevTools Integration**: Monitor intercepted requests in Chrome DevTools
-- **Keyboard Shortcuts**: Quick access with customizable shortcuts
-- **Context Menu**: Right-click on any page to create rules
-- **Response Delays**: Simulate network latency and slow responses
-- **Multiple Methods**: Support for GET, POST, PUT, DELETE, PATCH requests
+- **Import/Export**: Backup and share your rules; v1 rule files migrate automatically
+- **Keyboard Shortcuts & Context Menu**: Fast rule creation from anywhere
 
 ## 🚀 Quick Start
 
@@ -28,85 +27,117 @@ Mock any API in 30 seconds, directly in your browser. Perfect for frontend devel
 
 #### For Production:
 - Install from Chrome Web Store (coming soon)
-- Install from Firefox Add-ons (coming soon)
 
 ### Basic Usage
 
 1. **Create Your First Rule**:
-   - Click the TurboMock icon in your toolbar
-   - Click "New Rule" or right-click on any page and select "Mock this Request"
-   - Configure your mock response
-   - Save and test!
+   - Click the TurboMock icon in your toolbar and click "New Rule", or right-click on any page and choose the TurboMock context-menu entry (which opens the options page with the current host prefilled)
+   - Pick a **Rule Type**, configure the matching and behavior fields
+   - Save — the rule takes effect immediately on matching requests
 
-2. **Rule Configuration**:
+2. **Rule Configuration** (fields shared by all types):
    - **Name**: Descriptive name for your rule
-   - **Method**: HTTP method (GET, POST, etc.)
-   - **URL Pattern**: Use wildcards like `*/api/users/*` or regex `/api/users/\d+/`
-   - **Status Code**: Response status (200, 404, 500, etc.)
-   - **Headers**: Custom response headers (JSON format)
-   - **Body**: Response body (JSON format)
-   - **Delay**: Simulate network delay in milliseconds
+   - **Enabled**: Toggle the rule on/off
+   - **Method**: HTTP method (GET, POST, etc.) or `*` for any method
+   - **URL Pattern**: Wildcard like `*/api/users/*`, regex `/api/users/\d+/`, or a plain substring
 
 3. **Testing Rules**:
-   - Use the "Test" button to validate your rules
-   - Use "Test All" to validate all enabled rules
-   - Check the status indicators: ✅ (passed), ❌ (failed), ⚠️ (warning), 🔄 (pending)
+   - Use the "Test" button in the popup to validate a rule's structure
+   - Status indicators: ✅ (passed), ❌ (failed), ⚠️ (warning), 🔄 (pending)
+
+## 🧩 Rule Types
+
+Every rule has a `type`. Rules exported before v1.1.0 have no `type` field and are automatically migrated to `mock` on load.
+
+### `mock` — Return a synthetic or patched response
+Two response **modes**:
+- **`static`** (default): Return a fully synthetic response you define — `statusCode`, `statusText`, `headers`, `body`, optional `delay`. Placeholders in the body are expanded at request time.
+- **`patch`**: Let the **real** request go to the network, then apply an RFC 7386 **JSON Merge Patch** to the response body. Objects merge recursively, `null` deletes a key, and arrays/scalars replace the existing value. Only valid-JSON responses are patched; anything else passes through untouched. Patch mode keeps the original status code.
+
+Mock rules also support two optional matching conditions:
+- **`match.graphql.operationName`** — matches against the request body's `operationName`. This is the key to mocking a single query/mutation on a shared single-endpoint GraphQL API. (Requires method `POST` or `*`.)
+- **`match.headers`** — an object of `{ 'header-name': 'value-substring' }`; **all** entries must match. Names are compared case-insensitively; values by substring.
+
+All successful mock/patch responses carry `x-turbomock: true` and `x-turbomock-rule: <rule name>` headers so you can confirm interception in the console/Network response headers.
+
+### `block` — Fail the request
+`fetch` rejects with a `TypeError('Failed to fetch')`; XHR fires an `error` event with `status: 0`. Useful for testing error and offline states.
+
+### `delay` — Slow a request down, then let it through
+Waits `delayMs` milliseconds, then passes the request through to the real network unchanged. Useful for testing spinners and latency handling.
+
+### `redirect` — Send the request somewhere else
+Rewrites the request URL to `redirect.destination` before it hits the network. If `match.url` is a `/regex/` pattern, `$1`..`$9` capture references are supported in the destination (e.g. redirect `https://prod.example.com/api/$1` to `http://localhost:3000/$1`).
+
+### `headers` — Add/remove request or response headers
+Handled by `chrome.declarativeNetRequest` (see Architecture). `headersMod.request` and `headersMod.response` are each arrays of `{ op: 'set' | 'remove', name, value }`. Common use: a "CORS Unblock" preset that sets `Access-Control-Allow-Origin: *` on responses, or overriding `User-Agent` on requests.
+
+### `queryparams` — Add or remove URL query parameters
+Also handled by declarativeNetRequest. `queryParams.add` is an array of `{ key, value }`; `queryParams.remove` is an array of keys to strip.
+
+## 🎯 Matching & Precedence
+
+- **URL pattern semantics** (case-insensitive):
+  - Contains `*` → wildcard, anchored full-match (`*` alone matches everything)
+  - Wrapped in `/.../` → treated as a regular expression
+  - Otherwise → substring match
+- **Method** `*` matches any method.
+- **Precedence**: For interceptor-handled types (`mock`, `block`, `delay`, `redirect`), enabled rules are evaluated in array order and the **first** rule whose URL + method + headers + GraphQL conditions all match wins — only that rule is applied.
+- `headers` / `queryparams` rules are applied independently by the browser's network layer via declarativeNetRequest and are not part of this first-match ordering.
 
 ## 📋 URL Pattern Examples
 
 ```
-# Wildcard patterns
+# Wildcard patterns (anchored full match)
 */api/users/*          # Matches any URL containing /api/users/
 */api/*/profile        # Matches /api/v1/profile, /api/v2/profile, etc.
 
-# Exact matches
-https://api.example.com/users  # Matches exactly this URL
+# Substring match
+api.example.com/users  # Matches any URL containing this substring
 
 # Regex patterns (wrapped in forward slashes)
 /api/users/\d+/        # Matches /api/users/123/, /api/users/456/, etc.
 /api/(users|accounts)/ # Matches /api/users/ or /api/accounts/
 ```
 
+## 🔤 Dynamic Placeholders
+
+Placeholders in a mock body (static mode) or patch payload are expanded per request. The full supported set:
+
+| Placeholder | Expands to |
+|---|---|
+| `{{timestamp}}` | Current time as ISO 8601 (`2026-07-23T12:34:56.789Z`) |
+| `{{timestamp_ms}}` | Current time as epoch milliseconds |
+| `{{date}}` | Current date (`YYYY-MM-DD`) |
+| `{{time}}` | Current time (`HH:MM:SS`) |
+| `{{guid}}` | A random v4-style UUID |
+| `{{randomInt}}` | Random integer 0–999 |
+| `{{randomInt:max}}` | Random integer 0–`max` (e.g. `{{randomInt:50}}`) |
+| `{{randomFloat}}` | Random float 0–100 with 2 decimals |
+| `{{randomString}}` | Random 10-char alphanumeric string |
+| `{{randomString:len}}` | Random string of `len` characters (e.g. `{{randomString:8}}`) |
+| `{{randomEmail}}` | Random `name###@domain` email |
+| `{{randomBool}}` | `true` or `false` |
+| `{{request.url}}` | The intercepted request's URL |
+| `{{request.method}}` | The intercepted request's method |
+
 ## 🎨 Mock Response Examples
 
-### Success Response
+### Success Response (static mode)
 ```json
 {
   "success": true,
-  "data": {
-    "id": 123,
-    "name": "John Doe",
-    "email": "john@example.com"
-  },
-  "timestamp": "2024-01-01T00:00:00Z"
+  "data": { "id": "{{guid}}", "name": "John Doe", "email": "{{randomEmail}}" },
+  "timestamp": "{{timestamp}}"
 }
 ```
 
-### Error Response
+### Patch Response (patch mode)
+Given a real API response of `{ "user": { "name": "Real", "role": "user" }, "count": 3 }`, this patch:
 ```json
-{
-  "error": "User not found",
-  "code": "USER_NOT_FOUND",
-  "status": 404,
-  "timestamp": "2024-01-01T00:00:00Z"
-}
+{ "user": { "role": "admin" }, "count": null }
 ```
-
-### Paginated Response
-```json
-{
-  "data": [
-    {"id": 1, "name": "Item 1"},
-    {"id": 2, "name": "Item 2"}
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 10,
-    "total": 100,
-    "hasNext": true
-  }
-}
-```
+produces `{ "user": { "name": "Real", "role": "admin" } }` — `role` is overwritten, `count` is deleted, everything else is preserved.
 
 ## ⌨️ Keyboard Shortcuts
 
@@ -121,53 +152,52 @@ https://api.example.com/users  # Matches exactly this URL
 ## 🛠️ Advanced Features
 
 ### Rule Templates
-TurboMock includes several built-in templates:
-- **Success Response**: Standard 200 OK response
-- **Error Response**: 500 Internal Server Error
-- **Not Found**: 404 Not Found response
-- **Unauthorized**: 401 Unauthorized response
-- **Delayed Response**: Response with network delay
+The rule editor includes ready-to-use presets, including: Success/Error/Not Found/Unauthorized responses, Delayed Response, GraphQL Mock, Patch Response, Block Request, Redirect to localhost, CORS Unblock (headers), and Custom User-Agent (headers).
 
 ### Import/Export
 - Export your rules as JSON files for backup or sharing
-- Import rules from JSON files
+- Import rules from JSON files (merge or replace)
 - Automatic rule validation during import
-- Merge or replace existing rules
+- **Migration**: v1 rule files (no `type` field) load transparently — each rule is normalized to `type: 'mock'` with `response.mode: 'static'`
 
-### Testing & Validation
-- **URL Pattern Testing**: Validates regex and wildcard patterns
-- **JSON Validation**: Ensures response bodies are valid JSON
-- **Header Validation**: Checks header format and values
-- **Status Code Validation**: Ensures valid HTTP status codes
-- **Performance Testing**: Measures rule matching performance
+### DevTools Panel
+Open Chrome DevTools and select the **TurboMock** panel. Because mocked/blocked/delayed/redirected requests never reach the real network stack (and so can't appear in the normal Network tab), the panel instead shows TurboMock's own interception log: it polls the background service worker every 2 seconds and renders each applied rule (method, URL, rule name, type, status, relative time), newest first. A "Clear" button empties the log.
 
 ## 🔧 Technical Details
 
 ### Architecture
-- **Manifest V3**: Modern extension architecture for better security
-- **Service Worker**: Background processing for request interception
-- **Content Scripts**: Page injection for rule editor and monitoring
-- **DeclarativeNetRequest**: Chrome's modern request interception API
-- **Chrome Storage**: Persistent rule and settings storage
+TurboMock intercepts requests through **two independent mechanisms**, depending on rule type:
+
+- **MAIN-world fetch/XHR monkey-patching** (`content/injected.js`) handles `mock`, `block`, `delay`, and `redirect`. A content script declared with `"world": "MAIN"` and `run_at: "document_start"` injects the interceptor before any page script runs, in all frames. The interceptor wraps `window.fetch` and `XMLHttpRequest` so it can synthesize, reject, delay, or reroute requests entirely in-page — these requests never touch the network stack.
+- **`chrome.declarativeNetRequest` dynamic rules** (`service_worker/dnr.js`) handle `headers` and `queryparams`. These are real network-layer modifications applied by the browser, so they affect traffic the in-page interceptor can't see (and correctly show up in the normal DevTools Network tab).
+
+Supporting pieces:
+- **Shared UMD modules** (`src/placeholders.js`, `src/matcher.js`, `src/patch.js`) contain the single canonical copy of the placeholder engine, matcher, and JSON Merge Patch logic. The same files load in the MAIN world (as plain scripts), in the service worker (via side-effect import + global), and under Jest (as CommonJS), so the logic never diverges.
+- **Service Worker** (`service_worker/background.js`): holds rules/settings/stats in memory, persists via `src/storage.js`, broadcasts state to all tabs on every change, syncs declarativeNetRequest rules, and keeps the in-memory interception-log ring buffer.
+- **Content relay** (`content/content.js`): an ISOLATED-world script that syncs rule state between the background worker and the page, and forwards interception-log messages from the interceptor to the background worker.
+
+### Permissions
+- `storage` — persist rules and settings locally
+- `activeTab` — read the active tab's host for the context-menu prefill
+- `contextMenus` — the right-click "create rule" entry
+- `notifications` — user-facing notifications
+- `declarativeNetRequest` — apply `headers` / `queryparams` rules at the network layer
 
 ### Browser Compatibility
-- **Chrome**: 120+ (full support)
-- **Edge**: 120+ (full support)
-- **Firefox**: 109+ (partial support, some features limited)
-- **Safari**: Not supported (WebExtensions API limitations)
+- **Chrome / Edge**: 120+ (full support; `minimum_chrome_version` is 120)
+- **Firefox / Safari**: not supported in this release (out of scope)
 
 ### Privacy & Security
-- **Local Storage Only**: All data stored locally on your device
-- **No Data Collection**: No analytics, tracking, or data sharing
-- **Request Privacy**: Only intercepts matching requests, never logs content
-- **CSP Compliant**: Follows Content Security Policy best practices
-- **Minimal Permissions**: Only requests necessary permissions
+- **Local Storage Only**: All rules and settings are stored locally on your device
+- **No Data Collection**: No analytics, tracking, or remote data sharing
+- **Interception log**: The DevTools log holds only request metadata (URL, method, rule name/type, status) for the last 200 intercepted requests, in memory — response bodies are never stored
+- **CSP Compliant**: No inline scripts in extension pages; DevTools panel logic lives in `devtools/panel.js`
 
-### Performance
-- **Rule Matching**: < 10ms per request
-- **Memory Usage**: < 50MB typical usage
-- **Storage Limit**: 10MB local storage (thousands of rules)
-- **Background Processing**: Minimal CPU usage when idle
+### Known Limitations
+- Requests fired by the page **before the first state sync** arrives pass through unmocked.
+- XHR **patch mode** re-fetches the original response via `fetch(url, { method, body, credentials: 'include' })` — an approximation of the original XHR request.
+- `headers` / `queryparams` (declarativeNetRequest) rules **cannot** use `match.headers` or `match.graphql` conditions — the network layer can't express them, so the editor rejects those combinations.
+- **Firefox** support is out of scope for this release.
 
 ## 📊 Data Management
 
@@ -179,60 +209,34 @@ TurboMock includes several built-in templates:
       "id": "rule_123456789",
       "name": "User Profile API",
       "enabled": true,
-      "created": "2024-01-01T00:00:00Z",
-      "lastModified": "2024-01-01T00:00:00Z",
+      "type": "mock",                 // mock | block | delay | redirect | headers | queryparams
+      "created": "2026-01-01T00:00:00Z",
+      "lastModified": "2026-01-01T00:00:00Z",
       "match": {
         "method": "GET",
         "url": "*/api/users/*",
-        "headers": {}
+        "headers": {},                // optional; all must match (case-insensitive name, substring value)
+        "graphql": { "operationName": "getUser" }  // optional; mock type only
       },
-      "response": {
+      "response": {                   // mock type only
         "statusCode": 200,
         "statusText": "OK",
-        "headers": {"Content-Type": "application/json"},
-        "body": {"id": 123, "name": "John Doe"},
-        "delay": 0
+        "headers": { "Content-Type": "application/json" },
+        "body": { "id": 123, "name": "John Doe" },
+        "delay": 0,
+        "mode": "static",             // static | patch
+        "patch": {}                   // JSON Merge Patch, used when mode === 'patch'
       },
       "testStatus": "passed",
       "hitCount": 42
     }
   ],
   "turboMockActive": true,
-  "turboMockStats": {
-    "intercepted": 156,
-    "rulesCount": 12,
-    "lastUpdated": "2024-01-01T00:00:00Z"
-  },
-  "turboMockSettings": {
-    "theme": "auto",
-    "notifications": true,
-    "autoBackup": true,
-    "debugMode": false
-  }
+  "turboMockStats": { "intercepted": 156, "rulesCount": 12, "lastUpdated": "2026-01-01T00:00:00Z" },
+  "turboMockSettings": { "theme": "auto", "notifications": true, "autoBackup": true, "debugMode": false }
 }
 ```
-
-### Backup & Restore
-- **Auto Backup**: Optional automatic backups to user folder
-- **Manual Backup**: Export rules with metadata
-- **Restore**: Import from backup files with validation
-- **Migration**: Automatic data migration between versions
-
-## 🧪 Testing
-
-### Rule Testing
-Each rule can be tested individually or as part of a batch:
-- URL pattern validation
-- JSON syntax checking
-- HTTP status code validation
-- Header format verification
-- Response body structure validation
-
-### Integration Testing
-- Extension lifecycle testing
-- Cross-browser compatibility testing
-- Performance benchmarking
-- Memory usage monitoring
+Type-specific fields also include `delayMs` (delay), `redirect.destination` (redirect), `headersMod` (headers), `queryParams` (queryparams), and an internal `dnrRuleId` allocated by the background worker for declarativeNetRequest-backed rules.
 
 ## 🤝 Contributing
 
@@ -240,60 +244,51 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ### Development Setup
 ```bash
-# Clone the repository
 git clone https://github.com/turbomock/browser-extension.git
 cd browser-extension
-
-# Load in Chrome for development
-# 1. Open chrome://extensions/
-# 2. Enable Developer mode
-# 3. Click "Load unpacked"
-# 4. Select the extension directory
+npm install
+npm test                              # Jest test suite
+node scripts/validate-manifest.js     # Manifest sanity check
+# Then load unpacked in chrome://extensions/ (Developer mode)
 ```
 
 ### Project Structure
 ```
 turbomock-extension/
-├── manifest.json           # Extension manifest
-├── assets/                 # Icons and static assets
-├── src/                   # Shared utilities
-│   ├── utils.js          # Utility functions
-│   └── storage.js        # Storage management
-├── service_worker/       # Background scripts
-│   └── background.js     # Main service worker
-├── popup/               # Extension popup
-│   ├── popup.html       # Popup UI
-│   ├── popup.js         # Popup logic
-│   └── popup.css        # Popup styles
-├── content/             # Content scripts
-│   └── content.js       # Page injection
-├── options/             # Settings page
-│   ├── options.html     # Settings UI
-│   ├── options.js       # Settings logic
-│   └── options.css      # Settings styles
-├── devtools/            # DevTools integration
-│   ├── devtools.html    # DevTools entry
-│   └── panel.html       # DevTools panel
-└── tests/               # Test suite
-    ├── unit/           # Unit tests
-    └── integration/    # Integration tests
+├── manifest.json              # Extension manifest (MV3)
+├── assets/                    # Icons and static assets
+├── src/                       # Shared utilities (UMD — load everywhere, no divergence)
+│   ├── placeholders.js        # Dynamic-response placeholder engine
+│   ├── matcher.js             # URL / header / GraphQL / rule matching
+│   ├── patch.js               # RFC 7386 JSON Merge Patch
+│   ├── utils.js               # Validation, import/export, templates
+│   ├── storage.js             # chrome.storage wrapper + rule migration
+│   └── index.js               # CommonJS entry for tests
+├── service_worker/
+│   ├── background.js          # State, sync, interception log, context menu
+│   └── dnr.js                 # declarativeNetRequest rule mapping/sync
+├── content/
+│   ├── injected.js            # MAIN-world fetch/XHR interceptor
+│   └── content.js             # ISOLATED-world state relay
+├── popup/                     # Toolbar popup (rule list, toggle, test)
+├── options/                   # Settings page + rule-type editor
+├── devtools/
+│   ├── devtools.js            # Panel registration
+│   ├── panel.html             # DevTools panel markup
+│   └── panel.js               # Interception-log polling + rendering
+├── scripts/
+│   └── validate-manifest.js   # Manifest validation
+└── tests/                     # Jest test suites
 ```
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
-
-- Built with modern web technologies and Chrome Extension APIs
-- Inspired by the need for quick and easy API mocking during development
-- Thanks to all contributors and users who provide feedback and suggestions
-
 ## 📞 Support
 
 - **Issues**: [GitHub Issues](https://github.com/turbomock/browser-extension/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/turbomock/browser-extension/discussions)
-- **Email**: support@turbomock.com
 
 ---
 

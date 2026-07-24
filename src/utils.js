@@ -1,39 +1,50 @@
 /**
  * TurboMock Utility Functions
  * Shared utilities for request matching, validation, and data handling
+ * Enhanced with better validation and more dynamic placeholders
  */
 
-class TurboMockUtils {
-    /**
-     * Generate unique ID for rules
-     */
+export class TurboMockUtils {
     static generateId(prefix = 'rule') {
         return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     }
 
-    /**
-     * Validate URL pattern
-     */
     static validateUrlPattern(pattern) {
-        if (!pattern || typeof pattern !== 'string') {
-            return { isValid: false, error: 'Pattern must be a non-empty string' };
+        // Enhanced validation with edge cases
+        if (!pattern) {
+            return { isValid: false, error: 'Pattern is required' };
+        }
+
+        if (typeof pattern !== 'string') {
+            return { isValid: false, error: 'Pattern must be a string' };
+        }
+
+        if (pattern.trim().length === 0) {
+            return { isValid: false, error: 'Pattern cannot be empty' };
+        }
+
+        if (pattern.length > 500) {
+            return { isValid: false, error: 'Pattern is too long (max 500 characters)' };
         }
 
         try {
             if (pattern.includes('*')) {
-                // Convert wildcard pattern to regex
+                // Wildcard pattern - convert to regex for validation
                 const regexPattern = pattern
                     .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
                     .replace(/\\\*/g, '.*');
                 new RegExp(regexPattern, 'i');
                 return { isValid: true };
             } else if (pattern.startsWith('/') && pattern.endsWith('/')) {
-                // Validate regex pattern
+                // Regex pattern
                 const regexBody = pattern.slice(1, -1);
+                if (regexBody.length === 0) {
+                    return { isValid: false, error: 'Regex pattern cannot be empty' };
+                }
                 new RegExp(regexBody, 'i');
                 return { isValid: true };
             } else {
-                // Simple string match
+                // Literal string pattern
                 return { isValid: true };
             }
         } catch (error) {
@@ -41,38 +52,20 @@ class TurboMockUtils {
         }
     }
 
-    /**
-     * Match URL against pattern
-     */
+    // Delegates to TurboMockMatcher (src/matcher.js) — see TODO.md §1.3.
+    // Kept here as a thin wrapper for backward compatibility with existing
+    // callers of TurboMockUtils.matchUrl.
     static matchUrl(url, pattern) {
-        if (!url || !pattern) return false;
-
-        try {
-            if (pattern.includes('*')) {
-                const regexPattern = pattern
-                    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                    .replace(/\\\*/g, '.*');
-                const regex = new RegExp('^' + regexPattern + '$', 'i');
-                return regex.test(url);
-            } else if (pattern.startsWith('/') && pattern.endsWith('/')) {
-                const regexBody = pattern.slice(1, -1);
-                const regex = new RegExp(regexBody, 'i');
-                return regex.test(url);
-            } else {
-                return url.toLowerCase().includes(pattern.toLowerCase());
-            }
-        } catch (error) {
-            console.error('Error matching URL pattern:', error);
-            return false;
-        }
+        return window.TurboMockMatcher.matchUrl(url, pattern);
     }
 
-    /**
-     * Validate JSON string
-     */
     static validateJSON(jsonString) {
         if (!jsonString) return { isValid: true, data: null };
-        
+
+        if (typeof jsonString !== 'string') {
+            return { isValid: false, error: 'Input must be a string' };
+        }
+
         try {
             const data = JSON.parse(jsonString);
             return { isValid: true, data };
@@ -81,34 +74,42 @@ class TurboMockUtils {
         }
     }
 
-    /**
-     * Validate HTTP status code
-     */
     static validateStatusCode(code) {
         const numCode = parseInt(code, 10);
-        if (isNaN(numCode) || numCode < 100 || numCode > 599) {
+        
+        if (isNaN(numCode)) {
+            return { isValid: false, error: 'Status code must be a number' };
+        }
+
+        if (numCode < 100 || numCode > 599) {
             return { isValid: false, error: 'Status code must be between 100 and 599' };
         }
+
         return { isValid: true, code: numCode };
     }
 
-    /**
-     * Get status text for HTTP code
-     */
     static getStatusText(code) {
         const statusTexts = {
-            200: 'OK', 201: 'Created', 202: 'Accepted', 204: 'No Content',
-            400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found',
-            405: 'Method Not Allowed', 409: 'Conflict', 422: 'Unprocessable Entity',
+            // 1xx Informational
+            100: 'Continue', 101: 'Switching Protocols', 102: 'Processing',
+            // 2xx Success
+            200: 'OK', 201: 'Created', 202: 'Accepted', 203: 'Non-Authoritative Information',
+            204: 'No Content', 205: 'Reset Content', 206: 'Partial Content',
+            // 3xx Redirection
+            300: 'Multiple Choices', 301: 'Moved Permanently', 302: 'Found',
+            303: 'See Other', 304: 'Not Modified', 307: 'Temporary Redirect', 308: 'Permanent Redirect',
+            // 4xx Client Error
+            400: 'Bad Request', 401: 'Unauthorized', 402: 'Payment Required', 403: 'Forbidden',
+            404: 'Not Found', 405: 'Method Not Allowed', 406: 'Not Acceptable',
+            408: 'Request Timeout', 409: 'Conflict', 410: 'Gone', 422: 'Unprocessable Entity',
+            429: 'Too Many Requests',
+            // 5xx Server Error
             500: 'Internal Server Error', 501: 'Not Implemented', 502: 'Bad Gateway',
-            503: 'Service Unavailable', 504: 'Gateway Timeout'
+            503: 'Service Unavailable', 504: 'Gateway Timeout', 505: 'HTTP Version Not Supported'
         };
-        return statusTexts[code] || '';
+        return statusTexts[code] || 'Unknown Status';
     }
 
-    /**
-     * Escape HTML entities
-     */
     static escapeHtml(text) {
         if (typeof text !== 'string') return '';
         const div = document.createElement('div');
@@ -116,13 +117,11 @@ class TurboMockUtils {
         return div.innerHTML;
     }
 
-    /**
-     * Deep clone object
-     */
     static deepClone(obj) {
         if (obj === null || typeof obj !== 'object') return obj;
         if (obj instanceof Date) return new Date(obj.getTime());
-        if (obj instanceof Array) return obj.map(TurboMockUtils.deepClone);
+        if (obj instanceof Array) return obj.map(item => TurboMockUtils.deepClone(item));
+        
         if (typeof obj === 'object') {
             const cloned = {};
             for (const key in obj) {
@@ -135,9 +134,6 @@ class TurboMockUtils {
         return obj;
     }
 
-    /**
-     * Debounce function execution
-     */
     static debounce(func, wait) {
         let timeout;
         return function executedFunction(...args) {
@@ -150,9 +146,6 @@ class TurboMockUtils {
         };
     }
 
-    /**
-     * Format file size
-     */
     static formatFileSize(bytes) {
         if (bytes === 0) return '0 Bytes';
         const k = 1024;
@@ -161,40 +154,39 @@ class TurboMockUtils {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
-    /**
-     * Format timestamp for display
-     */
     static formatTimestamp(timestamp) {
         if (!timestamp) return 'Never';
-        const date = new Date(timestamp);
-        const now = new Date();
-        const diff = now - date;
         
-        if (diff < 60000) return 'Just now';
-        if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-        if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-        return date.toLocaleDateString();
+        try {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = now - date;
+
+            if (diff < 0) return 'Future';
+            if (diff < 60000) return 'Just now';
+            if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+            if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+            if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
+            
+            return date.toLocaleDateString();
+        } catch (error) {
+            return 'Invalid date';
+        }
     }
 
-    /**
-     * Create data URL for response body
-     */
     static createDataUrl(body, contentType = 'application/json') {
         const bodyString = typeof body === 'string' ? body : JSON.stringify(body);
         return `data:${contentType};charset=utf-8,${encodeURIComponent(bodyString)}`;
     }
 
-    /**
-     * Parse headers from various formats
-     */
     static parseHeaders(headers) {
         if (!headers) return {};
-        
+
         if (typeof headers === 'string') {
             try {
                 return JSON.parse(headers);
             } catch {
-                // Parse header string format
+                // Parse as header string
                 const parsed = {};
                 headers.split('\n').forEach(line => {
                     const [key, ...values] = line.split(':');
@@ -205,66 +197,67 @@ class TurboMockUtils {
                 return parsed;
             }
         }
-        
+
         if (Array.isArray(headers)) {
             const parsed = {};
             headers.forEach(header => {
-                if (header.name && header.value) {
+                if (header.name && header.value !== undefined) {
                     parsed[header.name] = header.value;
                 }
             });
             return parsed;
         }
-        
+
         return typeof headers === 'object' ? headers : {};
     }
 
-    /**
-     * Export rules to JSON file
-     */
     static exportRules(rules, filename = 'turbomock-rules.json') {
-        const dataStr = JSON.stringify({
-            version: '1.0.0',
-            exported: new Date().toISOString(),
-            rules: rules
-        }, null, 2);
-        
-        const dataBlob = new Blob([dataStr], { type: 'application/json' });
-        const url = URL.createObjectURL(dataBlob);
-        
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        link.style.display = 'none';
-        
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-        URL.revokeObjectURL(url);
+        try {
+            const dataStr = JSON.stringify({
+                version: '1.0.0',
+                exported: new Date().toISOString(),
+                rulesCount: rules.length,
+                rules: rules
+            }, null, 2);
+
+            const dataBlob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(dataBlob);
+
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            link.style.display = 'none';
+
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            // Clean up
+            setTimeout(() => URL.revokeObjectURL(url), 100);
+        } catch (error) {
+            console.error('Failed to export rules:', error);
+            throw new Error(`Export failed: ${error.message}`);
+        }
     }
 
-    /**
-     * Import rules from file
-     */
     static async importRulesFromFile(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
-            
+
             reader.onload = (e) => {
                 try {
                     const data = JSON.parse(e.target.result);
-                    
+
                     if (!data.rules || !Array.isArray(data.rules)) {
                         reject(new Error('Invalid file format: missing rules array'));
                         return;
                     }
-                    
+
                     // Validate each rule
                     const validRules = data.rules.filter(rule => {
                         return rule.id && rule.name && rule.match && rule.response;
                     });
-                    
+
                     resolve({
                         version: data.version || '1.0.0',
                         imported: new Date().toISOString(),
@@ -275,15 +268,12 @@ class TurboMockUtils {
                     reject(new Error(`Failed to parse JSON: ${error.message}`));
                 }
             };
-            
+
             reader.onerror = () => reject(new Error('Failed to read file'));
             reader.readAsText(file);
         });
     }
 
-    /**
-     * Create rule template
-     */
     static createRuleTemplate(type = 'success') {
         const baseRule = {
             id: this.generateId(),
@@ -339,7 +329,7 @@ class TurboMockUtils {
                 response: {
                     statusCode: 401,
                     statusText: 'Unauthorized',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer' },
                     body: { error: 'Authentication required', code: 'UNAUTHORIZED' },
                     delay: 0
                 }
@@ -359,11 +349,74 @@ class TurboMockUtils {
 
         return templates[type] || templates.success;
     }
+
+    /**
+     * Process dynamic response with enhanced placeholders.
+     * Delegates to TurboMockPlaceholders (src/placeholders.js) — see TODO.md §1.3.
+     * Kept here as a thin wrapper for backward compatibility with existing
+     * callers of TurboMockUtils.processDynamicResponse.
+     */
+    static processDynamicResponse(body, requestDetails = {}) {
+        return window.TurboMockPlaceholders.processDynamicResponse(body, requestDetails);
+    }
+
+    /**
+     * Sanitize user input to prevent XSS
+     */
+    static sanitizeInput(input, maxLength = 1000) {
+        if (!input) return '';
+        
+        let sanitized = String(input).trim();
+        
+        // Truncate if too long
+        if (sanitized.length > maxLength) {
+            sanitized = sanitized.substring(0, maxLength);
+        }
+        
+        // Remove any HTML tags
+        sanitized = sanitized.replace(/<[^>]*>/g, '');
+        
+        // Remove any script-like content
+        sanitized = sanitized.replace(/javascript:/gi, '');
+        sanitized = sanitized.replace(/on\w+\s*=/gi, '');
+        
+        return sanitized;
+    }
+
+    /**
+     * Validate rule object structure
+     */
+    static validateRuleStructure(rule) {
+        const errors = [];
+
+        if (!rule) {
+            errors.push('Rule is required');
+            return { isValid: false, errors };
+        }
+
+        if (!rule.id) errors.push('Rule ID is required');
+        if (!rule.name || rule.name.trim().length === 0) errors.push('Rule name is required');
+        if (!rule.match) errors.push('Rule match configuration is required');
+        if (!rule.response) errors.push('Rule response configuration is required');
+
+        if (rule.match) {
+            if (!rule.match.url) errors.push('URL pattern is required');
+            if (!rule.match.method) errors.push('HTTP method is required');
+        }
+
+        if (rule.response) {
+            if (!rule.response.statusCode) errors.push('Status code is required');
+            if (!rule.response.statusText) errors.push('Status text is required');
+        }
+
+        return {
+            isValid: errors.length === 0,
+            errors
+        };
+    }
 }
 
-// Export for use in other modules
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = TurboMockUtils;
-} else if (typeof window !== 'undefined') {
+// Also expose as global for non-module contexts
+if (typeof window !== 'undefined') {
     window.TurboMockUtils = TurboMockUtils;
 }

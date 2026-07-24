@@ -1,385 +1,236 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TurboMock Settings</title>
     <link rel="stylesheet" href="options.css">
 </head>
-<body class="theme-auto">
-    <div class="container">
-        <!-- Header -->
-        <div class="header">
-            <div class="header-content">
-                <div class="logo">
-                    <span class="logo-icon">🎭</span>
-                    <h1>TurboMock Settings</h1>
-                </div>
-                <div class="header-actions">
-                    <button class="btn-secondary" id="exportBtn">📤 Export</button>
-                    <button class="btn-secondary" id="importBtn">📥 Import</button>
-                    <button class="btn-primary" id="saveBtn">💾 Save Settings</button>
-                </div>
+
+<body class="theme-dark">
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="logo">TM</div>
+                <h1>TurboMock</h1>
             </div>
-        </div>
 
-        <!-- Message Container -->
-        <div class="message-container" id="messageContainer"></div>
+            <nav class="nav-menu">
+                <button class="nav-item active" data-tab="general">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+                    </span> General
+                </button>
+                <button class="nav-item" data-tab="rules">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+                    </span> Rules
+                </button>
+                <button class="nav-item" data-tab="advanced">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>
+                    </span> Advanced
+                </button>
+            </nav>
 
-        <!-- Navigation Tabs -->
-        <div class="nav-tabs">
-            <button class="tab-btn active" data-tab="general">General</button>
-            <button class="tab-btn" data-tab="rules">Rules Management</button>
-            <button class="tab-btn" data-tab="shortcuts">Keyboard Shortcuts</button>
-            <button class="tab-btn" data-tab="data">Data & Privacy</button>
-            <button class="tab-btn" data-tab="advanced">Advanced</button>
-        </div>
+            <div class="sidebar-footer">
+                <div class="version">v1.1.0</div>
+            </div>
+        </aside>
 
-        <!-- Main Content -->
-        <div class="content">
-            <!-- General Settings Tab -->
-            <div class="tab-content active" data-tab="general">
-                <div class="settings-section">
-                    <h2>🎨 Appearance</h2>
-                    <p class="section-description">Customize the look and feel of TurboMock</p>
-                    
-                    <div class="setting-group">
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <label>Theme</label>
-                                <p class="setting-description">Choose your preferred color scheme</p>
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <header class="top-bar">
+                <h2 id="pageTitle">General Settings</h2>
+                <div class="header-actions">
+                    <button class="btn-ghost" id="exportBtn">Export</button>
+                    <button class="btn-ghost" id="importBtn">Import</button>
+                    <button class="btn-primary" id="saveBtn">Save Changes</button>
+                </div>
+            </header>
+
+            <div class="content-scroll">
+                <div class="message-container" id="messageContainer"></div>
+                <!-- General Settings Tab -->
+                <div class="tab-content active" data-tab="general">
+                    <div class="settings-section">
+                        <h2>Appearance</h2>
+                        <p class="section-description">Customize the look and feel of TurboMock</p>
+
+                        <div class="setting-group">
+                            <div class="setting-item">
+                                <div class="setting-info">
+                                    <label>Theme</label>
+                                    <p class="setting-description">Choose your preferred color scheme</p>
+                                </div>
+                                <div class="setting-control">
+                                    <div class="theme-selector">
+                                        <div class="theme-option">
+                                            <input type="radio" name="theme" value="light" id="theme-light">
+                                            <label for="theme-light">
+                                                <div class="theme-preview light"></div>
+                                                <span>Light</span>
+                                            </label>
+                                        </div>
+                                        <div class="theme-option">
+                                            <input type="radio" name="theme" value="dark" id="theme-dark">
+                                            <label for="theme-dark">
+                                                <div class="theme-preview dark"></div>
+                                                <span>Dark</span>
+                                            </label>
+                                        </div>
+                                        <div class="theme-option">
+                                            <input type="radio" name="theme" value="auto" id="theme-auto" checked>
+                                            <label for="theme-auto">
+                                                <div class="theme-preview auto"></div>
+                                                <span>Auto</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                            <div class="setting-control">
-                                <div class="theme-selector">
-                                    <div class="theme-option">
-                                        <input type="radio" name="theme" value="light" id="theme-light">
-                                        <label for="theme-light">
-                                            <div class="theme-preview light"></div>
-                                            <span>Light</span>
-                                        </label>
-                                    </div>
-                                    <div class="theme-option">
-                                        <input type="radio" name="theme" value="dark" id="theme-dark">
-                                        <label for="theme-dark">
-                                            <div class="theme-preview dark"></div>
-                                            <span>Dark</span>
-                                        </label>
-                                    </div>
-                                    <div class="theme-option">
-                                        <input type="radio" name="theme" value="auto" id="theme-auto" checked>
-                                        <label for="theme-auto">
-                                            <div class="theme-preview auto"></div>
-                                            <span>Auto</span>
-                                        </label>
-                                    </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2>Notifications</h2>
+                        <p class="section-description">Control when and how TurboMock notifies you</p>
+
+                        <div class="setting-group">
+                            <div class="setting-item">
+                                <div class="setting-info">
+                                    <label>Show Notifications</label>
+                                    <p class="setting-description">Display notifications for rule matches and updates
+                                    </p>
+                                </div>
+                                <div class="setting-control">
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="notifications" checked>
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="setting-item">
+                                <div class="setting-info">
+                                    <label>Auto Backup</label>
+                                    <p class="setting-description">Automatically backup your rules to local storage</p>
+                                </div>
+                                <div class="setting-control">
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="autoBackup" checked>
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="setting-item">
+                                <div class="setting-info">
+                                    <label>Debug Mode</label>
+                                    <p class="setting-description">Enable detailed console logging for troubleshooting
+                                    </p>
+                                </div>
+                                <div class="setting-control">
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="debugMode">
+                                        <span class="slider"></span>
+                                    </label>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="settings-section">
-                    <h2>🔔 Notifications</h2>
-                    <p class="section-description">Control when and how TurboMock notifies you</p>
-                    
-                    <div class="setting-group">
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <label>Show Notifications</label>
-                                <p class="setting-description">Display notifications for rule matches and updates</p>
+                <!-- Rules Management Tab -->
+                <div class="tab-content" data-tab="rules">
+                    <div class="settings-section">
+                        <h2>Rules Management</h2>
+                        <p class="section-description">Manage your mock rules and templates</p>
+
+                        <div class="import-export-grid">
+                            <div class="action-card">
+                                <div class="card-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                                </div>
+                                <h3>Import Rules</h3>
+                                <p>Import mock rules from a JSON file</p>
+                                <div class="card-actions">
+                                    <button class="btn-primary" id="importRulesBtn">Choose File</button>
+                                </div>
+                                <div class="import-options">
+                                    <label>
+                                        <input type="checkbox" id="mergeImport" checked>
+                                        Merge with existing rules
+                                    </label>
+                                </div>
                             </div>
-                            <div class="setting-control">
-                                <label class="toggle-switch">
-                                    <input type="checkbox" id="notifications" checked>
-                                    <span class="slider"></span>
-                                </label>
+
+                            <div class="action-card">
+                                <div class="card-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 9l5-5 5 5"/><path d="M12 4v12"/></svg>
+                                </div>
+                                <h3>Export Rules</h3>
+                                <p>Export all your mock rules to a JSON file</p>
+                                <div class="card-actions">
+                                    <button class="btn-primary" id="exportRulesBtn">Download JSON</button>
+                                </div>
+                                <div class="card-stats">
+                                    <span id="rulesCount">0</span> rules ready for export
+                                </div>
                             </div>
                         </div>
-                        
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <label>Auto Backup</label>
-                                <p class="setting-description">Automatically backup your rules to local storage</p>
+                    </div>
+                </div>
+
+                <!-- Advanced Settings Tab -->
+                <div class="tab-content" data-tab="advanced">
+                    <div class="settings-section">
+                        <h2>Advanced Configuration</h2>
+                        <p class="section-description">Advanced options for power users</p>
+
+                        <div class="setting-group">
+                            <div class="setting-item">
+                                <div class="setting-info">
+                                    <label>Default Headers</label>
+                                    <p class="setting-description">Default headers to add to all mock responses (JSON
+                                        format)</p>
+                                </div>
+                                <div class="setting-control">
+                                    <textarea id="defaultHeaders" placeholder='{"X-Mock-Source": "TurboMock"}'
+                                        rows="3"></textarea>
+                                </div>
                             </div>
-                            <div class="setting-control">
-                                <label class="toggle-switch">
-                                    <input type="checkbox" id="autoBackup" checked>
-                                    <span class="slider"></span>
-                                </label>
+
+                            <div class="setting-item">
+                                <div class="setting-info">
+                                    <label>Request Timeout</label>
+                                    <p class="setting-description">Timeout for mock responses (milliseconds)</p>
+                                </div>
+                                <div class="setting-control">
+                                    <input type="number" id="requestTimeout" value="30000" min="100" max="60000">
+                                </div>
                             </div>
                         </div>
-                        
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <label>Debug Mode</label>
-                                <p class="setting-description">Enable detailed console logging for troubleshooting</p>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2>Reset Options</h2>
+                        <div class="reset-options">
+                            <div class="reset-card">
+                                <h4>Reset Settings</h4>
+                                <button class="btn-secondary" onclick="resetSettingsOnly()">Reset</button>
                             </div>
-                            <div class="setting-control">
-                                <label class="toggle-switch">
-                                    <input type="checkbox" id="debugMode">
-                                    <span class="slider"></span>
-                                </label>
+
+                            <div class="reset-card">
+                                <h4>Factory Reset</h4>
+                                <button class="btn-danger" onclick="factoryReset()">Reset All</button>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-
-            <!-- Rules Management Tab -->
-            <div class="tab-content" data-tab="rules">
-                <div class="settings-section">
-                    <h2>📋 Rules Management</h2>
-                    <p class="section-description">Manage your mock rules and templates</p>
-                    
-                    <div class="import-export-grid">
-                        <div class="action-card">
-                            <div class="card-icon">📥</div>
-                            <h3>Import Rules</h3>
-                            <p>Import mock rules from a JSON file</p>
-                            <div class="card-actions">
-                                <button class="btn-primary" id="importRulesBtn">Choose File</button>
-                            </div>
-                            <div class="import-options">
-                                <label>
-                                    <input type="checkbox" id="mergeImport" checked>
-                                    Merge with existing rules
-                                </label>
-                            </div>
-                        </div>
-
-                        <div class="action-card">
-                            <div class="card-icon">📤</div>
-                            <h3>Export Rules</h3>
-                            <p>Export all your mock rules to a JSON file</p>
-                            <div class="card-actions">
-                                <button class="btn-primary" id="exportRulesBtn">Download JSON</button>
-                            </div>
-                            <div class="card-stats">
-                                <span id="rulesCount">0</span> rules ready for export
-                            </div>
-                        </div>
-
-                        <div class="action-card">
-                            <div class="card-icon">🔄</div>
-                            <h3>Backup & Restore</h3>
-                            <p>Create or restore from local backups</p>
-                            <div class="card-actions">
-                                <button class="btn-secondary" id="createBackupBtn">Create Backup</button>
-                                <button class="btn-secondary" id="restoreBackupBtn">Restore Backup</button>
-                            </div>
-                            <div class="backup-info">
-                                Last backup: <span id="lastBackup">Never</span>
-                            </div>
-                        </div>
-
-                        <div class="action-card">
-                            <div class="card-icon">🗂️</div>
-                            <h3>Templates</h3>
-                            <p>Manage and create rule templates</p>
-                            <div class="card-actions">
-                                <button class="btn-primary" id="manageTemplatesBtn">Manage Templates</button>
-                            </div>
-                            <div class="template-list">
-                                <select id="templateSelect">
-                                    <option value="">Select a template...</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Keyboard Shortcuts Tab -->
-            <div class="tab-content" data-tab="shortcuts">
-                <div class="settings-section">
-                    <h2>⌨️ Keyboard Shortcuts</h2>
-                    <p class="section-description">Customize keyboard shortcuts for quick access</p>
-                    
-                    <div class="setting-group">
-                        <div class="shortcut-item">
-                            <div class="shortcut-info">
-                                <label>Toggle Extension</label>
-                                <p>Enable or disable TurboMock</p>
-                            </div>
-                            <div class="shortcut-key">
-                                <div class="key-display" id="toggleShortcut">Ctrl+Shift+M</div>
-                                <button class="btn-edit" onclick="editShortcut('toggle')">Edit</button>
-                            </div>
-                        </div>
-                        
-                        <div class="shortcut-item">
-                            <div class="shortcut-info">
-                                <label>New Rule</label>
-                                <p>Create a new mock rule</p>
-                            </div>
-                            <div class="shortcut-key">
-                                <div class="key-display" id="newRuleShortcut">Ctrl+Shift+N</div>
-                                <button class="btn-edit" onclick="editShortcut('newRule')">Edit</button>
-                            </div>
-                        </div>
-                        
-                        <div class="shortcut-item">
-                            <div class="shortcut-info">
-                                <label>Open Popup</label>
-                                <p>Open the extension popup</p>
-                            </div>
-                            <div class="shortcut-key">
-                                <div class="key-display">Alt+Shift+T</div>
-                                <span class="text-muted">(Browser default)</span>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="shortcut-help">
-                        <h3>Available Shortcuts in Popup</h3>
-                        <ul>
-                            <li><kbd>Ctrl+N</kbd> - Create new rule</li>
-                            <li><kbd>Ctrl+F</kbd> - Focus search box</li>
-                            <li><kbd>Ctrl+T</kbd> - Test all rules</li>
-                            <li><kbd>Ctrl+R</kbd> - Refresh data</li>
-                            <li><kbd>Escape</kbd> - Close popup</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Data & Privacy Tab -->
-            <div class="tab-content" data-tab="data">
-                <div class="settings-section">
-                    <h2>📊 Data Overview</h2>
-                    <p class="section-description">Overview of your stored data</p>
-                    
-                    <div class="data-overview">
-                        <div class="data-card">
-                            <h4>Total Rules</h4>
-                            <div class="data-value" id="totalRulesCount">0</div>
-                            <div class="data-count">mock rules</div>
-                        </div>
-                        
-                        <div class="data-card">
-                            <h4>Enabled Rules</h4>
-                            <div class="data-value" id="enabledRulesCount">0</div>
-                            <div class="data-count">active rules</div>
-                        </div>
-                        
-                        <div class="data-card">
-                            <h4>Rules Data</h4>
-                            <div class="data-value" id="rulesDataSize">0</div>
-                            <div class="data-count">KB stored</div>
-                        </div>
-                        
-                        <div class="data-card">
-                            <h4>Metrics Data</h4>
-                            <div class="data-value" id="metricsDataSize">0</div>
-                            <div class="data-count">KB stored</div>
-                        </div>
-                        
-                        <div class="data-card">
-                            <h4>Request Logs</h4>
-                            <div class="data-value" id="logsCount">0</div>
-                            <div class="data-count">log entries</div>
-                        </div>
-                    </div>
-                    
-                    <div class="data-actions">
-                        <button class="btn-secondary" id="viewDataBtn">🔍 View All Data</button>
-                        <button class="btn-secondary" id="exportDataBtn">📤 Export Data</button>
-                        <button class="btn-danger" id="clearDataBtn">🗑️ Clear All Data</button>
-                    </div>
-                </div>
-                
-                <div class="settings-section">
-                    <h2>🔒 Privacy Settings</h2>
-                    <p class="section-description">Control how TurboMock handles your data</p>
-                    
-                    <div class="privacy-summary">
-                        <h4>Data Collection</h4>
-                        <ul>
-                            <li>All data is stored locally on your device</li>
-                            <li>No personal information is transmitted to external servers</li>
-                            <li>Request URLs may be logged locally for debugging</li>
-                            <li>Usage statistics are collected anonymously</li>
-                        </ul>
-                        <a href="#" class="privacy-link" onclick="showPrivacyPolicy()">View Full Privacy Policy</a>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Advanced Settings Tab -->
-            <div class="tab-content" data-tab="advanced">
-                <div class="settings-section">
-                    <h2>⚙️ Advanced Configuration</h2>
-                    <p class="section-description">Advanced options for power users</p>
-                    
-                    <div class="setting-group">
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <label>Default Headers</label>
-                                <p class="setting-description">Default headers to add to all mock responses (JSON format)</p>
-                            </div>
-                            <div class="setting-control">
-                                <textarea id="defaultHeaders" placeholder='{"X-Mock-Source": "TurboMock"}' rows="3"></textarea>
-                            </div>
-                        </div>
-                        
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <label>Max Response Size</label>
-                                <p class="setting-description">Maximum size for mock responses (KB)</p>
-                            </div>
-                            <div class="setting-control">
-                                <input type="number" id="maxResponseSize" value="1024" min="1" max="10240">
-                            </div>
-                        </div>
-                        
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <label>Request Timeout</label>
-                                <p class="setting-description">Timeout for mock responses (milliseconds)</p>
-                            </div>
-                            <div class="setting-control">
-                                <input type="number" id="requestTimeout" value="30000" min="100" max="60000">
-                            </div>
-                        </div>
-                        
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <label>Cache Size</label>
-                                <p class="setting-description">Maximum number of rules to keep in memory</p>
-                            </div>
-                            <div class="setting-control">
-                                <input type="number" id="cacheSize" value="100" min="10" max="1000">
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="settings-section">
-                    <h2>🔄 Reset Options</h2>
-                    <p class="section-description">Reset various parts of TurboMock to defaults</p>
-                    
-                    <div class="reset-options">
-                        <div class="reset-card">
-                            <h4>Reset Settings</h4>
-                            <p>Reset all settings to default values (rules will be preserved)</p>
-                            <button class="btn-secondary" onclick="resetSettingsOnly()">Reset Settings Only</button>
-                        </div>
-                        
-                        <div class="reset-card">
-                            <h4>Clear Rules</h4>
-                            <p>Delete all mock rules (settings will be preserved)</p>
-                            <button class="btn-danger" onclick="clearRules()">Clear All Rules</button>
-                        </div>
-                        
-                        <div class="reset-card">
-                            <h4>Factory Reset</h4>
-                            <p>Reset everything to default state (cannot be undone)</p>
-                            <button class="btn-danger" onclick="factoryReset()">Factory Reset</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
     </div>
 
     <!-- Data Viewer Modal -->
@@ -422,6 +273,194 @@
         </div>
     </div>
 
+    <!-- Rule Editor Modal -->
+    <div class="modal" id="ruleEditorModal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h3 id="ruleEditorTitle">Edit Rule</h3>
+                <button class="modal-close" onclick="closeModal('ruleEditorModal')">×</button>
+            </div>
+            <div class="modal-body">
+                <form id="ruleForm">
+                    <input type="hidden" id="ruleId">
+                    <input type="hidden" id="ruleDnrId">
+
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 1;">
+                            <label for="ruleType">Rule Type</label>
+                            <select id="ruleType">
+                                <option value="mock">Mock Response</option>
+                                <option value="block">Block</option>
+                                <option value="delay">Delay</option>
+                                <option value="redirect">Redirect</option>
+                                <option value="headers">Modify Headers</option>
+                                <option value="queryparams">Query Params</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label for="ruleTemplateSelect">Quick Template</label>
+                            <select id="ruleTemplateSelect" onchange="applyRuleTemplate(this.value); this.value='';">
+                                <option value="">Choose a template…</option>
+                                <option value="graphqlMock">GraphQL Mock</option>
+                                <option value="patchResponse">Patch Response</option>
+                                <option value="blockRequest">Block Request</option>
+                                <option value="redirectLocalhost">Redirect to localhost</option>
+                                <option value="corsUnblock">CORS Unblock</option>
+                                <option value="customUserAgent">Custom User-Agent</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 2;">
+                            <label for="ruleName">Rule Name</label>
+                            <input type="text" id="ruleName" placeholder="e.g. User Profile API" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="ruleEnabled">Status</label>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="ruleEnabled" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 1;">
+                            <label for="ruleMethod">Method</label>
+                            <select id="ruleMethod">
+                                <option value="GET">GET</option>
+                                <option value="POST">POST</option>
+                                <option value="PUT">PUT</option>
+                                <option value="DELETE">DELETE</option>
+                                <option value="PATCH">PATCH</option>
+                                <option value="OPTIONS">OPTIONS</option>
+                                <option value="*">Any (*)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 3;">
+                            <label for="ruleUrl">URL Pattern</label>
+                            <input type="text" id="ruleUrl" placeholder="e.g. */api/users/*" required>
+                            <span class="help-text">Use * for wildcards, or wrap in /.../  for regex</span>
+                        </div>
+                    </div>
+
+                    <!-- mock-only fields -->
+                    <div class="form-row" data-rule-types="mock">
+                        <div class="form-group" id="ruleStatusGroup">
+                            <label for="ruleStatus">Status Code</label>
+                            <input type="number" id="ruleStatus" value="200" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="ruleDelay">Delay (ms)</label>
+                            <input type="number" id="ruleDelay" value="0" min="0">
+                        </div>
+                    </div>
+
+                    <div class="form-row" data-rule-types="mock">
+                        <div class="form-group" style="flex: 1;">
+                            <label for="responseMode">Response Mode</label>
+                            <select id="responseMode">
+                                <option value="static">Static</option>
+                                <option value="patch">Patch (merge into real response)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 2;">
+                            <label for="graphqlOperation">GraphQL Operation Name (optional)</label>
+                            <input type="text" id="graphqlOperation" placeholder="e.g. getUsers">
+                        </div>
+                    </div>
+
+                    <div class="form-group" data-rule-types="mock">
+                        <label for="matchHeaders">Match Request Headers (JSON, optional)</label>
+                        <textarea id="matchHeaders" rows="2" class="code-font"
+                            placeholder='{"x-api-key": "abc"}'></textarea>
+                        <span class="help-text">All listed headers must match (case-insensitive name, substring
+                            value). Leave empty to match any.</span>
+                    </div>
+
+                    <div class="form-group" data-rule-types="mock">
+                        <label for="ruleHeaders">Response Headers (JSON)</label>
+                        <textarea id="ruleHeaders" rows="3"
+                            class="code-font">{"Content-Type": "application/json"}</textarea>
+                    </div>
+
+                    <div class="form-group" id="staticBodyGroup" data-rule-types="mock">
+                        <label for="ruleBody">Response Body (JSON or Text)</label>
+                        <textarea id="ruleBody" rows="8" class="code-font"
+                            placeholder='{"id": 1, "name": "Test User"}'></textarea>
+                        <div class="input-actions">
+                            <button type="button" class="btn-small" onclick="formatJSON('ruleBody')">Format
+                                JSON</button>
+                            <button type="button" class="btn-small" onclick="insertTemplate('{{guid}}')">Insert
+                                GUID</button>
+                            <button type="button" class="btn-small" onclick="insertTemplate('{{timestamp}}')">Insert
+                                Timestamp</button>
+                        </div>
+                    </div>
+
+                    <div class="form-group" id="patchBodyGroup" data-rule-types="mock" style="display: none;">
+                        <label for="rulePatch">Response Patch (JSON Merge Patch)</label>
+                        <textarea id="rulePatch" rows="8" class="code-font" placeholder='{"data": null}'></textarea>
+                        <span class="help-text">Merged into the real response body (RFC 7386). Use null to delete a
+                            key. Status code is left unchanged.</span>
+                    </div>
+
+                    <!-- delay-only fields -->
+                    <div class="form-group" data-rule-types="delay">
+                        <label for="delayMs">Delay (ms)</label>
+                        <input type="number" id="delayMs" value="1000" min="1" max="30000">
+                        <span class="help-text">Request passes through to the network after this delay (1-30000
+                            ms).</span>
+                    </div>
+
+                    <!-- redirect-only fields -->
+                    <div class="form-group" data-rule-types="redirect">
+                        <label for="redirectDestination">Redirect Destination</label>
+                        <input type="text" id="redirectDestination" placeholder="https://example.com/new-path">
+                        <span class="help-text">If URL Pattern is a /regex/, use $1-$9 to reference capture
+                            groups.</span>
+                    </div>
+
+                    <!-- headers-only fields -->
+                    <div data-rule-types="headers">
+                        <div class="form-group">
+                            <label for="headersModRequest">Request Headers (JSON array of {op, name, value})</label>
+                            <textarea id="headersModRequest" rows="3" class="code-font"
+                                placeholder='[{"op": "set", "name": "User-Agent", "value": "MyAgent/1.0"}]'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="headersModResponse">Response Headers (JSON array of {op, name, value})</label>
+                            <textarea id="headersModResponse" rows="3" class="code-font"
+                                placeholder='[{"op": "set", "name": "Access-Control-Allow-Origin", "value": "*"}]'></textarea>
+                        </div>
+                        <span class="help-text">Handled by declarativeNetRequest — cannot be combined with header or
+                            GraphQL match conditions.</span>
+                    </div>
+
+                    <!-- queryparams-only fields -->
+                    <div data-rule-types="queryparams">
+                        <div class="form-group">
+                            <label for="queryParamsAdd">Add Query Params (JSON array of {key, value})</label>
+                            <textarea id="queryParamsAdd" rows="2" class="code-font"
+                                placeholder='[{"key": "debug", "value": "1"}]'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="queryParamsRemove">Remove Query Params (comma-separated keys)</label>
+                            <input type="text" id="queryParamsRemove" placeholder="token, session_id">
+                        </div>
+                        <span class="help-text">Handled by declarativeNetRequest — cannot be combined with header or
+                            GraphQL match conditions.</span>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('ruleEditorModal')">Cancel</button>
+                <button class="btn-primary" onclick="saveRule()">Save Rule</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Shortcut Editor Modal -->
     <div class="modal" id="shortcutModal">
         <div class="modal-content">
@@ -447,4 +486,5 @@
 
     <script src="options.js"></script>
 </body>
+
 </html>
