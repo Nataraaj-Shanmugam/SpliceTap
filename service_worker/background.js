@@ -421,19 +421,38 @@ class TurboMockBackground {
         });
 
         chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-            if (info.menuItemId === "turbomock-add-rule") {
+            if (info.menuItemId !== "turbomock-add-rule") return;
+
+            // Prefer the in-page overlay so the user never leaves the page.
+            if (tab && tab.id && tab.url && /^https?:/i.test(tab.url)) {
+                let prefillUrl;
                 try {
-                    if (tab && tab.url && /^https?:/i.test(tab.url)) {
-                        const host = new URL(tab.url).host;
-                        await chrome.storage.local.set({
-                            turboMockPrefill: { url: `*${host}*`, ts: Date.now() }
-                        });
-                    }
+                    prefillUrl = `*${new URL(tab.url).host}*`;
+                } catch (e) {
+                    prefillUrl = undefined;
+                }
+
+                try {
+                    const response = await chrome.tabs.sendMessage(tab.id, {
+                        type: 'openRuleOverlay',
+                        mode: 'new',
+                        prefillUrl
+                    });
+                    if (response && response.success) return;
+                } catch (error) {
+                    // Content script unavailable here — fall through to the tab.
+                }
+
+                try {
+                    await chrome.storage.local.set({
+                        turboMockPrefill: { url: prefillUrl, ts: Date.now() }
+                    });
                 } catch (error) {
                     console.error('Failed to store rule prefill data:', error);
                 }
-                chrome.runtime.openOptionsPage();
             }
+
+            chrome.runtime.openOptionsPage();
         });
     }
 

@@ -810,9 +810,32 @@ class OptionsManager {
      * FIXED: Better listener management with cleanup tracking
      */
     setupEventListeners() {
-        // Tab navigation
+        // Tab navigation. Use closest() — the nav buttons contain an SVG icon,
+        // so e.target is often the <svg>/<span>, whose dataset.tab is undefined.
         this.addListeners('.nav-item', 'click', (e) => {
-            this.switchTab(e.target.dataset.tab);
+            const item = e.target.closest('.nav-item');
+            if (item && item.dataset.tab) {
+                this.switchTab(item.dataset.tab);
+            }
+        });
+
+        // Delegated action handler. MV3's extension CSP forbids inline
+        // onclick/onchange attributes, so every control declares its intent via
+        // data-action and is dispatched here instead.
+        this.addDocumentListener('click', (e) => {
+            const el = e.target.closest('[data-action]');
+            if (el) {
+                this.handleAction(el.dataset.action, el);
+            }
+        });
+
+        // Rule editor "Quick Template" dropdown (was an inline onchange).
+        this.addListener('ruleTemplateSelect', 'change', (e) => {
+            const name = e.target.value;
+            if (name) {
+                this.applyTemplate(name);
+                e.target.value = '';
+            }
         });
 
         // Header actions
@@ -870,14 +893,6 @@ class OptionsManager {
             }
         });
 
-        // Modal close events
-        this.addListeners('.modal-close', 'click', (e) => {
-            const modal = e.target.closest('.modal');
-            if (modal) {
-                modal.classList.remove('show');
-            }
-        });
-
         // Click outside modal to close
         this.addDocumentListener('click', (e) => {
             if (e.target.classList.contains('modal')) {
@@ -887,6 +902,44 @@ class OptionsManager {
 
         // Confirmation modal
         this.addListener('confirmBtn', 'click', () => this.executeConfirmAction());
+    }
+
+    /**
+     * Dispatch a [data-action] control to its handler. Replaces the inline
+     * onclick attributes that MV3's CSP silently blocks.
+     */
+    handleAction(action, el) {
+        switch (action) {
+            case 'close-modal':
+                this.closeModal(el.dataset.modal);
+                break;
+            case 'close-confirm':
+                this.closeConfirmModal();
+                break;
+            case 'save-rule':
+                this.saveRuleFromEditor();
+                break;
+            case 'reset-settings':
+                this.resetSettingsOnly();
+                break;
+            case 'factory-reset':
+                this.factoryReset();
+                break;
+            case 'open-data-viewer':
+                this.openDataViewer();
+                break;
+            case 'switch-data-tab':
+                this.switchDataTab(el.dataset.tabName);
+                break;
+            case 'format-json':
+                this.formatJSON(el.dataset.target);
+                break;
+            case 'insert-template':
+                this.insertTemplate(el.dataset.template);
+                break;
+            default:
+                console.warn('Unknown data-action:', action);
+        }
     }
 
     /**
@@ -986,13 +1039,15 @@ class OptionsManager {
 
     applyTheme() {
         const theme = this.settings.theme || 'auto';
-        
-        if (theme === 'auto') {
-            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            document.body.className = prefersDark ? 'theme-dark' : 'theme-light';
-        } else {
-            document.body.className = `theme-${theme}`;
-        }
+
+        const resolved = theme === 'auto'
+            ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+            : theme;
+
+        // Toggle only the theme classes — assigning document.body.className
+        // wholesale would wipe any other class on <body>.
+        document.body.classList.remove('theme-dark', 'theme-light');
+        document.body.classList.add(`theme-${resolved}`);
     }
 
     switchTab(tabName) {
@@ -1262,6 +1317,106 @@ class OptionsManager {
         }
     }
 
+    resetSettingsOnly() {
+        this.showConfirmation(
+            'Reset Settings',
+            'Reset all settings to default values? Your rules will be preserved.',
+            async () => {
+                this.settings = this.getDefaultSettings();
+                await this.saveSettings();
+                this.updateUI();
+                this.showMessage('Settings reset successfully!', 'success');
+            }
+        );
+    }
+
+    factoryReset() {
+        this.showConfirmation(
+            'Factory Reset',
+            'Reset everything to default state? This will delete all data and cannot be undone.',
+            async () => {
+                await chrome.storage.local.clear();
+                this.settings = this.getDefaultSettings();
+                this.shortcuts = this.getDefaultShortcuts();
+                this.rules = [];
+
+                // Tell the background its in-memory rules are gone so it also
+                // clears the declarativeNetRequest ruleset and re-broadcasts;
+                // wiping storage alone would leave both stale.
+                try {
+                    await chrome.runtime.sendMessage({ type: 'clearRules' });
+                } catch (e) {
+                    // non-fatal
+                }
+
+                await this.saveSettings();
+                this.updateUI();
+                this.showMessage('Factory reset completed!', 'success');
+            }
+        );
+    }
+
+    async openDataViewer() {
+        const modal = document.getElementById('dataModal');
+        if (!modal) return;
+        await this.switchDataTab('rules');
+        modal.classList.add('show');
+    }
+
+    /**
+     * Select a tab in the stored-data viewer and render it. The previous
+     * implementation only toggled the active class by comparing button text
+     * (so "Statistics"/"Raw Data" never matched "stats"/"raw") and never
+     * populated the textarea at all.
+     */
+    async switchDataTab(tabName) {
+        if (!tabName) return;
+        this._dataViewerTab = tabName;
+
+        document.querySelectorAll('.data-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.tabName === tabName);
+        });
+
+        const display = document.getElementById('dataDisplay');
+        if (!display) return;
+
+        try {
+            const all = await chrome.storage.local.get(null);
+            let data;
+            switch (tabName) {
+                case 'settings': data = all.turboMockSettings || {}; break;
+                case 'stats': data = all.turboMockStats || {}; break;
+                case 'raw': data = all; break;
+                case 'rules':
+                default: data = all.turboMockRules || []; break;
+            }
+            display.value = JSON.stringify(data, null, 2);
+        } catch (error) {
+            display.value = 'Failed to read stored data: ' + error.message;
+        }
+    }
+
+    formatJSON(elementId) {
+        const el = document.getElementById(elementId);
+        if (!el) return;
+        try {
+            el.value = JSON.stringify(JSON.parse(el.value), null, 2);
+        } catch (e) {
+            this.showMessage('Invalid JSON: ' + e.message, 'error');
+        }
+    }
+
+    insertTemplate(template) {
+        const el = document.getElementById('ruleBody');
+        if (!el || !template) return;
+
+        const start = el.selectionStart;
+        const end = el.selectionEnd;
+        el.value = el.value.substring(0, start) + template + el.value.substring(end);
+        el.selectionStart = el.selectionEnd = start + template.length;
+        el.focus();
+    }
+
     enableAutoSave() {
         let saveTimeout;
 
@@ -1364,79 +1519,6 @@ class OptionsManager {
     }
 }
 
-// Global functions for HTML onclick handlers
-function editShortcut(shortcutName) {
-    alert('Shortcut editing will be available in a future version.');
-}
-
-function switchDataTab(tabName) {
-    document.querySelectorAll('.data-tab').forEach(tab => {
-        tab.classList.toggle('active', tab.textContent.toLowerCase() === tabName);
-    });
-}
-
-function closeModal(modalId) {
-    const modal = document.getElementById(modalId);
-    if (modal) {
-        modal.classList.remove('show');
-    }
-}
-
-function resetSettingsOnly() {
-    if (window.optionsManager) {
-        window.optionsManager.showConfirmation(
-            'Reset Settings',
-            'Reset all settings to default values? Your rules will be preserved.',
-            async () => {
-                window.optionsManager.settings = window.optionsManager.getDefaultSettings();
-                await window.optionsManager.saveSettings();
-                window.optionsManager.updateUI();
-                window.optionsManager.showMessage('Settings reset successfully!', 'success');
-            }
-        );
-    }
-}
-
-function factoryReset() {
-    if (window.optionsManager) {
-        window.optionsManager.showConfirmation(
-            'Factory Reset',
-            'Reset everything to default state? This will delete all data and cannot be undone.',
-            async () => {
-                await chrome.storage.local.clear();
-                window.optionsManager.settings = window.optionsManager.getDefaultSettings();
-                window.optionsManager.shortcuts = window.optionsManager.getDefaultShortcuts();
-                window.optionsManager.rules = [];
-                await window.optionsManager.saveSettings();
-                window.optionsManager.updateUI();
-                window.optionsManager.showMessage('Factory reset completed!', 'success');
-            }
-        );
-    }
-}
-
-function saveRule() {
-    if (window.optionsManager) {
-        window.optionsManager.saveRuleFromEditor();
-    }
-}
-
-function formatJSON(elementId) {
-    const el = document.getElementById(elementId);
-    if (!el) return;
-    try {
-        const obj = JSON.parse(el.value);
-        el.value = JSON.stringify(obj, null, 2);
-    } catch (e) {
-        alert('Invalid JSON: ' + e.message);
-    }
-}
-
-function applyRuleTemplate(name) {
-    if (!name || !window.optionsManager) return;
-    window.optionsManager.applyTemplate(name);
-}
-
 /**
  * G5.6: rule-type badge markup. Contract shared with popup/* (G6) - a single
  * `.rule-type-badge` class with a `data-type` attribute carrying the raw rule.type
@@ -1449,20 +1531,6 @@ function getRuleTypeLabel(type) {
 function renderRuleTypeBadge(rule) {
     const type = (rule && rule.type) || 'mock';
     return `<span class="rule-type-badge" data-type="${type}">${getRuleTypeLabel(type)}</span>`;
-}
-
-function insertTemplate(template) {
-    const el = document.getElementById('ruleBody');
-    if (!el) return;
-
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    const text = el.value;
-    const before = text.substring(0, start);
-    const after = text.substring(end, text.length);
-    el.value = before + template + after;
-    el.selectionStart = el.selectionEnd = start + template.length;
-    el.focus();
 }
 
 // Initialize the options manager when DOM is ready

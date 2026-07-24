@@ -216,16 +216,27 @@
                     </div>
 
                     <div class="settings-section">
+                        <h2>Stored Data</h2>
+                        <p class="section-description">Inspect everything TurboMock has saved locally</p>
+                        <div class="reset-options">
+                            <div class="reset-card">
+                                <h4>View Stored Data</h4>
+                                <button class="btn-secondary" data-action="open-data-viewer">View</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
                         <h2>Reset Options</h2>
                         <div class="reset-options">
                             <div class="reset-card">
                                 <h4>Reset Settings</h4>
-                                <button class="btn-secondary" onclick="resetSettingsOnly()">Reset</button>
+                                <button class="btn-secondary" data-action="reset-settings">Reset</button>
                             </div>
 
                             <div class="reset-card">
                                 <h4>Factory Reset</h4>
-                                <button class="btn-danger" onclick="factoryReset()">Reset All</button>
+                                <button class="btn-danger" data-action="factory-reset">Reset All</button>
                             </div>
                         </div>
                     </div>
@@ -238,15 +249,15 @@
         <div class="modal-content large">
             <div class="modal-header">
                 <h3>All Stored Data</h3>
-                <button class="modal-close" onclick="closeModal('dataModal')">×</button>
+                <button class="modal-close" data-action="close-modal" data-modal="dataModal">×</button>
             </div>
             <div class="modal-body">
                 <div class="data-viewer">
                     <div class="data-tabs">
-                        <button class="data-tab active" onclick="switchDataTab('rules')">Rules</button>
-                        <button class="data-tab" onclick="switchDataTab('settings')">Settings</button>
-                        <button class="data-tab" onclick="switchDataTab('stats')">Statistics</button>
-                        <button class="data-tab" onclick="switchDataTab('raw')">Raw Data</button>
+                        <button class="data-tab active" data-action="switch-data-tab" data-tab-name="rules">Rules</button>
+                        <button class="data-tab" data-action="switch-data-tab" data-tab-name="settings">Settings</button>
+                        <button class="data-tab" data-action="switch-data-tab" data-tab-name="stats">Statistics</button>
+                        <button class="data-tab" data-action="switch-data-tab" data-tab-name="raw">Raw Data</button>
                     </div>
                     <div class="data-content">
                         <textarea id="dataDisplay" readonly></textarea>
@@ -261,14 +272,14 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3 id="confirmTitle">Confirm Action</h3>
-                <button class="modal-close" onclick="closeConfirmModal()">×</button>
+                <button class="modal-close" data-action="close-confirm">×</button>
             </div>
             <div class="modal-body">
                 <p id="confirmMessage">Are you sure you want to proceed?</p>
             </div>
             <div class="modal-footer">
-                <button class="btn-secondary" onclick="closeConfirmModal()">Cancel</button>
-                <button class="btn-danger" id="confirmBtn" onclick="executeConfirmAction()">Confirm</button>
+                <button class="btn-secondary" data-action="close-confirm">Cancel</button>
+                <button class="btn-danger" id="confirmBtn">Confirm</button>
             </div>
         </div>
     </div>
@@ -278,7 +289,7 @@
         <div class="modal-content large">
             <div class="modal-header">
                 <h3 id="ruleEditorTitle">Edit Rule</h3>
-                <button class="modal-close" onclick="closeModal('ruleEditorModal')">×</button>
+                <button class="modal-close" data-action="close-modal" data-modal="ruleEditorModal">×</button>
             </div>
             <div class="modal-body">
                 <form id="ruleForm">
@@ -299,7 +310,7 @@
                         </div>
                         <div class="form-group" style="flex: 1;">
                             <label for="ruleTemplateSelect">Quick Template</label>
-                            <select id="ruleTemplateSelect" onchange="applyRuleTemplate(this.value); this.value='';">
+                            <select id="ruleTemplateSelect">
                                 <option value="">Choose a template…</option>
                                 <option value="graphqlMock">GraphQL Mock</option>
                                 <option value="patchResponse">Patch Response</option>
@@ -390,12 +401,12 @@
                         <textarea id="ruleBody" rows="8" class="code-font"
                             placeholder='{"id": 1, "name": "Test User"}'></textarea>
                         <div class="input-actions">
-                            <button type="button" class="btn-small" onclick="formatJSON('ruleBody')">Format
-                                JSON</button>
-                            <button type="button" class="btn-small" onclick="insertTemplate('{{guid}}')">Insert
-                                GUID</button>
-                            <button type="button" class="btn-small" onclick="insertTemplate('{{timestamp}}')">Insert
-                                Timestamp</button>
+                            <button type="button" class="btn-small" data-action="format-json"
+                                data-target="ruleBody">Format JSON</button>
+                            <button type="button" class="btn-small" data-action="insert-template"
+                                data-template="{{guid}}">Insert GUID</button>
+                            <button type="button" class="btn-small" data-action="insert-template"
+                                data-template="{{timestamp}}">Insert Timestamp</button>
                         </div>
                     </div>
 
@@ -455,31 +466,8 @@
                 </form>
             </div>
             <div class="modal-footer">
-                <button class="btn-secondary" onclick="closeModal('ruleEditorModal')">Cancel</button>
-                <button class="btn-primary" onclick="saveRule()">Save Rule</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Shortcut Editor Modal -->
-    <div class="modal" id="shortcutModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Edit Keyboard Shortcut</h3>
-                <button class="modal-close" onclick="closeModal('shortcutModal')">×</button>
-            </div>
-            <div class="modal-body">
-                <div class="shortcut-input">
-                    <label>Press the key combination you want to use:</label>
-                    <input type="text" id="shortcutInput" placeholder="Press keys..." readonly>
-                </div>
-                <div class="shortcut-warning" id="shortcutWarning" style="display: none;">
-                    This shortcut may conflict with browser or system shortcuts.
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-secondary" onclick="closeModal('shortcutModal')">Cancel</button>
-                <button class="btn-primary" onclick="saveShortcut()">Save Shortcut</button>
+                <button class="btn-secondary" data-action="close-modal" data-modal="ruleEditorModal">Cancel</button>
+                <button class="btn-primary" data-action="save-rule">Save Rule</button>
             </div>
         </div>
     </div>

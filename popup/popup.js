@@ -9,6 +9,7 @@ class TurboMockPopup {
         this.filteredRules = [];
         this.isActive = true;
         this.stats = { intercepted: 0, rulesCount: 0 };
+        this.settings = {};
         this.currentView = 'rules'; // rules, settings, about
         
         this.init();
@@ -46,7 +47,9 @@ class TurboMockPopup {
                 this.rules = response.rules || [];
                 this.isActive = response.active !== false;
                 this.stats = response.stats || { intercepted: 0, rulesCount: this.rules.length };
+                this.settings = response.settings || {};
                 this.filteredRules = [...this.rules];
+                this.applyTheme();
                 return;
             }
 
@@ -65,6 +68,20 @@ class TurboMockPopup {
             this.isActive = true;
             this.stats = { intercepted: 0, rulesCount: 0 };
         }
+    }
+
+    /**
+     * Apply the saved theme. 'auto' follows the OS preference. The popup
+     * previously ignored this setting entirely and was always dark.
+     */
+    applyTheme() {
+        const theme = (this.settings && this.settings.theme) || 'auto';
+        const resolved = theme === 'auto'
+            ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+            : theme;
+
+        document.body.classList.remove('theme-dark', 'theme-light');
+        document.body.classList.add(`theme-${resolved}`);
     }
 
     /**
@@ -377,9 +394,47 @@ class TurboMockPopup {
      * Edit rule
      */
     async editRule(ruleId) {
-        const url = chrome.runtime.getURL(`options/options.html?editRule=${ruleId}`);
-        await chrome.tabs.create({ url });
+        const rule = this.rules.find(r => r.id === ruleId);
+        const opened = await this.openRuleOverlay({ mode: 'edit', rule });
+        if (!opened) {
+            // Overlay can't be injected here (chrome://, Web Store, PDF viewer,
+            // etc.) — fall back to the full options editor in a tab.
+            await chrome.tabs.create({
+                url: chrome.runtime.getURL(`options/options.html?editRule=${ruleId}`)
+            });
+        }
         window.close();
+    }
+
+    /**
+     * Ask the active tab's content script to show the in-page rule editor.
+     * Returns false if the overlay could not be opened there.
+     */
+    async openRuleOverlay(payload) {
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab || !tab.id || !/^https?:/i.test(tab.url || '')) {
+                return false;
+            }
+
+            let prefillUrl;
+            try {
+                prefillUrl = `*${new URL(tab.url).host}*`;
+            } catch (e) {
+                prefillUrl = undefined;
+            }
+
+            const response = await chrome.tabs.sendMessage(tab.id, {
+                type: 'openRuleOverlay',
+                prefillUrl,
+                ...payload
+            });
+
+            return !!(response && response.success);
+        } catch (error) {
+            // No content script on this page (or it hasn't loaded yet).
+            return false;
+        }
     }
 
     /**
@@ -511,9 +566,14 @@ class TurboMockPopup {
     /**
      * Create new rule
      */
-    createNewRule() {
-        const url = chrome.runtime.getURL('options/options.html?action=new');
-        chrome.tabs.create({ url });
+    async createNewRule() {
+        const opened = await this.openRuleOverlay({ mode: 'new' });
+        if (!opened) {
+            // Not injectable on this page — fall back to the options tab.
+            await chrome.tabs.create({
+                url: chrome.runtime.getURL('options/options.html?action=new')
+            });
+        }
         window.close();
     }
 

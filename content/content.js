@@ -85,11 +85,16 @@
      */
     function setupMessageListener() {
         chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+            // Only claim messages this relay actually handles. Returning true
+            // unconditionally would hold the response channel open for other
+            // listeners' messages (e.g. the rule overlay's openRuleOverlay).
+            if (!request || request.type !== 'syncState') {
+                return false;
+            }
+
             try {
-                if (request.type === 'syncState') {
-                    forwardStateToInjected(request);
-                    sendResponse({ success: true });
-                }
+                forwardStateToInjected(request);
+                sendResponse({ success: true });
             } catch (error) {
                 console.error('Error handling message:', error);
                 sendResponse({ success: false, error: error.message });

@@ -22,6 +22,100 @@
     --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 
+/* ── Light theme ───────────────────────────────────────────
+   Applied by options.js applyTheme() via body.theme-light
+   (either an explicit choice or 'auto' resolving to light). */
+body.theme-light {
+    --bg-app: #f5f6f8;
+    --bg-sidebar: #ffffff;
+    --bg-card: #ffffff;
+    --bg-card-hover: #eceff4;
+    --bg-input: #ffffff;
+
+    --text-main: #16202e;
+    --text-muted: #5b6b7f;
+
+    --accent: #3355e0;
+    --accent-hover: #2846c9;
+
+    --success: #15803d;
+    --danger: #dc2626;
+    --border: rgba(15, 23, 42, 0.12);
+    --shadow-md: 0 10px 30px rgba(15, 23, 42, 0.10);
+}
+
+/* Elements whose colors aren't derived from the tokens above. */
+
+/* Translucent bars/overlays are hardcoded dark for the dark theme; they need
+   light counterparts or they render as grey bands over a light page. */
+body.theme-light .top-bar {
+    background: rgba(255, 255, 255, 0.8);
+}
+
+body.theme-light .nav-item:hover {
+    background: rgba(15, 23, 42, 0.05);
+}
+
+body.theme-light .btn-ghost:hover {
+    background: rgba(15, 23, 42, 0.05);
+    border-color: rgba(15, 23, 42, 0.2);
+}
+
+body.theme-light .btn-small {
+    background: rgba(15, 23, 42, 0.05);
+}
+
+body.theme-light .btn-small:hover {
+    background: rgba(15, 23, 42, 0.1);
+}
+
+body.theme-light .slider {
+    background-color: #cbd5e1;
+}
+
+body.theme-light .btn-secondary:hover {
+    background: #e2e8f0;
+}
+
+body.theme-light .setting-item,
+body.theme-light .action-card,
+body.theme-light .reset-card {
+    background: #ffffff;
+}
+
+body.theme-light .setting-item:hover {
+    background: #fbfcfd;
+    border-color: rgba(15, 23, 42, 0.18);
+}
+
+body.theme-light .rule-type-badge[data-type="mock"] { background: rgba(51, 85, 224, 0.12); color: #2846c9; }
+body.theme-light .rule-type-badge[data-type="block"] { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
+body.theme-light .rule-type-badge[data-type="delay"] { background: rgba(217, 119, 6, 0.14); color: #b45309; }
+body.theme-light .rule-type-badge[data-type="redirect"] { background: rgba(2, 132, 199, 0.12); color: #0369a1; }
+body.theme-light .rule-type-badge[data-type="headers"] { background: rgba(21, 128, 61, 0.12); color: #15803d; }
+body.theme-light .rule-type-badge[data-type="queryparams"] { background: rgba(124, 58, 237, 0.12); color: #6d28d9; }
+
+body.theme-light .message.success {
+    background: rgba(21, 128, 61, 0.10);
+    color: #15803d;
+    border-color: rgba(21, 128, 61, 0.25);
+}
+
+body.theme-light .message.error {
+    background: rgba(220, 38, 38, 0.10);
+    color: #b91c1c;
+    border-color: rgba(220, 38, 38, 0.25);
+}
+
+body.theme-light .modal {
+    background: rgba(15, 23, 42, 0.35);
+}
+
+/* Select chevron: darker stroke so it stays visible on white. */
+body.theme-light select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235b6b7f' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
 * {
     box-sizing: border-box;
 }
@@ -468,28 +562,6 @@ input:checked+.slider:before {
 .rule-type-badge[data-type="headers"] { background: rgba(34, 197, 94, 0.18); color: #6ee7a0; }
 .rule-type-badge[data-type="queryparams"] { background: rgba(167, 139, 250, 0.18); color: #c4b5fd; }
 
-/* Keyboard Shortcuts */
-.key-display {
-    background: var(--bg-card-hover);
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-family: var(--font-mono);
-    font-size: 12px;
-    border: 1px solid var(--border);
-}
-
-.shortcut-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 16px;
-    border-bottom: 1px solid var(--border);
-}
-
-.shortcut-item:last-child {
-    border-bottom: none;
-}
-
 /* ── Selects ───────────────────────────────────────────── */
 select {
     appearance: none;
@@ -791,25 +863,3 @@ select {
     border-color: rgba(239, 68, 68, 0.22);
 }
 
-/* ── Shortcut editor ───────────────────────────────────── */
-.shortcut-input {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.shortcut-input input {
-    width: 100%;
-    text-align: center;
-    font-family: var(--font-mono);
-}
-
-.shortcut-warning {
-    margin-top: 12px;
-    padding: 10px 14px;
-    border-radius: 8px;
-    font-size: 12px;
-    background: rgba(245, 158, 11, 0.1);
-    color: #fbbf24;
-    border: 1px solid rgba(245, 158, 11, 0.22);
-}

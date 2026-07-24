@@ -20,6 +20,77 @@
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* ── Light theme ──────────────────────────────────────────
+   Applied by popup.js from the saved `theme` setting
+   (explicit light, or 'auto' resolving to light). */
+body.theme-light {
+  --bg-app: #ffffff;
+  --bg-card: #f2f4f7;
+  --bg-card-hover: #e7ebf0;
+  --text-main: #16202e;
+  --text-muted: #5b6b7f;
+  --accent: #3355e0;
+  --accent-hover: #2846c9;
+  --success: #15803d;
+  --danger: #dc2626;
+  --border: rgba(15, 23, 42, 0.12);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --shadow-md: 0 6px 20px rgba(15, 23, 42, 0.12);
+}
+
+/* The header is a hardcoded translucent dark bar; give it a light counterpart. */
+body.theme-light .header {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+body.theme-light .rule-card {
+  background: #ffffff;
+}
+
+body.theme-light .rule-card:hover {
+  border-color: rgba(15, 23, 42, 0.18);
+}
+
+body.theme-light .status-badge:hover {
+  background: rgba(15, 23, 42, 0.09);
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+body.theme-light .rule-action {
+  background: rgba(15, 23, 42, 0.04);
+}
+
+body.theme-light .rule-action:hover {
+  background: rgba(15, 23, 42, 0.08);
+  border-color: rgba(15, 23, 42, 0.2);
+}
+
+body.theme-light .icon-btn:hover {
+  background: rgba(15, 23, 42, 0.07);
+}
+
+body.theme-light .status-badge {
+  background: rgba(15, 23, 42, 0.05);
+}
+
+body.theme-light .rule-actions {
+  border-top-color: rgba(15, 23, 42, 0.08);
+}
+
+/* Method badges: light-on-dark values need darker text on white. */
+body.theme-light .method-get { background: rgba(2, 132, 199, 0.12); color: #0369a1; }
+body.theme-light .method-post { background: rgba(21, 128, 61, 0.12); color: #15803d; }
+body.theme-light .method-put { background: rgba(217, 119, 6, 0.14); color: #b45309; }
+body.theme-light .method-delete { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
+body.theme-light .method-patch { background: rgba(124, 58, 237, 0.12); color: #6d28d9; }
+
+body.theme-light .rule-type-badge[data-type="mock"] { background: rgba(51, 85, 224, 0.12); color: #2846c9; }
+body.theme-light .rule-type-badge[data-type="block"] { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
+body.theme-light .rule-type-badge[data-type="delay"] { background: rgba(217, 119, 6, 0.14); color: #b45309; }
+body.theme-light .rule-type-badge[data-type="redirect"] { background: rgba(2, 132, 199, 0.12); color: #0369a1; }
+body.theme-light .rule-type-badge[data-type="headers"] { background: rgba(21, 128, 61, 0.12); color: #15803d; }
+body.theme-light .rule-type-badge[data-type="queryparams"] { background: rgba(124, 58, 237, 0.12); color: #6d28d9; }
+
 * { 
   box-sizing: border-box; 
   margin: 0; 
