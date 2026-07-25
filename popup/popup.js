@@ -149,8 +149,25 @@ class TurboMockPopup {
             return;
         }
 
+        // Q-4: one malformed rule (e.g. from a hand-edited storage entry, or
+        // a future schema change) throwing inside getRuleCardHTML previously
+        // took the whole .map() down with it, leaving the entire rule list
+        // blank with no way to recover except deleting all rules via
+        // devtools. Render each card independently so one bad rule becomes
+        // an inline error placeholder instead of an empty popup.
         container.innerHTML = this.filteredRules
-            .map(rule => this.getRuleCardHTML(rule))
+            .map(rule => {
+                try {
+                    return this.getRuleCardHTML(rule);
+                } catch (error) {
+                    console.error('Failed to render rule card:', rule && rule.id, error);
+                    const safeId = this.escapeHtml((rule && rule.id) || '');
+                    return `<div class="rule-card rule-card-error" data-rule-id="${safeId}" role="listitem">
+                        <div class="rule-details">⚠ This rule could not be displayed (${this.escapeHtml(error.message)}).
+                        <button class="rule-action" data-action="delete" data-rule-id="${safeId}">Delete it</button></div>
+                    </div>`;
+                }
+            })
             .join('');
 
         // Attach event listeners to newly rendered cards
@@ -162,46 +179,60 @@ class TurboMockPopup {
      */
     getRuleCardHTML(rule) {
         const statusIcon = this.getStatusIcon(rule.testStatus || 'pending');
-        const methodClass = `method-${(rule.match.method || 'GET').toLowerCase()}`;
+
+        // S-5/Q-22: an imported/hand-edited rule can set match.method or
+        // rule.id to arbitrary strings. Deriving a CSS class name or an
+        // unescaped attribute value directly from them would let a crafted
+        // rule break out of an attribute or inject markup. Restrict the
+        // class derivation to a known-safe set and fall back to a generic
+        // class for anything else; escape every other rule-derived value
+        // that lands in an attribute or text position.
+        const KNOWN_METHODS = ['get', 'post', 'put', 'delete', 'patch', '*'];
+        const rawMethod = (rule.match && rule.match.method) || 'GET';
+        const methodLower = String(rawMethod).toLowerCase();
+        const methodClass = KNOWN_METHODS.includes(methodLower) ? `method-${methodLower}` : 'method-other';
+        const safeMethod = this.escapeHtml(rawMethod);
+
         const enabledClass = rule.enabled ? '' : 'disabled';
         const checkedClass = rule.enabled ? 'checked' : '';
 
         // Safely escape HTML
         const safeName = this.escapeHtml(rule.name || 'Unnamed Rule');
-        const safeUrl = this.escapeHtml(rule.match.url || '');
+        const safeUrl = this.escapeHtml((rule.match && rule.match.url) || '');
+        const safeId = this.escapeHtml(rule.id);
 
         return `
-            <div class="rule-card ${enabledClass}" data-rule-id="${rule.id}" role="listitem">
+            <div class="rule-card ${enabledClass}" data-rule-id="${safeId}" role="listitem">
                 <div class="rule-header">
                     <div class="rule-info">
                         <div class="rule-name">
                             <div class="rule-checkbox ${checkedClass}"
-                                 data-rule-id="${rule.id}"
+                                 data-rule-id="${safeId}"
                                  role="checkbox"
-                                 aria-checked="${rule.enabled}"
+                                 aria-checked="${rule.enabled ? 'true' : 'false'}"
                                  tabindex="0"
                                  aria-label="Enable rule: ${safeName}"></div>
                             ${safeName}
                             ${this.getRuleTypeBadgeHTML(rule)}
                         </div>
                         <div class="rule-details">
-                            <span class="rule-method ${methodClass}">${rule.match.method || 'GET'}</span>
+                            <span class="rule-method ${methodClass}">${safeMethod}</span>
                             ${safeUrl} → ${this.getRuleSummaryText(rule)}
                         </div>
                     </div>
-                    <div class="status-indicator" title="${this.getStatusTooltip(rule.testStatus || 'pending')}">${statusIcon}</div>
+                    <div class="status-indicator" title="${this.escapeHtml(this.getStatusTooltip(rule.testStatus || 'pending'))}">${statusIcon}</div>
                 </div>
                 <div class="rule-actions">
-                    <button class="rule-action" title="Edit" data-action="edit" data-rule-id="${rule.id}" aria-label="Edit rule">
+                    <button class="rule-action" title="Edit" data-action="edit" data-rule-id="${safeId}" aria-label="Edit rule">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                     </button>
-                    <button class="rule-action" title="Duplicate" data-action="copy" data-rule-id="${rule.id}" aria-label="Duplicate rule">
+                    <button class="rule-action" title="Duplicate" data-action="copy" data-rule-id="${safeId}" aria-label="Duplicate rule">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                     </button>
-                    <button class="rule-action" title="Test" data-action="test" data-rule-id="${rule.id}" aria-label="Test rule">
+                    <button class="rule-action" title="Test" data-action="test" data-rule-id="${safeId}" aria-label="Test rule">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
                     </button>
-                    <button class="rule-action" title="Delete" data-action="delete" data-rule-id="${rule.id}" aria-label="Delete rule">
+                    <button class="rule-action" title="Delete" data-action="delete" data-rule-id="${safeId}" aria-label="Delete rule">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
                     </button>
                 </div>
@@ -224,8 +255,14 @@ class TurboMockPopup {
             headers: 'Headers',
             queryparams: 'Query Params'
         };
-        const label = labels[type] || 'Mock';
-        return `<span class="rule-type-badge" data-type="${type}">${label}</span>`;
+        // S-5/Q-22: `type` is placed in a `data-type="..."` attribute. An
+        // imported rule with an arbitrary `type` string could otherwise break
+        // out of the attribute. Restrict what's actually rendered to the
+        // known type keys — anything else (which is already invalid per the
+        // v2 schema) falls back to 'mock' for both the class hook and label.
+        const safeType = Object.prototype.hasOwnProperty.call(labels, type) ? type : 'mock';
+        const label = labels[safeType];
+        return `<span class="rule-type-badge" data-type="${safeType}">${label}</span>`;
     }
 
     /**
@@ -832,12 +869,21 @@ class TurboMockPopup {
     }
 
     /**
-     * Utility: Escape HTML
+     * Utility: Escape HTML for both text-node and attribute-value contexts.
+     * S-6: the previous `div.textContent = x; return div.innerHTML` idiom
+     * escapes `& < >` but NOT quote characters — this function's output is
+     * placed inside HTML attributes (`aria-label="..."`, `data-rule-id="..."`)
+     * throughout getRuleCardHTML, so an unescaped `"` in a rule's name/id
+     * (e.g. from an imported rules JSON) could break out of the attribute
+     * and inject arbitrary markup/attributes.
      */
     escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text || '';
-        return div.innerHTML;
+        return String(text == null ? '' : text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     /**

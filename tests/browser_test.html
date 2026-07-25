@@ -13,8 +13,13 @@
         .result { background: #f1f5f9; padding: 10px; border-radius: 4px; white-space: pre-wrap; margin-top: 10px; font-family: monospace; }
         h2 { margin-top: 0; }
     </style>
-    <!-- Import Utils Logic -->
-    <script src="../src/utils.js"></script>
+    <!-- Import the real UMD matching/placeholder modules directly (CQ-Q13:
+         this page previously loaded ../src/utils.js as a classic script, but
+         that file is an ES module — `export class TurboMockUtils` is a
+         SyntaxError outside a module context, so TurboMockUtils was never
+         defined and every button on this page threw). -->
+    <script src="../src/matcher.js"></script>
+    <script src="../src/placeholders.js"></script>
 </head>
 <body>
     <h1>TurboMock Logic Verifier</h1>
@@ -46,7 +51,7 @@
             try {
                 const pattern = document.getElementById('pattern').value;
                 const url = document.getElementById('testUrl').value;
-                const matches = TurboMockUtils.matchUrl(url, pattern);
+                const matches = TurboMockMatcher.matchUrl(url, pattern);
                 
                 const resultDiv = document.getElementById('matchResult');
                 resultDiv.textContent = matches ? "✅ MATCHED" : "❌ NO MATCH";
@@ -60,13 +65,13 @@
             try {
                 const bodyInput = document.getElementById('dynamicBody').value;
                 const body = JSON.parse(bodyInput);
-                const processed = TurboMockUtils.processDynamicResponse(body);
+                const processed = TurboMockPlaceholders.processDynamicResponse(body);
                 
                 document.getElementById('dynamicResult').textContent = JSON.stringify(processed, null, 2);
             } catch (e) {
                 // Try as string if JSON parse fails
                  try {
-                    const processed = TurboMockUtils.processDynamicResponse(document.getElementById('dynamicBody').value);
+                    const processed = TurboMockPlaceholders.processDynamicResponse(document.getElementById('dynamicBody').value);
                     document.getElementById('dynamicResult').textContent = processed;
                  } catch (e2) {
                      document.getElementById('dynamicResult').textContent = "Error: " + e.message;

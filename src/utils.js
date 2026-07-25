@@ -4,6 +4,13 @@
  * Enhanced with better validation and more dynamic placeholders
  */
 
+// Side-effect imports of the UMD shared modules (src/matcher.js, src/placeholders.js)
+// so their globals are always populated wherever this file is loaded — including the
+// MV3 service worker, which has no `window` (CQ-Q6). Each of those files falls back to
+// `globalThis` internally when `window` is undefined, so this works in every context.
+import './matcher.js';
+import './placeholders.js';
+
 export class TurboMockUtils {
     static generateId(prefix = 'rule') {
         return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -54,9 +61,11 @@ export class TurboMockUtils {
 
     // Delegates to TurboMockMatcher (src/matcher.js) — see TODO.md §1.3.
     // Kept here as a thin wrapper for backward compatibility with existing
-    // callers of TurboMockUtils.matchUrl.
+    // callers of TurboMockUtils.matchUrl. Uses globalThis (not window) so this
+    // does not throw a ReferenceError when called from the MV3 service worker,
+    // which has no `window` global (CQ-Q6).
     static matchUrl(url, pattern) {
-        return window.TurboMockMatcher.matchUrl(url, pattern);
+        return globalThis.TurboMockMatcher.matchUrl(url, pattern);
     }
 
     static validateJSON(jsonString) {
@@ -110,11 +119,17 @@ export class TurboMockUtils {
         return statusTexts[code] || 'Unknown Status';
     }
 
+    // S-6: the textContent -> innerHTML round-trip escapes & < > but NOT
+    // quotes, which is unsafe when the output is placed inside an HTML
+    // attribute (e.g. title="${escapeHtml(x)}"). Escape explicitly instead.
     static escapeHtml(text) {
         if (typeof text !== 'string') return '';
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     static deepClone(obj) {
@@ -354,10 +369,12 @@ export class TurboMockUtils {
      * Process dynamic response with enhanced placeholders.
      * Delegates to TurboMockPlaceholders (src/placeholders.js) — see TODO.md §1.3.
      * Kept here as a thin wrapper for backward compatibility with existing
-     * callers of TurboMockUtils.processDynamicResponse.
+     * callers of TurboMockUtils.processDynamicResponse. Uses globalThis (not
+     * window) so this does not throw a ReferenceError in the MV3 service
+     * worker, which has no `window` global (CQ-Q6).
      */
     static processDynamicResponse(body, requestDetails = {}) {
-        return window.TurboMockPlaceholders.processDynamicResponse(body, requestDetails);
+        return globalThis.TurboMockPlaceholders.processDynamicResponse(body, requestDetails);
     }
 
     /**

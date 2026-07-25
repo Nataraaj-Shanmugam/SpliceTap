@@ -6,6 +6,53 @@
 const fs = require('fs');
 const path = require('path');
 
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+/**
+ * Validate that `buf` is a real, decodable PNG whose IHDR-declared width/height
+ * match `declaredSize`x`declaredSize`. Returns { ok, reason?, width?, height? }.
+ *
+ * This exists because a prior bug (audit finding C-1) shipped icon files that
+ * were plain-text base64 (the ASCII string "iVBORw0KGgo...") saved with a
+ * `.png` extension — `fs.existsSync` alone happily reports such files as
+ * "present" even though Chrome cannot load them as images. This check reads
+ * the actual bytes and parses the IHDR chunk instead of trusting the filename.
+ */
+function validatePngFile(buf, declaredSize, label) {
+    if (!buf || buf.length < 8 || !buf.slice(0, 8).equals(PNG_SIGNATURE)) {
+        const looksLikeBase64Text = buf && buf.slice(0, 11).toString('ascii') === 'iVBORw0KGgo';
+        return {
+            ok: false,
+            reason: `${label} does not start with the PNG magic bytes (89 50 4E 47 0D 0A 1A 0A)` +
+                (looksLikeBase64Text
+                    ? ' — it looks like base64-ENCODED TEXT ("iVBORw0KGgo...") saved with a .png extension, not a real binary PNG.'
+                    : '.')
+        };
+    }
+
+    if (buf.length < 8 + 8 + 13) {
+        return { ok: false, reason: `${label} is too short to contain a valid IHDR chunk.` };
+    }
+
+    const chunkType = buf.slice(12, 16).toString('ascii');
+    if (chunkType !== 'IHDR') {
+        return { ok: false, reason: `${label}'s first chunk is "${chunkType}", expected "IHDR".` };
+    }
+
+    const width = buf.readUInt32BE(16);
+    const height = buf.readUInt32BE(20);
+
+    if (width !== declaredSize || height !== declaredSize) {
+        return {
+            ok: false,
+            reason: `${label} is declared/named as ${declaredSize}x${declaredSize} but its IHDR chunk says ` +
+                `${width}x${height}.`
+        };
+    }
+
+    return { ok: true, width, height };
+}
+
 function validateManifest() {
     const manifestPath = path.join(__dirname, '..', 'manifest.json');
     
@@ -76,16 +123,38 @@ function validateManifest() {
             console.log('✅ Popup file exists');
         }
         
-        // Check icons
+        // Check icons — existence AND real, correctly-sized PNG bytes.
+        // Collect every declared icon path from both `icons` and
+        // `action.default_icon` (both reference the same files here, but a
+        // future edit could point them at different assets).
+        const declaredIcons = new Map(); // iconPath -> declared size (number)
         if (manifest.icons) {
             for (const [size, iconPath] of Object.entries(manifest.icons)) {
+                declaredIcons.set(iconPath, parseInt(size, 10));
+            }
+        }
+        if (manifest.action && manifest.action.default_icon) {
+            for (const [size, iconPath] of Object.entries(manifest.action.default_icon)) {
+                declaredIcons.set(iconPath, parseInt(size, 10));
+            }
+        }
+
+        if (declaredIcons.size > 0) {
+            for (const [iconPath, declaredSize] of declaredIcons.entries()) {
                 const fullPath = path.join(__dirname, '..', iconPath);
                 if (!fs.existsSync(fullPath)) {
-                    console.error(`❌ Icon not found: ${iconPath} (${size}x${size})`);
+                    console.error(`❌ Icon not found: ${iconPath} (${declaredSize}x${declaredSize})`);
+                    return false;
+                }
+
+                const buf = fs.readFileSync(fullPath);
+                const result = validatePngFile(buf, declaredSize, iconPath);
+                if (!result.ok) {
+                    console.error(`❌ Icon failed PNG validation: ${result.reason}`);
                     return false;
                 }
             }
-            console.log('✅ All icons exist');
+            console.log(`✅ All icons exist and are valid, correctly-sized PNGs (${declaredIcons.size} files checked)`);
         }
         
         // Check options page
@@ -105,7 +174,23 @@ function validateManifest() {
             return false;
         }
         console.log(`✅ Version format: ${manifest.version}`);
-        
+
+        // Check manifest.version stays in sync with package.json's version.
+        // manifest.json is the single source of truth (it's what the Chrome
+        // Web Store sees); package.json must be kept matching it manually
+        // (or by a release script) rather than drifting silently.
+        const packageJsonPath = path.join(__dirname, '..', 'package.json');
+        if (fs.existsSync(packageJsonPath)) {
+            const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+            if (pkg.version !== manifest.version) {
+                console.error(
+                    `❌ Version mismatch: manifest.json is "${manifest.version}" but package.json is "${pkg.version}"`
+                );
+                return false;
+            }
+            console.log(`✅ package.json version matches manifest.json (${manifest.version})`);
+        }
+
         console.log('\n🎉 Manifest validation passed!');
         console.log(`Extension: ${manifest.name} v${manifest.version}`);
         console.log(`Description: ${manifest.description}`);

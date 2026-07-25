@@ -38,6 +38,19 @@ class TurboMockBackground {
         // storage write on every single intercepted request.
         this._lastPersist = 0;
         this.PERSIST_THROTTLE_MS = 1500;
+        this._trailingFlushTimer = null; // Q-16
+        this._rulesDirty = false; // Q-26/G-6: hitCount changed in-memory, not yet flushed
+
+        // Q-15: serializes chrome.storage.local read-modify-write DNR-id
+        // allocations through a single promise chain. allocateDnrId() itself
+        // is a get-then-set with no atomicity; without this, two rules saved
+        // in quick succession (e.g. a bulk import) can read the same counter
+        // value and be handed the same dnrRuleId, which corrupts the whole
+        // DNR ruleset since two rules would collide on one id. Every call is
+        // funneled through this single instance, and JS is single-threaded,
+        // so chaining through one promise variable serializes the critical
+        // section completely.
+        this._dnrIdChain = Promise.resolve();
 
         // Register event listeners synchronously, in the first turn of the
         // service-worker script. MV3 workers are ephemeral; a listener added
@@ -46,10 +59,24 @@ class TurboMockBackground {
         this.setupMessageHandlers();
         this.setupContextMenus();
         this.setupExtensionLifecycle();
+        this.setupCommands();
+        this.setupSuspendFlush();
 
         this.ready = this.loadStoredData()
             .then(() => console.log('TurboMock background service worker initialized (Config Mode)'))
             .catch((error) => console.error('Failed to initialize background service worker:', error));
+    }
+
+    /**
+     * Serialized wrapper around storage.allocateDnrId() (Q-15).
+     */
+    allocateDnrIdSerialized() {
+        // .catch(() => {}) so a prior failed allocation doesn't permanently
+        // wedge the chain into a rejected state for every call after it.
+        this._dnrIdChain = this._dnrIdChain
+            .catch(() => {})
+            .then(() => this.storage.allocateDnrId());
+        return this._dnrIdChain;
     }
 
     async loadStoredData() {
@@ -126,38 +153,71 @@ class TurboMockBackground {
                     if (!request.rule) {
                         throw new Error('Rule data is required');
                     }
+
+                    // S-2: server-side validation before persisting. The
+                    // options page and overlay both validate client-side, but
+                    // a client-side-only check can be bypassed (a hand-edited
+                    // storage entry, a future caller, a compromised page
+                    // context) — this is the one place ALL rule writes funnel
+                    // through, so it's the actual trust boundary.
+                    const validation = await this.validateRule(request.rule);
+                    if (!validation.passed) {
+                        return {
+                            success: false,
+                            error: validation.results.map((r) => r.message).join('; ')
+                        };
+                    }
+
                     const ruleToSave = { ...request.rule };
                     if ((ruleToSave.type === 'headers' || ruleToSave.type === 'queryparams') && !ruleToSave.dnrRuleId) {
-                        ruleToSave.dnrRuleId = await this.storage.allocateDnrId();
+                        ruleToSave.dnrRuleId = await this.allocateDnrIdSerialized();
                     }
                     const savedRule = await this.storage.saveRule(ruleToSave);
                     this.rules = await this.storage.getRules();
                     await this.broadcastState();
-                    await syncDnrRules(this.rules, this.isActive);
-                    return { success: true, rule: savedRule };
+                    const dnrResult = await syncDnrRules(this.rules, this.isActive);
+                    return { success: true, rule: savedRule, dnrWarning: dnrResult.success ? undefined : dnrResult.error };
                 }
 
                 case 'setRules': {
                     // Bulk persist path used by the options editor and import.
-                    // Allocates a dnrRuleId for any headers/queryparams rule that
-                    // lacks one (so DNR-backed rules actually register), then
-                    // persists, refreshes in-memory rules, broadcasts, and syncs DNR.
+                    // S-2: validate every incoming rule; invalid ones are
+                    // skipped (not silently accepted, not a hard failure for
+                    // the whole batch — one bad rule in an imported file
+                    // shouldn't block the N good ones). Allocates a dnrRuleId
+                    // for any headers/queryparams rule that lacks one, then
+                    // persists, refreshes in-memory rules, broadcasts, and
+                    // syncs DNR.
                     if (!Array.isArray(request.rules)) {
                         throw new Error('rules array is required');
                     }
                     const prepared = [];
+                    const rejected = [];
                     for (const incoming of request.rules) {
+                        const validation = await this.validateRule(incoming);
+                        if (!validation.passed) {
+                            rejected.push({
+                                name: incoming && incoming.name,
+                                errors: validation.results.map((r) => r.message)
+                            });
+                            continue;
+                        }
                         const rule = { ...incoming };
                         if ((rule.type === 'headers' || rule.type === 'queryparams') && !rule.dnrRuleId) {
-                            rule.dnrRuleId = await this.storage.allocateDnrId();
+                            rule.dnrRuleId = await this.allocateDnrIdSerialized();
                         }
                         prepared.push(rule);
                     }
                     await this.storage.saveRules(prepared);
                     this.rules = await this.storage.getRules();
                     await this.broadcastState();
-                    await syncDnrRules(this.rules, this.isActive);
-                    return { success: true, rules: this.rules };
+                    const dnrResult = await syncDnrRules(this.rules, this.isActive);
+                    return {
+                        success: true,
+                        rules: this.rules,
+                        rejected: rejected.length ? rejected : undefined,
+                        dnrWarning: dnrResult.success ? undefined : dnrResult.error
+                    };
                 }
 
                 case 'toggleRule':
@@ -216,6 +276,21 @@ class TurboMockBackground {
                             this.interceptionLog.splice(0, this.interceptionLog.length - this.MAX_INTERCEPTION_LOG);
                         }
                         this._applyStatsIncrement(1);
+
+                        // Q-26/G-6: hitCount was defined in the schema and
+                        // rendered in the UI but nothing ever incremented it.
+                        // Bumped in-memory immediately (so a getRules() call
+                        // right after reflects it); the write to storage
+                        // rides the same throttle as stats/log persistence
+                        // rather than a save per intercepted request.
+                        if (request.entry.ruleId) {
+                            const rule = this.rules.find((r) => r && r.id === request.entry.ruleId);
+                            if (rule) {
+                                rule.hitCount = (rule.hitCount || 0) + 1;
+                                this._rulesDirty = true;
+                            }
+                        }
+
                         await this._persistVolatile();
                     }
                     return { success: true };
@@ -251,7 +326,14 @@ class TurboMockBackground {
         const amount = incrementBy || 1;
         const lastReset = new Date(this.stats.lastReset);
         const now = new Date();
-        const daysSinceReset = Math.floor((now - lastReset) / (1000 * 60 * 60 * 24));
+        // Q-31: an unparseable/missing lastReset produces an Invalid Date;
+        // (now - lastReset) is then NaN, and `NaN >= 1` is false, so the
+        // reset silently never fires again for the lifetime of that stats
+        // object. Treat "can't tell how long it's been" as "reset is due".
+        const lastResetValid = !isNaN(lastReset.getTime());
+        const daysSinceReset = lastResetValid
+            ? Math.floor((now - lastReset) / (1000 * 60 * 60 * 24))
+            : Infinity;
 
         if (daysSinceReset >= 1) {
             // Reset stats for new day
@@ -266,15 +348,33 @@ class TurboMockBackground {
     }
 
     /**
-     * Persist the interception log (to session storage) and stats (to local
-     * storage), throttled so a busy page making many mocked requests doesn't
-     * trigger a storage write per request. In-memory state is always current;
-     * this only bounds how often it is flushed to disk/session.
+     * Persist the interception log (to session storage), stats, and any
+     * dirty hitCount changes (to local storage), throttled so a busy page
+     * making many mocked requests doesn't trigger a storage write per
+     * request. In-memory state is always current; this only bounds how
+     * often it is flushed to disk/session.
+     *
+     * Q-16: also schedules a trailing-edge flush so the last write inside a
+     * throttle window isn't lost forever if no further event arrives to
+     * trigger the next flush (previously: a burst of requests early in a
+     * window, then silence, meant that window's tail was never persisted
+     * until something else happened to call this again).
      */
     async _persistVolatile(force = false) {
         const now = Date.now();
         if (!force && (now - this._lastPersist) < this.PERSIST_THROTTLE_MS) {
+            if (!this._trailingFlushTimer) {
+                const remaining = this.PERSIST_THROTTLE_MS - (now - this._lastPersist);
+                this._trailingFlushTimer = setTimeout(() => {
+                    this._trailingFlushTimer = null;
+                    this._persistVolatile(true);
+                }, remaining);
+            }
             return;
+        }
+        if (this._trailingFlushTimer) {
+            clearTimeout(this._trailingFlushTimer);
+            this._trailingFlushTimer = null;
         }
         this._lastPersist = now;
 
@@ -283,16 +383,35 @@ class TurboMockBackground {
         } catch (e) {
             // session storage unavailable — non-fatal
         }
-        await this.storage.updateStats(this.stats);
+
+        // P-14: write the already-authoritative in-memory stats object
+        // directly rather than going through updateStats(), which does its
+        // own get-then-merge — redundant here since `this.stats` already IS
+        // the full, current stats object.
+        await this.storage.setStatsDirect(this.stats);
+
+        if (this._rulesDirty) {
+            this._rulesDirty = false;
+            await this.storage.saveRules(this.rules);
+        }
     }
 
     /**
-     * Validate a rule structure
+     * Validate a rule structure. Branches per rule type (Q-21/G-3) — only
+     * `type: 'mock'` rules have a `response` object in the v2 schema; the
+     * old unconditional `if (!rule.response)` check meant the Test button
+     * (and, since this is also the S-2 save/import gate, saving itself)
+     * hard-failed every block/delay/redirect/headers/queryparams rule even
+     * when perfectly well-formed.
      */
     async validateRule(rule) {
         const errors = [];
 
-        // Validate required fields
+        if (!rule || typeof rule !== 'object') {
+            return { success: true, passed: false, results: [{ status: 'failed', message: 'Rule data is required' }] };
+        }
+
+        // Fields common to every rule type.
         if (!rule.name || rule.name.trim().length === 0) {
             errors.push('Rule name is required');
         }
@@ -300,7 +419,6 @@ class TurboMockBackground {
         if (!rule.match || !rule.match.url) {
             errors.push('URL pattern is required');
         } else {
-            // Validate URL pattern
             const urlValidation = TurboMockUtils.validateUrlPattern(rule.match.url);
             if (!urlValidation.isValid) {
                 errors.push(`Invalid URL pattern: ${urlValidation.error}`);
@@ -311,29 +429,62 @@ class TurboMockBackground {
             errors.push('HTTP method is required');
         }
 
-        if (!rule.response) {
-            errors.push('Response configuration is required');
-        } else {
-            // Validate status code
-            const statusValidation = TurboMockUtils.validateStatusCode(rule.response.statusCode);
-            if (!statusValidation.isValid) {
-                errors.push(`Invalid status code: ${statusValidation.error}`);
-            }
+        const type = rule.type || 'mock';
 
-            // Validate headers JSON if present
-            if (rule.response.headers) {
-                if (typeof rule.response.headers !== 'object') {
+        if (type === 'mock') {
+            if (!rule.response) {
+                errors.push('Response configuration is required');
+            } else {
+                const statusValidation = TurboMockUtils.validateStatusCode(rule.response.statusCode);
+                if (!statusValidation.isValid) {
+                    errors.push(`Invalid status code: ${statusValidation.error}`);
+                }
+
+                if (rule.response.headers && typeof rule.response.headers !== 'object') {
                     errors.push('Headers must be an object');
                 }
-            }
 
-            // Validate delay
-            if (rule.response.delay !== undefined) {
-                const delay = parseInt(rule.response.delay, 10);
-                if (isNaN(delay) || delay < 0 || delay > 30000) {
-                    errors.push('Delay must be between 0 and 30000 ms');
+                if (rule.response.delay !== undefined) {
+                    const delay = parseInt(rule.response.delay, 10);
+                    if (isNaN(delay) || delay < 0 || delay > 30000) {
+                        errors.push('Delay must be between 0 and 30000 ms');
+                    }
                 }
             }
+        } else if (type === 'delay') {
+            const ms = parseInt(rule.delayMs, 10);
+            if (isNaN(ms) || ms < 1 || ms > 30000) {
+                errors.push('Delay must be between 1 and 30000 ms');
+            }
+        } else if (type === 'redirect') {
+            if (!rule.redirect || !rule.redirect.destination) {
+                errors.push('Redirect destination is required');
+            }
+        } else if (type === 'headers') {
+            if (!rule.headersMod || (!(rule.headersMod.request || []).length && !(rule.headersMod.response || []).length)) {
+                errors.push('At least one request or response header operation is required');
+            } else {
+                const dnr = globalThis.TurboMockDnr;
+                if (dnr && typeof dnr.validateHeadersMod === 'function') {
+                    const headerValidation = dnr.validateHeadersMod(rule.headersMod);
+                    if (!headerValidation.valid) {
+                        errors.push(...headerValidation.errors);
+                    }
+                }
+            }
+        } else if (type === 'queryparams') {
+            const qp = rule.queryParams || {};
+            if (!(qp.add || []).length && !(qp.remove || []).length) {
+                errors.push('At least one query parameter to add or remove is required');
+            }
+        } else if (type !== 'block') {
+            errors.push(`Unknown rule type: ${type}`);
+        }
+
+        // §1.7: headers/queryparams rules are DNR-backed and cannot express
+        // header or GraphQL match conditions.
+        if ((type === 'headers' || type === 'queryparams') && rule.match && (rule.match.headers || rule.match.graphql)) {
+            errors.push('Header/GraphQL match conditions are not supported for this rule type');
         }
 
         if (errors.length > 0) {
@@ -385,12 +536,23 @@ class TurboMockBackground {
     async broadcastToTab(tabId, state) {
         try {
             await chrome.tabs.sendMessage(tabId, state);
-            
+
             // Reset retry count on success
             this.broadcastRetryCount.delete(tabId);
         } catch (error) {
+            // Q-29: "Could not establish connection. Receiving end does not
+            // exist." means this tab structurally has no (and will never
+            // get, without a navigation) our content script — a chrome://
+            // page, another extension's page, the Web Store, a PDF viewer,
+            // etc. Retrying those wastes timers and CPU for a request that
+            // can never succeed; give up immediately instead.
+            if (error && /receiving end does not exist/i.test(error.message || '')) {
+                this.broadcastRetryCount.delete(tabId);
+                return;
+            }
+
             const retries = this.broadcastRetryCount.get(tabId) || 0;
-            
+
             if (retries < this.MAX_BROADCAST_RETRIES) {
                 // Retry after delay
                 this.broadcastRetryCount.set(tabId, retries + 1);
@@ -471,13 +633,21 @@ class TurboMockBackground {
         // Handle tab updates - broadcast state to newly loaded pages
         chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
             if (changeInfo.status === 'complete' && tab.url && !tab.url.startsWith('chrome://')) {
+                // C-7: on a cold SW start, this event can fire before
+                // loadStoredData() resolves — at that point this.rules is
+                // still [] and this.isActive is still its constructor
+                // default, so the tab would be handed an empty ruleset and
+                // mocking would look silently disabled until the next
+                // unrelated broadcast. Wait for the real state first.
+                await this.ready;
+
                 const state = {
                     type: 'syncState',
                     rules: this.rules,
                     active: this.isActive,
                     settings: this.settings
                 };
-                
+
                 // Give content script time to load
                 setTimeout(() => {
                     this.broadcastToTab(tabId, state);
@@ -489,6 +659,62 @@ class TurboMockBackground {
         chrome.tabs.onRemoved.addListener((tabId) => {
             this.broadcastRetryCount.delete(tabId);
         });
+    }
+
+    /**
+     * C-6/Q-20/G-10: the manifest declares two keyboard shortcuts
+     * (toggle-extension, new-rule) but nothing ever handled
+     * chrome.commands.onCommand — both were advertised in the UI and did
+     * nothing when pressed.
+     */
+    setupCommands() {
+        chrome.commands.onCommand.addListener(async (command) => {
+            try {
+                if (command === 'toggle-extension') {
+                    await this.ready;
+                    this.isActive = !this.isActive;
+                    await this.storage.saveActiveState(this.isActive);
+                    await this.broadcastState();
+                    await syncDnrRules(this.rules, this.isActive);
+                } else if (command === 'new-rule') {
+                    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                    if (tab && tab.id && tab.url && /^https?:/i.test(tab.url)) {
+                        let prefillUrl;
+                        try {
+                            prefillUrl = `*${new URL(tab.url).host}*`;
+                        } catch (e) {
+                            prefillUrl = undefined;
+                        }
+                        try {
+                            const response = await chrome.tabs.sendMessage(tab.id, {
+                                type: 'openRuleOverlay', mode: 'new', prefillUrl
+                            });
+                            if (response && response.success) return;
+                        } catch (error) {
+                            // Content script unavailable — fall through to the options tab.
+                        }
+                    }
+                    chrome.runtime.openOptionsPage();
+                }
+            } catch (error) {
+                console.error(`Failed to handle command "${command}":`, error);
+            }
+        });
+    }
+
+    /**
+     * C-22/Q-16: chrome.runtime.onSuspend is not guaranteed to fire for an
+     * abrupt service-worker termination, but it IS the closest available
+     * hook, and attempting a flush here is strictly better than not trying —
+     * it closes the window where up to PERSIST_THROTTLE_MS of buffered stats
+     * and log entries would otherwise be silently dropped on suspend.
+     */
+    setupSuspendFlush() {
+        if (chrome.runtime.onSuspend && chrome.runtime.onSuspend.addListener) {
+            chrome.runtime.onSuspend.addListener(() => {
+                this._persistVolatile(true);
+            });
+        }
     }
 }
 

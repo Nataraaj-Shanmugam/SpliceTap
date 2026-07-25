@@ -10,16 +10,31 @@
     --text-main: #f1f5f9;
     --text-muted: #94a3b8;
 
-    --accent: #4f6ef7;
-    --accent-hover: #3f5de6;
+    /* A-7: white text on #4f6ef7 measured 4.28:1, failing the 4.5:1 text
+       minimum - it was the primary button and the active nav item on every
+       dark-theme screen. Reuses the exact value the light theme already
+       uses for the same reason (measured 5.97:1 there). */
+    --accent: #3355e0;
+    --accent-hover: #2846c9;
 
     --success: #22c55e;
     --danger: #ef4444;
     --border: rgba(148, 163, 184, 0.14);
+    /* A-7: a stronger border for elements whose boundary needs to be
+       reliably visible (form controls, modal edges, the theme-preview
+       swatches) - the base --border above is intentionally subtle and
+       stays that way for plain card/section dividers. ~3:1 against
+       --bg-input/--bg-sidebar. */
+    --border-strong: rgba(148, 163, 184, 0.6);
     --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.4);
 
     --font-main: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, 'Liberation Mono', Menlo, monospace;
+
+    /* A-14: without this, Chrome computes native form-control chrome
+       (placeholder colour, scrollbars, etc.) as if the page were light,
+       over a near-black --bg-input. */
+    color-scheme: dark;
 }
 
 /* ── Light theme ───────────────────────────────────────────
@@ -41,7 +56,11 @@ body.theme-light {
     --success: #15803d;
     --danger: #dc2626;
     --border: rgba(15, 23, 42, 0.12);
+    /* A-7: see --border-strong in :root. */
+    --border-strong: rgba(15, 23, 42, 0.5);
     --shadow-md: 0 10px 30px rgba(15, 23, 42, 0.10);
+
+    color-scheme: light;
 }
 
 /* Elements whose colors aren't derived from the tokens above. */
@@ -69,9 +88,10 @@ body.theme-light .btn-small:hover {
     background: rgba(15, 23, 42, 0.1);
 }
 
-body.theme-light .slider {
-    background-color: #cbd5e1;
-}
+/* A-7: .slider's "off" colour is set once, in the theme-independent base
+   rule below - #64748b measures ≥3:1 against both the near-black dark
+   --bg-app and white light --bg-app, so no per-theme override is needed
+   here (the old #cbd5e1 measured only 1.48:1 against white). */
 
 body.theme-light .btn-secondary:hover {
     background: #e2e8f0;
@@ -90,14 +110,19 @@ body.theme-light .setting-item:hover {
 
 body.theme-light .rule-type-badge[data-type="mock"] { background: rgba(51, 85, 224, 0.12); color: #2846c9; }
 body.theme-light .rule-type-badge[data-type="block"] { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
-body.theme-light .rule-type-badge[data-type="delay"] { background: rgba(217, 119, 6, 0.14); color: #b45309; }
+/* A-7: #b45309 on this background measured 4.32:1, failing 4.5:1 - darkened
+   to Tailwind's amber-900 (measured ~7.8:1 against the same background). */
+body.theme-light .rule-type-badge[data-type="delay"] { background: rgba(217, 119, 6, 0.14); color: #78350f; }
 body.theme-light .rule-type-badge[data-type="redirect"] { background: rgba(2, 132, 199, 0.12); color: #0369a1; }
-body.theme-light .rule-type-badge[data-type="headers"] { background: rgba(21, 128, 61, 0.12); color: #15803d; }
+/* A-7: #15803d on this background measured 4.27:1, failing 4.5:1 - reuses
+   the same darker green as .message.success below (measured ~5.65:1 here). */
+body.theme-light .rule-type-badge[data-type="headers"] { background: rgba(21, 128, 61, 0.12); color: #0f6b30; }
 body.theme-light .rule-type-badge[data-type="queryparams"] { background: rgba(124, 58, 237, 0.12); color: #6d28d9; }
 
 body.theme-light .message.success {
     background: rgba(21, 128, 61, 0.10);
-    color: #15803d;
+    /* A-7: #15803d measured 4.07:1 here, failing 4.5:1; darkened (measured ~5.4:1). */
+    color: #0f6b30;
     border-color: rgba(21, 128, 61, 0.25);
 }
 
@@ -105,6 +130,12 @@ body.theme-light .message.error {
     background: rgba(220, 38, 38, 0.10);
     color: #b91c1c;
     border-color: rgba(220, 38, 38, 0.25);
+}
+
+body.theme-light .message.info {
+    background: rgba(51, 85, 224, 0.10);
+    color: #2846c9;
+    border-color: rgba(51, 85, 224, 0.25);
 }
 
 body.theme-light .modal {
@@ -295,11 +326,19 @@ body {
 
 .btn-danger {
     background: rgba(239, 68, 68, 0.1);
-    color: var(--danger);
+    /* A-7: var(--danger) measured 4.17:1 (dark) / 4.24:1 (light) against this
+       tinted background, both failing 4.5:1. Reuses the same text colours
+       already proven to pass on this exact background pairing in
+       .message.error below/above. */
+    color: #f87171;
     border: 1px solid rgba(239, 68, 68, 0.2);
     padding: 8px 16px;
     border-radius: 8px;
     cursor: pointer;
+}
+
+body.theme-light .btn-danger {
+    color: #b91c1c;
 }
 
 .btn-danger:hover {
@@ -370,7 +409,11 @@ input[type="number"],
 textarea,
 select {
     background: var(--bg-input);
-    border: 1px solid var(--border);
+    /* A-7: the plain --border token measured well under the 3:1 UI-component
+       minimum against both --bg-input and the modal surface (light theme's
+       --bg-input and modal background are both #ffffff, so the boundary
+       relied entirely on this border to be visible at all). */
+    border: 1px solid var(--border-strong);
     color: var(--text-main);
     padding: 10px 12px;
     border-radius: 6px;
@@ -384,11 +427,19 @@ input:focus,
 textarea:focus,
 select:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.16);
+    box-shadow: 0 0 0 3px rgba(51, 85, 224, 0.16);
 }
 
 textarea {
     font-family: var(--font-mono);
+}
+
+/* A-15: with no author rule the placeholder colour falls back to the UA
+   stylesheet, which - absent a declared color-scheme - Chrome resolves as if
+   the page were light, over a near-black --bg-input. */
+::placeholder {
+    color: var(--text-muted);
+    opacity: 1;
 }
 
 /* Cards Grid */
@@ -423,6 +474,14 @@ textarea {
     height: 0;
 }
 
+/* A-3: the real <input> is visually hidden (0x0, opacity 0), so the
+   browser's default focus ring - painted on the input itself - was
+   invisible too. There was no compensating focus-visible rule anywhere. */
+.toggle-switch input:focus-visible + .slider {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
 .slider {
     position: absolute;
     cursor: pointer;
@@ -430,7 +489,10 @@ textarea {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: #334155;
+    /* A-7: #334155 measured 1.66:1 against the surrounding dark card,
+       failing the 3:1 non-text minimum; #64748b measures ≥3:1 in both
+       themes (see the removed theme-light override above). */
+    background-color: #64748b;
     transition: .3s;
     border-radius: 24px;
 }
@@ -499,6 +561,19 @@ input:checked+.slider:before {
     }
 }
 
+/* A-14: every animated affordance was unconditional. */
+@media (prefers-reduced-motion: reduce) {
+    .tab-content.active {
+        animation: none;
+    }
+
+    * {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+}
+
 /* Modals */
 .modal {
     display: none;
@@ -517,7 +592,8 @@ input:checked+.slider:before {
 
 .modal-content {
     background: var(--bg-sidebar);
-    border: 1px solid var(--border);
+    /* A-7: see --border-strong in :root. */
+    border: 1px solid var(--border-strong);
     border-radius: 16px;
     width: 500px;
     max-width: 90%;
@@ -678,7 +754,14 @@ select {
     font-size: 22px;
     line-height: 1;
     cursor: pointer;
-    padding: 0 4px;
+    /* A-20: was padding: 0 4px, a ~22x14px hit area - below the 24x24 CSS px
+       minimum for the most important control in every modal. */
+    padding: 8px;
+    min-width: 24px;
+    min-height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border-radius: 6px;
     transition: color 0.15s, background-color 0.15s;
 }
@@ -745,6 +828,13 @@ select {
     opacity: 0;
 }
 
+/* A-3: as with the toggle switches, the real <input> is visually hidden, so
+   the default focus ring (painted on the input) was invisible. */
+.theme-option input:focus-visible + label .theme-preview {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
 .theme-option label {
     display: flex;
     flex-direction: column;
@@ -759,7 +849,11 @@ select {
     width: 48px;
     height: 34px;
     border-radius: 8px;
-    border: 2px solid var(--border);
+    /* A-7: var(--border) measured ~1.05-1.27:1 here, failing the 3:1
+       non-text minimum - the preview swatches (especially the near-white
+       "light" one on a light page) need a reliably visible boundary since
+       their fill is the whole point of the preview. */
+    border: 2px solid var(--border-strong);
     transition: border-color 0.15s;
 }
 
@@ -836,12 +930,31 @@ select {
 }
 
 /* ── Message / toast container ─────────────────────────── */
+/* U-1: this container lives in .content-scroll, outside every modal - and
+   modals are `position: fixed; inset: 0` with a blurred backdrop at
+   z-index: 100. Any message rendered here (including every one of
+   saveRuleFromEditor's 20+ validation-error exits) was painted underneath
+   that backdrop whenever a modal was open, i.e. invisible. Making the
+   container itself `position: fixed` with a higher z-index than `.modal`
+   lifts it above any open modal regardless of where it sits in the DOM, and
+   also means options.js no longer needs `window.scrollTo(...)` to bring it
+   into view (body has `overflow: hidden`, and the real scroller is
+   `.content-scroll` anyway - that scrollTo call never did anything useful).
+   */
 .message-container:empty {
     display: none;
 }
 
 .message-container {
-    margin-bottom: 20px;
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    width: min(560px, calc(100% - 40px));
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
 .message {
@@ -849,6 +962,7 @@ select {
     border-radius: 8px;
     font-size: 13px;
     border: 1px solid transparent;
+    box-shadow: var(--shadow-md);
 }
 
 .message.success {
@@ -861,5 +975,11 @@ select {
     background: rgba(239, 68, 68, 0.1);
     color: #f87171;
     border-color: rgba(239, 68, 68, 0.22);
+}
+
+.message.info {
+    background: rgba(51, 85, 224, 0.14);
+    color: #8ea2ff;
+    border-color: rgba(51, 85, 224, 0.3);
 }
 

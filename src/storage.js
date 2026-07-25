@@ -245,6 +245,24 @@ export class TurboMockStorage {
         }
     }
 
+    /**
+     * P-14: write a full, already-authoritative stats object directly,
+     * skipping the get-then-merge that updateStats() does. Used by
+     * background.js's throttled persistence, which already holds the
+     * complete current stats in memory — re-reading storage first is pure
+     * waste there (an extra storage.get on the hot throttled-flush path).
+     */
+    async setStatsDirect(stats) {
+        try {
+            const newStats = { ...stats, lastUpdated: new Date().toISOString() };
+            await chrome.storage.local.set({ [this.storageKeys.stats]: newStats });
+            return { success: true, stats: newStats };
+        } catch (error) {
+            console.error('Failed to set stats:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
     async getStats() {
         try {
             const result = await chrome.storage.local.get(this.storageKeys.stats);

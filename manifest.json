@@ -5,9 +5,8 @@
   "description": "Mock any API in 30 seconds, directly in your browser. Perfect for frontend development and testing.",
   "permissions": [
     "storage",
-    "activeTab",
     "contextMenus",
-    "declarativeNetRequest"
+    "declarativeNetRequestWithHostAccess"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -61,15 +60,15 @@
   "commands": {
     "toggle-extension": {
       "suggested_key": {
-        "default": "Ctrl+Shift+M",
-        "mac": "Command+Shift+M"
+        "default": "Alt+Shift+M",
+        "mac": "Alt+Shift+M"
       },
       "description": "Toggle TurboMock on/off"
     },
     "new-rule": {
       "suggested_key": {
-        "default": "Ctrl+Shift+N",
-        "mac": "Command+Shift+N"
+        "default": "Alt+Shift+N",
+        "mac": "Alt+Shift+N"
       },
       "description": "Create new mock rule"
     }

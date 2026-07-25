@@ -18,7 +18,7 @@
             </div>
 
             <nav class="nav-menu">
-                <button class="nav-item active" data-tab="general">
+                <button class="nav-item active" data-tab="general" aria-current="page">
                     <span class="nav-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
                     </span> General
@@ -52,7 +52,9 @@
             </header>
 
             <div class="content-scroll">
-                <div class="message-container" id="messageContainer"></div>
+                <!-- A-6: persistent live region so validation errors/success toasts are
+                     announced - must exist before text is inserted to fire reliably. -->
+                <div class="message-container" id="messageContainer" role="status" aria-live="polite" aria-atomic="true"></div>
                 <!-- General Settings Tab -->
                 <div class="tab-content active" data-tab="general">
                     <div class="settings-section">
@@ -62,11 +64,15 @@
                         <div class="setting-group">
                             <div class="setting-item">
                                 <div class="setting-info">
-                                    <label>Theme</label>
+                                    <!-- A-2: this label has no single control to associate via
+                                         `for` (it names a group of three radios, each of which
+                                         already has its own for-associated label below) -
+                                         connect it as the radiogroup's accessible name instead. -->
+                                    <label id="themeGroupLabel">Theme</label>
                                     <p class="setting-description">Choose your preferred color scheme</p>
                                 </div>
                                 <div class="setting-control">
-                                    <div class="theme-selector">
+                                    <div class="theme-selector" role="radiogroup" aria-labelledby="themeGroupLabel">
                                         <div class="theme-option">
                                             <input type="radio" name="theme" value="light" id="theme-light">
                                             <label for="theme-light">
@@ -95,40 +101,17 @@
                     </div>
 
                     <div class="settings-section">
-                        <h2>Notifications</h2>
-                        <p class="section-description">Control when and how TurboMock notifies you</p>
+                        <h2>Debugging</h2>
+                        <p class="section-description">Troubleshooting options</p>
 
                         <div class="setting-group">
+                            <!-- A-2: "Show Notifications" and "Auto Backup" removed - neither
+                                 was ever read by any runtime code (no notification is ever
+                                 raised, nothing creates a backup) and the `notifications`
+                                 permission isn't even in the manifest. See G-11. -->
                             <div class="setting-item">
                                 <div class="setting-info">
-                                    <label>Show Notifications</label>
-                                    <p class="setting-description">Display notifications for rule matches and updates
-                                    </p>
-                                </div>
-                                <div class="setting-control">
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="notifications" checked>
-                                        <span class="slider"></span>
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div class="setting-item">
-                                <div class="setting-info">
-                                    <label>Auto Backup</label>
-                                    <p class="setting-description">Automatically backup your rules to local storage</p>
-                                </div>
-                                <div class="setting-control">
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="autoBackup" checked>
-                                        <span class="slider"></span>
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div class="setting-item">
-                                <div class="setting-info">
-                                    <label>Debug Mode</label>
+                                    <label for="debugMode">Debug Mode</label>
                                     <p class="setting-description">Enable detailed console logging for troubleshooting
                                     </p>
                                 </div>
@@ -137,6 +120,41 @@
                                         <input type="checkbox" id="debugMode">
                                         <span class="slider"></span>
                                     </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- G-8: Chaos Mode is fully implemented in content/injected.js (random
+                         request-failure injection, both fetch and XHR) but previously had no
+                         control anywhere in the product. -->
+                    <div class="settings-section">
+                        <h2>Chaos Mode</h2>
+                        <p class="section-description">Randomly fail requests to test how your app handles real-world
+                            network failures</p>
+
+                        <div class="setting-group">
+                            <div class="setting-item">
+                                <div class="setting-info">
+                                    <label for="chaosModeEnabled">Enable Chaos Mode</label>
+                                    <p class="setting-description">Injects random request failures at the rate below
+                                    </p>
+                                </div>
+                                <div class="setting-control">
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="chaosModeEnabled">
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="setting-item">
+                                <div class="setting-info">
+                                    <label for="chaosFailureRate">Failure Rate (%)</label>
+                                    <p class="setting-description">Percentage of requests to randomly fail (0-100)</p>
+                                </div>
+                                <div class="setting-control">
+                                    <input type="number" id="chaosFailureRate" value="10" min="0" max="100" step="1">
                                 </div>
                             </div>
                         </div>
@@ -186,35 +204,11 @@
 
                 <!-- Advanced Settings Tab -->
                 <div class="tab-content" data-tab="advanced">
-                    <div class="settings-section">
-                        <h2>Advanced Configuration</h2>
-                        <p class="section-description">Advanced options for power users</p>
-
-                        <div class="setting-group">
-                            <div class="setting-item">
-                                <div class="setting-info">
-                                    <label>Default Headers</label>
-                                    <p class="setting-description">Default headers to add to all mock responses (JSON
-                                        format)</p>
-                                </div>
-                                <div class="setting-control">
-                                    <textarea id="defaultHeaders" placeholder='{"X-Mock-Source": "TurboMock"}'
-                                        rows="3"></textarea>
-                                </div>
-                            </div>
-
-                            <div class="setting-item">
-                                <div class="setting-info">
-                                    <label>Request Timeout</label>
-                                    <p class="setting-description">Timeout for mock responses (milliseconds)</p>
-                                </div>
-                                <div class="setting-control">
-                                    <input type="number" id="requestTimeout" value="30000" min="100" max="60000">
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
+                    <!-- G-11: "Default Headers" and "Request Timeout" removed - neither was
+                         ever read by the interceptor or any other runtime code, so both were
+                         inert switches that misled users into thinking they did something.
+                         Wiring `defaultHeaders` into content/injected.js is out of scope for
+                         this file (F4 owns options/* only). -->
                     <div class="settings-section">
                         <h2>Stored Data</h2>
                         <p class="section-description">Inspect everything TurboMock has saved locally</p>
@@ -242,25 +236,32 @@
                     </div>
                 </div>
             </div>
+        </main>
+        <!-- A-20: closes the main-content element opened above; it was previously never closed. -->
     </div>
 
     <!-- Data Viewer Modal -->
-    <div class="modal" id="dataModal">
-        <div class="modal-content large">
+    <!-- A-4: role="dialog"/aria-modal/aria-labelledby give screen readers a signal that a
+         dialog opened and what its accessible name is; focus move/trap/restore is handled
+         in options.js (openModal()/closeModalElement()). -->
+    <div class="modal" id="dataModal" role="dialog" aria-modal="true" aria-labelledby="dataModalTitle">
+        <div class="modal-content large" tabindex="-1">
             <div class="modal-header">
-                <h3>All Stored Data</h3>
-                <button class="modal-close" data-action="close-modal" data-modal="dataModal">×</button>
+                <h3 id="dataModalTitle">All Stored Data</h3>
+                <button class="modal-close" data-action="close-modal" data-modal="dataModal" aria-label="Close dialog"><span aria-hidden="true">×</span></button>
             </div>
             <div class="modal-body">
                 <div class="data-viewer">
-                    <div class="data-tabs">
-                        <button class="data-tab active" data-action="switch-data-tab" data-tab-name="rules">Rules</button>
-                        <button class="data-tab" data-action="switch-data-tab" data-tab-name="settings">Settings</button>
-                        <button class="data-tab" data-action="switch-data-tab" data-tab-name="stats">Statistics</button>
-                        <button class="data-tab" data-action="switch-data-tab" data-tab-name="raw">Raw Data</button>
+                    <!-- A-11: minimal ARIA tabs pattern - previously four identical,
+                         unlabelled buttons with no role/aria-selected at all. -->
+                    <div class="data-tabs" role="tablist" aria-label="Stored data view">
+                        <button class="data-tab active" role="tab" aria-selected="true" aria-controls="dataDisplay" data-action="switch-data-tab" data-tab-name="rules">Rules</button>
+                        <button class="data-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="dataDisplay" data-action="switch-data-tab" data-tab-name="settings">Settings</button>
+                        <button class="data-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="dataDisplay" data-action="switch-data-tab" data-tab-name="stats">Statistics</button>
+                        <button class="data-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="dataDisplay" data-action="switch-data-tab" data-tab-name="raw">Raw Data</button>
                     </div>
                     <div class="data-content">
-                        <textarea id="dataDisplay" readonly></textarea>
+                        <textarea id="dataDisplay" role="tabpanel" readonly></textarea>
                     </div>
                 </div>
             </div>
@@ -268,11 +269,11 @@
     </div>
 
     <!-- Confirmation Modal -->
-    <div class="modal" id="confirmModal">
-        <div class="modal-content">
+    <div class="modal" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="modal-content" tabindex="-1">
             <div class="modal-header">
                 <h3 id="confirmTitle">Confirm Action</h3>
-                <button class="modal-close" data-action="close-confirm">×</button>
+                <button class="modal-close" data-action="close-confirm" aria-label="Close dialog"><span aria-hidden="true">×</span></button>
             </div>
             <div class="modal-body">
                 <p id="confirmMessage">Are you sure you want to proceed?</p>
@@ -285,11 +286,11 @@
     </div>
 
     <!-- Rule Editor Modal -->
-    <div class="modal" id="ruleEditorModal">
-        <div class="modal-content large">
+    <div class="modal" id="ruleEditorModal" role="dialog" aria-modal="true" aria-labelledby="ruleEditorTitle">
+        <div class="modal-content large" tabindex="-1">
             <div class="modal-header">
                 <h3 id="ruleEditorTitle">Edit Rule</h3>
-                <button class="modal-close" data-action="close-modal" data-modal="ruleEditorModal">×</button>
+                <button class="modal-close" data-action="close-modal" data-modal="ruleEditorModal" aria-label="Close dialog"><span aria-hidden="true">×</span></button>
             </div>
             <div class="modal-body">
                 <form id="ruleForm">

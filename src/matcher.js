@@ -9,36 +9,97 @@
 
     // Rule types handled by the interceptor (fetch/XHR patch). 'headers' and
     // 'queryparams' are DNR-backed and are never matched here.
-    const INTERCEPTOR_TYPES = ['mock', 'block', 'delay', 'redirect'];
+    const INTERCEPTOR_TYPES = new Set(['mock', 'block', 'delay', 'redirect']);
+
+    // Compiled-pattern cache (P-4): matchUrl is called once per enabled rule on
+    // every intercepted request, so recompiling a RegExp per call is pure waste.
+    // Keyed by the raw pattern string; capped so a stream of unique/generated
+    // patterns can't grow this unboundedly.
+    const PATTERN_CACHE_MAX = 500;
+    const patternCache = new Map();
+
+    // Crude nested-quantifier detector used as a ReDoS guard (S-10 / Q-30).
+    // Catches the classic catastrophic-backtracking shapes such as (a+)+,
+    // (a*)*, (.+)+, (\d*)* etc. Not exhaustive, but cheap and zero false
+    // positives on ordinary patterns.
+    const NESTED_QUANTIFIER_RE = /\([^()]*[+*][^()]*\)[+*]/;
+
+    // Single-slot memo for the last URL's lowercase form (P-4): within one
+    // findMatchingRule scan, matchUrl is called repeatedly with the SAME url
+    // across many rules, so this turns an O(rules) toLowerCase() cost into
+    // O(1) for everything after the first substring-match rule.
+    let lastUrl = null;
+    let lastUrlLower = null;
+
+    /**
+     * Compile (and cache) a URL pattern into a matchable descriptor.
+     * - pattern wrapped in /.../ -> regex (checked FIRST, see Q-3)
+     * - pattern contains '*' -> wildcard, full-match regex (also covers pattern === '*')
+     * - otherwise -> substring match
+     * Malformed, empty, or potentially-catastrophic regex bodies compile to
+     * a 'never' descriptor (fail closed) rather than throwing or hanging.
+     */
+    function compilePattern(pattern) {
+        const cached = patternCache.get(pattern);
+        if (cached) return cached;
+
+        let compiled;
+        try {
+            if (pattern.startsWith('/') && pattern.endsWith('/')) {
+                const regexBody = pattern.slice(1, -1);
+                if (regexBody.length === 0) {
+                    // Q-10: '/' or '//' must not become an empty regex that matches everything.
+                    compiled = { kind: 'never' };
+                } else if (NESTED_QUANTIFIER_RE.test(regexBody)) {
+                    console.error('TurboMock: refusing potentially catastrophic regex pattern:', pattern);
+                    compiled = { kind: 'never' };
+                } else {
+                    compiled = { kind: 'regex', regex: new RegExp(regexBody, 'i') };
+                }
+            } else if (pattern.includes('*')) {
+                const regexPattern = pattern
+                    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                    .replace(/\\\*/g, '.*');
+                compiled = { kind: 'regex', regex: new RegExp('^' + regexPattern + '$', 'i') };
+            } else {
+                compiled = { kind: 'substring', lower: pattern.toLowerCase() };
+            }
+        } catch (error) {
+            console.error('Error compiling URL pattern:', error);
+            compiled = { kind: 'never' };
+        }
+
+        if (patternCache.size >= PATTERN_CACHE_MAX) {
+            const oldestKey = patternCache.keys().next().value;
+            patternCache.delete(oldestKey);
+        }
+        patternCache.set(pattern, compiled);
+        return compiled;
+    }
 
     /**
      * Match a URL against a pattern.
+     * - pattern wrapped in /.../ -> regex test (checked FIRST — see Q-3: a
+     *   regex containing '*' must not be misread as a wildcard)
      * - pattern contains '*' -> wildcard, full-match regex (also covers pattern === '*')
-     * - pattern wrapped in /.../ -> regex test
      * - otherwise -> substring match
      * All comparisons are case-insensitive.
      */
     function matchUrl(url, pattern) {
         if (!url || !pattern) return false;
 
-        try {
-            if (pattern.includes('*')) {
-                const regexPattern = pattern
-                    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                    .replace(/\\\*/g, '.*');
-                const regex = new RegExp('^' + regexPattern + '$', 'i');
-                return regex.test(url);
-            } else if (pattern.startsWith('/') && pattern.endsWith('/')) {
-                const regexBody = pattern.slice(1, -1);
-                const regex = new RegExp(regexBody, 'i');
-                return regex.test(url);
-            } else {
-                return url.toLowerCase().includes(pattern.toLowerCase());
-            }
-        } catch (error) {
-            console.error('Error matching URL pattern:', error);
-            return false;
+        const compiled = compilePattern(pattern);
+        if (compiled.kind === 'never') return false;
+
+        if (compiled.kind === 'regex') {
+            return compiled.regex.test(url);
         }
+
+        if (url !== lastUrl) {
+            lastUrl = url;
+            lastUrlLower = url.toLowerCase();
+        }
+        return lastUrlLower.includes(compiled.lower);
     }
 
     /**
@@ -97,7 +158,7 @@
             if (!rule || !rule.enabled) continue;
 
             const type = rule.type || 'mock';
-            if (INTERCEPTOR_TYPES.indexOf(type) === -1) continue;
+            if (!INTERCEPTOR_TYPES.has(type)) continue;
 
             const match = rule.match || {};
             const ruleMethod = (match.method || '*').toUpperCase();

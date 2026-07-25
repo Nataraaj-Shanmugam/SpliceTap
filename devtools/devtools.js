@@ -8,10 +8,36 @@
  * them (see TODO.md §1.5). The interception log is populated out-of-band by
  * content/injected.js -> content/content.js -> service_worker/background.js
  * and polled by devtools/panel.js instead.
+ *
+ * Panel visibility (P-12 / performance): panel.js polls the background
+ * service worker on a timer, which resets the SW's idle timer and keeps it
+ * resident for as long as the panel is open — even while the user is
+ * looking at a completely different DevTools tab (Elements, Network, ...).
+ * chrome.devtools.panels.ExtensionPanel exposes onShown/onHidden for exactly
+ * this: onShown hands us the panel document's own `window`, which lets us
+ * call hooks the panel page defines on itself to pause/resume its polling
+ * loop. onHidden fires with no arguments, so we remember the last
+ * panelWindow we were given and reuse it.
  */
 
 (function() {
     'use strict';
+
+    let lastPanelWindow = null;
+
+    // Best-effort call into the panel document. Guarded because the panel
+    // page may not have finished loading yet (onShown can fire before the
+    // panel's own DOMContentLoaded in some Chrome versions), and because we
+    // never want a panel-side bug to break DevTools panel lifecycle.
+    function notifyPanel(win, hookName) {
+        try {
+            if (win && typeof win[hookName] === 'function') {
+                win[hookName]();
+            }
+        } catch (error) {
+            console.error('TurboMock: failed to notify panel (' + hookName + ')', error);
+        }
+    }
 
     // Create DevTools panel with error handling
     chrome.devtools.panels.create(
@@ -27,16 +53,30 @@
 
             console.log('TurboMock DevTools panel created successfully');
 
-            // Panel lifecycle events
-            panel.onShown.addListener(function(panelWindow) {
-                console.log('TurboMock panel shown');
-                // Could refresh data here if needed
-            });
+            if (!panel) {
+                return;
+            }
 
-            panel.onHidden.addListener(function() {
-                console.log('TurboMock panel hidden');
-                // Could pause monitoring here if needed
-            });
+            // Don't assume onShown/onHidden exist — check before wiring up,
+            // since this is the only lifecycle hook available and we still
+            // want the panel to work (just always-polling) if it's ever
+            // missing.
+            if (panel.onShown && typeof panel.onShown.addListener === 'function') {
+                panel.onShown.addListener(function(panelWindow) {
+                    console.log('TurboMock panel shown');
+                    if (panelWindow) {
+                        lastPanelWindow = panelWindow;
+                    }
+                    notifyPanel(lastPanelWindow, '__turboMockPanelShown');
+                });
+            }
+
+            if (panel.onHidden && typeof panel.onHidden.addListener === 'function') {
+                panel.onHidden.addListener(function() {
+                    console.log('TurboMock panel hidden');
+                    notifyPanel(lastPanelWindow, '__turboMockPanelHidden');
+                });
+            }
         }
     );
 

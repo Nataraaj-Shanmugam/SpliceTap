@@ -23,6 +23,9 @@
     let hostEl = null;
     let shadow = null;
     let editingRule = null;
+    let previousActiveElement = null; // A-5: focus to restore on close
+    let bodyWasInert = false; // A-5: host page's own inert state, if any, to restore on close
+    const HINT_SEEN_KEY = 'tmOverlayHintSeen'; // U-13: one-time first-run tip
 
     const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', '*'];
 
@@ -35,8 +38,26 @@
         ['queryparams', 'Query Params']
     ];
 
-    const STYLES = `
-        :host { all: initial; }
+    // The ~4 KB style string and the markup() DOM builder below are the bulk
+    // of this script's cost. Neither runs at content-script load time; both
+    // are deferred until the first 'openRuleOverlay' message actually
+    // arrives (see ensureHost(), called only from open()) so that the
+    // overwhelming majority of page loads — which never open the editor —
+    // pay only the cost of registering the message listener (P-9).
+    let _stylesCache = null;
+
+    function getStyles() {
+        if (_stylesCache !== null) return _stylesCache;
+
+        _stylesCache = `
+        :host {
+            all: initial;
+            /* all: initial resets inherited direction/color-scheme too;
+               re-establish sane values so RTL pages and native form-control
+               chrome aren't broken by our isolation (A-13). */
+            direction: inherit;
+            color-scheme: dark light;
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
         .tm-backdrop {
@@ -50,6 +71,7 @@
             padding: 48px 16px;
             overflow-y: auto;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            font-size: 1rem;
         }
 
         .tm-panel {
@@ -79,23 +101,49 @@
             background: #4f6ef7;
             color: #fff;
             display: flex; align-items: center; justify-content: center;
-            font-size: 11px; font-weight: 700; letter-spacing: -0.3px;
+            font-size: 0.6875rem; font-weight: 700; letter-spacing: -0.3px;
         }
 
-        .tm-title { font-size: 15px; font-weight: 600; }
+        .tm-title { font-size: 0.9375rem; font-weight: 600; }
 
         .tm-x {
             background: transparent; border: none; cursor: pointer;
-            color: #94a3b8; font-size: 22px; line-height: 1;
+            color: #94a3b8; font-size: 1.375rem; line-height: 1;
             padding: 2px 6px; border-radius: 6px;
         }
         .tm-x:hover { background: rgba(148, 163, 184, 0.14); color: #f1f5f9; }
+
+        .tm-hintbar {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            margin: 14px 20px 0;
+            padding: 10px 12px;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            line-height: 1.4;
+            background: rgba(79, 110, 247, 0.14);
+            color: #dbe4ff;
+            border: 1px solid rgba(79, 110, 247, 0.28);
+        }
+        .tm-hintbar[hidden] { display: none; }
+        .tm-hintbar-text { flex: 1; }
+        .tm-hintbar-x {
+            background: transparent; border: none; cursor: pointer;
+            color: inherit; font-size: 1rem; line-height: 1;
+            padding: 0 2px; flex-shrink: 0;
+        }
+        .tm-light .tm-hintbar {
+            background: rgba(79, 110, 247, 0.08);
+            color: #2c3e6b;
+            border-color: rgba(79, 110, 247, 0.22);
+        }
 
         .tm-body { padding: 18px 20px; max-height: 65vh; overflow-y: auto; }
 
         .tm-row { display: flex; gap: 12px; }
         .tm-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; flex: 1; min-width: 0; }
-        .tm-field > label { font-size: 12.5px; font-weight: 600; color: #f1f5f9; }
+        .tm-field > label { font-size: 0.78125rem; font-weight: 600; color: #f1f5f9; }
 
         .tm-field input[type="text"],
         .tm-field input[type="number"],
@@ -107,14 +155,14 @@
             color: #f1f5f9;
             border-radius: 6px;
             padding: 9px 11px;
-            font-size: 13px;
+            font-size: 0.8125rem;
             font-family: inherit;
             outline: none;
         }
 
         .tm-field textarea {
             font-family: ui-monospace, 'SF Mono', Consolas, Menlo, monospace;
-            font-size: 12.5px;
+            font-size: 0.78125rem;
             line-height: 1.5;
             resize: vertical;
         }
@@ -124,9 +172,9 @@
             box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.18);
         }
 
-        .tm-hint { font-size: 11.5px; color: #94a3b8; line-height: 1.4; }
+        .tm-hint { font-size: 0.71875rem; color: #94a3b8; line-height: 1.4; }
 
-        .tm-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #f1f5f9; }
+        .tm-check { display: flex; align-items: center; gap: 8px; font-size: 0.8125rem; color: #f1f5f9; }
         .tm-check input { width: 15px; height: 15px; accent-color: #4f6ef7; }
 
         .tm-foot {
@@ -136,7 +184,7 @@
         }
 
         .tm-btn {
-            border-radius: 8px; padding: 9px 18px; font-size: 13px;
+            border-radius: 8px; padding: 9px 18px; font-size: 0.8125rem;
             font-weight: 600; cursor: pointer; font-family: inherit;
             border: 1px solid transparent;
         }
@@ -150,7 +198,7 @@
             margin-bottom: 14px;
             padding: 10px 14px;
             border-radius: 8px;
-            font-size: 12.5px;
+            font-size: 0.78125rem;
             background: rgba(239, 68, 68, 0.12);
             color: #f87171;
             border: 1px solid rgba(239, 68, 68, 0.28);
@@ -163,6 +211,7 @@
         .tm-row[data-types].tm-visible { display: flex; }
 
         /* Light theme (mirrors the extension's theme setting) */
+        .tm-light { color-scheme: light; }
         .tm-light .tm-panel { background: #ffffff; color: #16202e; border-color: rgba(15, 23, 42, 0.12); }
         .tm-light .tm-head, .tm-light .tm-foot { border-color: rgba(15, 23, 42, 0.12); }
         .tm-light .tm-title, .tm-light .tm-field > label, .tm-light .tm-check { color: #16202e; }
@@ -174,19 +223,27 @@
         .tm-light .tm-btn-secondary:hover { background: #e2e8f0; }
     `;
 
+        return _stylesCache;
+    }
+
     function markup() {
         const typeOptions = RULE_TYPES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
         const methodOptions = METHODS.map(m => `<option value="${m}">${m === '*' ? 'Any (*)' : m}</option>`).join('');
 
         return `
         <div class="tm-backdrop" part="backdrop">
-          <div class="tm-panel" role="dialog" aria-modal="true" aria-label="TurboMock rule editor">
+          <div class="tm-panel" role="dialog" aria-modal="true" aria-labelledby="tmTitle">
             <div class="tm-head">
               <div class="tm-brand">
                 <div class="tm-logo">TM</div>
-                <div class="tm-title" id="tmTitle">New Rule</div>
+                <h2 class="tm-title" id="tmTitle">New Rule</h2>
               </div>
               <button class="tm-x" id="tmClose" title="Close">&times;</button>
+            </div>
+
+            <div class="tm-hintbar" id="tmHintBar" hidden>
+              <span class="tm-hintbar-text">TurboMock opens this editor over your current page. Press Esc or click outside to close it.</span>
+              <button type="button" class="tm-hintbar-x" id="tmHintClose" aria-label="Dismiss tip">&times;</button>
             </div>
 
             <div class="tm-body">
@@ -316,10 +373,18 @@
 
         hostEl = document.createElement('div');
         hostEl.id = HOST_ID;
-        shadow = hostEl.attachShadow({ mode: 'open' });
+        // S-1: 'closed' mode keeps `hostEl.shadowRoot` returning null to the
+        // host page's own scripts (a page-level MutationObserver can still
+        // spot the host element, but it can no longer read field values or
+        // script a click on Save). We keep the real reference in the
+        // `shadow` closure variable so our own code is unaffected. This is
+        // not airtight — a page that pre-patches Element.prototype.attachShadow
+        // before this content script runs could still intercept the call —
+        // but that's a known, accepted residual risk.
+        shadow = hostEl.attachShadow({ mode: 'closed' });
 
         const style = document.createElement('style');
-        style.textContent = STYLES;
+        style.textContent = getStyles();
         shadow.appendChild(style);
 
         const wrap = document.createElement('div');
@@ -330,9 +395,16 @@
 
         $('tmClose').addEventListener('click', close);
         $('tmCancel').addEventListener('click', close);
-        $('tmSave').addEventListener('click', save);
+        // S-1 (defense in depth): closed mode already keeps the page from
+        // getting a reference to click this button itself, but also refuse
+        // any non-user-generated click event outright.
+        $('tmSave').addEventListener('click', (e) => {
+            if (!e.isTrusted) return;
+            save();
+        });
         $('tmType').addEventListener('change', () => applyTypeVisibility());
         $('tmMode').addEventListener('change', () => applyTypeVisibility());
+        $('tmHintClose').addEventListener('click', dismissHint);
 
         // Close on backdrop click (but not when clicking inside the panel).
         shadow.querySelector('.tm-backdrop').addEventListener('click', (e) => {
@@ -342,10 +414,42 @@
         document.addEventListener('keydown', onKeydown, true);
     }
 
+    function getFocusableElements() {
+        if (!shadow) return [];
+        const selector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+        return Array.from(shadow.querySelectorAll(selector)).filter((el) => {
+            return !el.disabled && el.offsetParent !== null;
+        });
+    }
+
     function onKeydown(e) {
-        if (e.key === 'Escape' && hostEl && hostEl.isConnected) {
+        if (!hostEl || !hostEl.isConnected) return;
+
+        if (e.key === 'Escape') {
             e.stopPropagation();
             close();
+            return;
+        }
+
+        // A-5: trap Tab/Shift+Tab within the dialog so focus can't leak into
+        // the underlying host page.
+        if (e.key === 'Tab') {
+            const focusable = getFocusableElements();
+            if (!focusable.length) return;
+
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            const active = shadow.activeElement;
+
+            if (e.shiftKey) {
+                if (active === first || !shadow.contains(active)) {
+                    e.preventDefault();
+                    last.focus();
+                }
+            } else if (active === last || !shadow.contains(active)) {
+                e.preventDefault();
+                first.focus();
+            }
         }
     }
 
@@ -524,6 +628,27 @@
         return rule;
     }
 
+    /**
+     * Q-19: an edit whose underlying rule was deleted elsewhere (another tab,
+     * the popup, the options page) must not silently resurrect it — saveRule
+     * is an unconditional upsert on the background side, so a stale `id` gets
+     * re-created as if it had never been removed. We can't change the
+     * saveRule message contract (background.js is owned elsewhere), so we
+     * do a best-effort existence check with the existing `getRules` message
+     * immediately before saving. If the check itself fails (e.g. the
+     * background is momentarily unreachable) we fail open and let the save
+     * proceed rather than blocking the user on an unrelated transient error.
+     */
+    async function ruleStillExistsUpstream(ruleId) {
+        try {
+            const state = await chrome.runtime.sendMessage({ type: 'getRules' });
+            if (!state || !Array.isArray(state.rules)) return true;
+            return state.rules.some((r) => r.id === ruleId);
+        } catch (e) {
+            return true;
+        }
+    }
+
     async function save() {
         clearError();
 
@@ -540,6 +665,16 @@
         btn.textContent = 'Saving…';
 
         try {
+            if (editingRule && editingRule.id) {
+                const stillExists = await ruleStillExistsUpstream(editingRule.id);
+                if (!stillExists) {
+                    showError('This rule was deleted elsewhere and no longer exists. Close this editor and create a new rule instead of saving this edit.');
+                    btn.disabled = false;
+                    btn.textContent = 'Save Rule';
+                    return;
+                }
+            }
+
             const response = await chrome.runtime.sendMessage({ type: 'saveRule', rule });
             if (!response || !response.success) {
                 throw new Error((response && response.error) || 'Background rejected the rule.');
@@ -558,6 +693,50 @@
         hostEl = null;
         shadow = null;
         editingRule = null;
+
+        // A-5: give the host page back control of its own document, and
+        // restore focus to wherever it was before the overlay opened.
+        if (document.body && 'inert' in document.body && !bodyWasInert) {
+            document.body.inert = false;
+        }
+        bodyWasInert = false;
+
+        if (previousActiveElement && typeof previousActiveElement.focus === 'function') {
+            try {
+                previousActiveElement.focus({ preventScroll: true });
+            } catch (e) {
+                // Element may no longer be focusable/attached; nothing to do.
+            }
+        }
+        previousActiveElement = null;
+    }
+
+    function dismissHint() {
+        const bar = shadow && $('tmHintBar');
+        if (bar) bar.hidden = true;
+        try {
+            chrome.storage.local.set({ [HINT_SEEN_KEY]: true });
+        } catch (e) {
+            // storage unavailable; the hint will just show again next time.
+        }
+    }
+
+    /** U-13: show a lightweight, dismissible, one-time tip the first time
+     *  the overlay ever appears in this browser profile, so users understand
+     *  it's an in-page editor over their current tab. */
+    function maybeShowHint() {
+        const bar = $('tmHintBar');
+        if (!bar) return;
+        try {
+            chrome.storage.local.get([HINT_SEEN_KEY], (result) => {
+                if (chrome.runtime.lastError) return;
+                if (!result || !result[HINT_SEEN_KEY]) {
+                    bar.hidden = false;
+                }
+            });
+        } catch (e) {
+            // storage unavailable; skip the hint rather than fail the overlay.
+        }
     }
 
     async function applyTheme() {
@@ -574,10 +753,25 @@
     }
 
     function open(message) {
+        const isFreshOpen = !(hostEl && document.documentElement.contains(hostEl));
+
+        if (isFreshOpen) {
+            // A-5: remember what had focus so we can put it back on close,
+            // and make the underlying page non-interactive/non-readable by
+            // assistive tech while the dialog is up (our host element is a
+            // sibling of <body> under <html>, so this doesn't affect it).
+            previousActiveElement = document.activeElement;
+            if (document.body && 'inert' in document.body) {
+                bodyWasInert = document.body.inert === true;
+                document.body.inert = true;
+            }
+        }
+
         ensureHost();
         editingRule = message.rule || null;
         populate(editingRule, message.prefillUrl);
         applyTheme();
+        maybeShowHint();
 
         const nameInput = $('tmName');
         if (nameInput) nameInput.focus();

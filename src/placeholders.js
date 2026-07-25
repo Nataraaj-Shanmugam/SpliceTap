@@ -7,21 +7,24 @@
 (function (global) {
     'use strict';
 
+    // Any body without this substring cannot contain a placeholder token, so
+    // the entire replace/parse pipeline below can be skipped (P-7).
+    const PLACEHOLDER_MARKER = '{{';
+
     /**
-     * Process dynamic response placeholders.
-     * Accepts an object or a string body; returns the same shape:
-     * object in -> object out (via JSON round-trip), string in -> string out.
+     * Process dynamic response placeholders, always returning a string.
+     * This is the actual work function; processDynamicResponse() wraps it to
+     * preserve the legacy object-in/object-out shape. Callers that are about
+     * to JSON.stringify the result anyway (e.g. content/injected.js) can call
+     * this directly to avoid the redundant parse + re-stringify (P-7 #3).
      */
-    function processDynamicResponse(body, requestDetails = {}) {
-        if (!body) return body;
-
-        let bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
-
-        // Date/time placeholders
-        bodyStr = bodyStr.replace(/{{timestamp}}/g, new Date().toISOString());
-        bodyStr = bodyStr.replace(/{{timestamp_ms}}/g, Date.now().toString());
-        bodyStr = bodyStr.replace(/{{date}}/g, new Date().toISOString().split('T')[0]);
-        bodyStr = bodyStr.replace(/{{time}}/g, new Date().toTimeString().split(' ')[0]);
+    function processDynamicResponseToString(bodyStr, requestDetails = {}) {
+        // Date/time placeholders — arguments are replacer callbacks so Date()
+        // is only constructed when the token is actually present (P-7 #2).
+        bodyStr = bodyStr.replace(/{{timestamp}}/g, () => new Date().toISOString());
+        bodyStr = bodyStr.replace(/{{timestamp_ms}}/g, () => Date.now().toString());
+        bodyStr = bodyStr.replace(/{{date}}/g, () => new Date().toISOString().split('T')[0]);
+        bodyStr = bodyStr.replace(/{{time}}/g, () => new Date().toTimeString().split(' ')[0]);
 
         // GUID/UUID
         bodyStr = bodyStr.replace(/{{guid}}/g, () =>
@@ -63,28 +66,50 @@
             Math.random() > 0.5 ? 'true' : 'false'
         );
 
-        // Request details (if provided)
+        // Request details (if provided). Callback form avoids treating '$'
+        // sequences inside the request URL/method as replacement patterns.
         if (requestDetails && requestDetails.url) {
-            bodyStr = bodyStr.replace(/{{request.url}}/g, requestDetails.url);
+            bodyStr = bodyStr.replace(/{{request\.url}}/g, () => requestDetails.url);
         }
         if (requestDetails && requestDetails.method) {
-            bodyStr = bodyStr.replace(/{{request.method}}/g, requestDetails.method);
+            bodyStr = bodyStr.replace(/{{request\.method}}/g, () => requestDetails.method);
         }
 
-        // Try to parse back to object if original was object
-        if (typeof body !== 'string') {
+        return bodyStr;
+    }
+
+    /**
+     * Process dynamic response placeholders.
+     * Accepts an object or a string body; returns the same shape:
+     * object in -> object out (via JSON round-trip), string in -> string out.
+     * Bodies with no '{{' token are returned untouched, skipping the entire
+     * replace pipeline and (for object input) both JSON operations (P-7 #1).
+     */
+    function processDynamicResponse(body, requestDetails = {}) {
+        if (!body) return body;
+
+        const isObject = typeof body !== 'string';
+        const bodyStr = isObject ? JSON.stringify(body) : body;
+
+        if (bodyStr.indexOf(PLACEHOLDER_MARKER) === -1) {
+            return body;
+        }
+
+        const processedStr = processDynamicResponseToString(bodyStr, requestDetails);
+
+        if (isObject) {
             try {
-                return JSON.parse(bodyStr);
+                return JSON.parse(processedStr);
             } catch (e) {
                 console.error('Failed to parse dynamic body:', e);
                 return body;
             }
         }
 
-        return bodyStr;
+        return processedStr;
     }
 
-    const api = { processDynamicResponse };
+    const api = { processDynamicResponse, processDynamicResponseToString };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;

@@ -31,7 +31,7 @@ Mock, block, delay, redirect, and rewrite any API call directly in your browser.
 ### Basic Usage
 
 1. **Create Your First Rule**:
-   - Click the TurboMock icon in your toolbar and click "New Rule", or right-click on any page and choose the TurboMock context-menu entry (which opens the options page with the current host prefilled)
+   - Click the TurboMock icon in your toolbar and click "New Rule", or right-click on any page and choose the TurboMock context-menu entry — both open the in-page rule editor overlay with the current host prefilled, falling back to the full options page only where the overlay can't run (e.g. `chrome://` pages, the Web Store)
    - Pick a **Rule Type**, configure the matching and behavior fields
    - Save — the rule takes effect immediately on matching requests
 
@@ -141,8 +141,8 @@ produces `{ "user": { "name": "Real", "role": "admin" } }` — `role` is overwri
 
 ## ⌨️ Keyboard Shortcuts
 
-- `Ctrl+Shift+M` (Cmd+Shift+M on Mac): Toggle extension on/off
-- `Ctrl+Shift+N` (Cmd+Shift+N on Mac): Create new rule
+- `Alt+Shift+M`: Toggle extension on/off (global, works on any page)
+- `Alt+Shift+N`: Create new rule — opens the in-page overlay on the active tab, falling back to the options page where the overlay can't run (global, works on any page)
 - `Ctrl+N`: Create new rule (in popup)
 - `Ctrl+F`: Focus search box (in popup)
 - `Ctrl+T`: Test all rules (in popup)
@@ -152,7 +152,7 @@ produces `{ "user": { "name": "Real", "role": "admin" } }` — `role` is overwri
 ## 🛠️ Advanced Features
 
 ### Rule Templates
-The rule editor includes ready-to-use presets, including: Success/Error/Not Found/Unauthorized responses, Delayed Response, GraphQL Mock, Patch Response, Block Request, Redirect to localhost, CORS Unblock (headers), and Custom User-Agent (headers).
+The rule editor's "Quick Template" dropdown includes six ready-to-use presets: GraphQL Mock, Patch Response, Block Request, Redirect to localhost, CORS Unblock (headers), and Custom User-Agent (headers).
 
 ### Import/Export
 - Export your rules as JSON files for backup or sharing
@@ -178,10 +178,12 @@ Supporting pieces:
 
 ### Permissions
 - `storage` — persist rules and settings locally
-- `activeTab` — read the active tab's host for the context-menu prefill
 - `contextMenus` — the right-click "create rule" entry
-- `notifications` — user-facing notifications
-- `declarativeNetRequest` — apply `headers` / `queryparams` rules at the network layer
+- `declarativeNetRequestWithHostAccess` — apply `headers` / `queryparams` rules at the network layer, scoped to the host(s) a rule's URL pattern matches
+- `<all_urls>` (host permission) — the in-page interceptor and rule-editor overlay need to run on whatever site you're mocking; there's no way to know that site in advance
+
+### Single Purpose & Privacy
+TurboMock's single purpose is local API request mocking and modification for development/testing. It does not collect, transmit, or sell any data: every rule, setting, and log entry stays in `chrome.storage` on your device (see Privacy & Security below), and nothing in the codebase makes a network request on the extension's own behalf.
 
 ### Browser Compatibility
 - **Chrome / Edge**: 120+ (full support; `minimum_chrome_version` is 120)

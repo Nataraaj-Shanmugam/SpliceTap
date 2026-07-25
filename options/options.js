@@ -27,6 +27,30 @@ const RULE_TYPE_LABELS = {
     queryparams: 'Query Params'
 };
 
+// Tab -> page title map (U-7: the top-bar heading never updated on tab switch).
+const TAB_TITLES = {
+    general: 'General Settings',
+    rules: 'Rules Management',
+    advanced: 'Advanced Configuration'
+};
+
+/**
+ * Q-10/S-2: options.js is a classic (non-module) script, but the shared
+ * `TurboMockUtils.validateUrlPattern` lives in src/utils.js, an ES module
+ * (`export class TurboMockUtils`). Rather than reimplementing pattern
+ * validation here, lazily dynamic-import the real module and cache the
+ * promise - dynamic `import()` is valid inside a classic script (unlike a
+ * static `import` declaration, which would require `type="module"`).
+ */
+let _turboMockUtilsPromise = null;
+function getTurboMockUtils() {
+    if (!_turboMockUtilsPromise) {
+        _turboMockUtilsPromise = import(chrome.runtime.getURL('src/utils.js'))
+            .then(mod => mod.TurboMockUtils);
+    }
+    return _turboMockUtilsPromise;
+}
+
 class OptionsManager {
     constructor() {
         this.settings = {};
@@ -34,6 +58,16 @@ class OptionsManager {
         this.rules = [];
         this.pendingConfirmAction = null;
         this.listeners = []; // Track listeners for cleanup
+
+        // U-4: dirty-tracking for the rule editor, the longest form in the
+        // product. Set true by genuine user edits (see setupEventListeners'
+        // #ruleForm input/change listener) and reset whenever the form is
+        // freshly populated or successfully saved.
+        this.ruleFormDirty = false;
+
+        // A-4: remembers what had focus before a modal opened, so it can be
+        // restored on close.
+        this._lastFocusedBeforeModal = null;
 
         this.init();
     }
@@ -271,7 +305,12 @@ class OptionsManager {
             this.updateRuleTypeVisibility('mock');
         }
 
-        modal.classList.add('show');
+        // U-4: the form was just populated programmatically (not by the
+        // user), so it isn't dirty yet. Reset after populate, since
+        // programmatic `.value =` assignment doesn't fire input/change.
+        this.ruleFormDirty = false;
+
+        this.openModal(modal);
     }
 
     /**
@@ -339,6 +378,18 @@ class OptionsManager {
 
         if (url.length > MAX_URL_LENGTH) {
             this.showMessage(`URL must be ${MAX_URL_LENGTH} characters or less`, 'error');
+            document.getElementById('ruleUrl').focus();
+            return;
+        }
+
+        // Q-10: `/` (and `//`) previously saved as a "regex" whose body is the
+        // empty string, which matches every request on every site
+        // (`new RegExp('', 'i').test(x) === true`). validateUrlPattern already
+        // rejects that - it just wasn't being called from either save path.
+        const TurboMockUtils = await getTurboMockUtils();
+        const urlValidation = TurboMockUtils.validateUrlPattern(url);
+        if (!urlValidation.isValid) {
+            this.showMessage(`Invalid URL pattern: ${urlValidation.error}`, 'error');
             document.getElementById('ruleUrl').focus();
             return;
         }
@@ -598,20 +649,47 @@ class OptionsManager {
             rule.created = new Date().toISOString();
         }
 
-        // Update local rules array. Replace (not shallow-merge) so switching a rule's
-        // type doesn't leave stale fields from its previous type (e.g. an old
-        // `response` object surviving a mock -> redirect conversion).
-        const existingIndex = this.rules.findIndex(r => r.id === rule.id);
-        if (existingIndex >= 0) {
-            const old = this.rules[existingIndex];
-            this.rules[existingIndex] = {
-                ...rule,
-                created: old.created || rule.created,
-                hitCount: old.hitCount,
-                testStatus: old.testStatus
-            };
-        } else {
-            this.rules.push(rule);
+        // CQ-Q3 (data loss): `this.rules` is only a snapshot taken when this
+        // tab last loaded/refreshed. If a rule was added or edited elsewhere
+        // (popup, in-page overlay, another options tab) while this tab sat
+        // open, `this.rules` no longer matches storage - and the previous
+        // code mutated that stale array locally, then sent the WHOLE thing
+        // back via `setRules` (a full bulk replace). That silently deleted
+        // anything added since this tab's snapshot was taken.
+        //
+        // Fix, in two parts:
+        //  1. Re-fetch the CURRENT authoritative rules from the background
+        //     right before persisting, instead of trusting `this.rules`.
+        //  2. Persist through `saveRule` (single-rule upsert) instead of
+        //     `setRules` (bulk replace). `saveRule` re-reads storage itself
+        //     inside the background (src/storage.js saveRule() calls
+        //     getRules() fresh, then updates only this one id) - so even if
+        //     another change lands in the gap between our getRules() below
+        //     and this saveRule() call, the worst case is a race on this one
+        //     rule id, never a wipe of every other rule.
+        let authoritativeRules = this.rules;
+        try {
+            const fresh = await chrome.runtime.sendMessage({ type: 'getRules' });
+            if (fresh && fresh.success && Array.isArray(fresh.rules)) {
+                authoritativeRules = fresh.rules;
+            }
+        } catch (e) {
+            // Background unreachable - fall back to the local snapshot;
+            // saveRule() below still upserts safely against whatever
+            // storage actually holds at that moment.
+        }
+
+        // The form only manages a subset of a rule's fields. Preserve
+        // whatever else storage has for this id (hit counts, test status,
+        // original creation time, import provenance) - storage.saveRule()
+        // replaces the stored rule with exactly what we send, so anything
+        // we don't carry forward here would be silently dropped.
+        const existing = authoritativeRules.find(r => r.id === rule.id);
+        if (existing) {
+            rule.created = existing.created || rule.created;
+            if (existing.hitCount !== undefined) rule.hitCount = existing.hitCount;
+            if (existing.testStatus !== undefined) rule.testStatus = existing.testStatus;
+            if (existing.imported !== undefined) rule.imported = existing.imported;
         }
 
         try {
@@ -619,16 +697,26 @@ class OptionsManager {
             // headers/queryparams rules, updates its in-memory rules, rebroadcasts
             // to open tabs, and re-syncs declarativeNetRequest. Writing storage
             // directly here would leave all of that stale.
-            const response = await chrome.runtime.sendMessage({ type: 'setRules', rules: this.rules });
+            const response = await chrome.runtime.sendMessage({ type: 'saveRule', rule });
             if (!response || !response.success) {
-                throw new Error((response && response.error) || 'Background did not accept the rules');
-            }
-            // Adopt the authoritative rules (with any dnrRuleId the background
-            // allocated) so subsequent edits preserve them.
-            if (Array.isArray(response.rules)) {
-                this.rules = response.rules;
+                throw new Error((response && response.error) || 'Background did not accept the rule');
             }
 
+            // Adopt the full authoritative list after saving (rather than the
+            // pre-save snapshot) so stats - and any later edit in this same
+            // tab - reflect what's actually in storage, including rules this
+            // tab never knew about.
+            const after = await chrome.runtime.sendMessage({ type: 'getRules' });
+            if (after && after.success && Array.isArray(after.rules)) {
+                this.rules = after.rules;
+            } else {
+                const idx = this.rules.findIndex(r => r.id === rule.id);
+                const savedRule = response.rule || rule;
+                if (idx >= 0) this.rules[idx] = savedRule;
+                else this.rules.push(savedRule);
+            }
+
+            this.ruleFormDirty = false;
             this.showMessage('Rule saved successfully!', 'success');
             this.loadStatistics();
             this.closeModal('ruleEditorModal');
@@ -683,18 +771,25 @@ class OptionsManager {
                 redirectDestination: 'http://localhost:3000/$1'
             },
             corsUnblock: {
+                // C-15: this used to default to url: '*' - one click applied
+                // Access-Control-Allow-Origin: * to every request on every
+                // site the user visits for as long as the rule stayed
+                // enabled. Scope the default to localhost (the actual "unblock
+                // CORS for my local dev API" use case); the user still has to
+                // widen it deliberately if they mean something broader.
                 type: 'headers',
                 method: '*',
-                url: '*',
+                url: '*://localhost/*',
                 headersModResponse: JSON.stringify([
                     { op: 'set', name: 'Access-Control-Allow-Origin', value: '*' },
                     { op: 'set', name: 'Access-Control-Allow-Headers', value: '*' }
                 ], null, 2)
             },
             customUserAgent: {
+                // C-15: same issue - was scoped to url: '*'.
                 type: 'headers',
                 method: '*',
-                url: '*',
+                url: '*://localhost/*',
                 headersModRequest: JSON.stringify([
                     { op: 'set', name: 'User-Agent', value: 'Mozilla/5.0 (TurboMock)' }
                 ], null, 2)
@@ -754,7 +849,19 @@ class OptionsManager {
             }
         }
 
-        this.showMessage('Template applied — review and adjust before saving.', 'info');
+        // C-15: headers rules are a real network-layer modifyHeaders rule
+        // (declarativeNetRequest) - warn explicitly when the URL pattern is
+        // (or stays) unscoped, since e.g. disabling CORS for every site is a
+        // genuine security downgrade, not just a mocking convenience.
+        if (tpl.type === 'headers') {
+            this.showMessage(
+                'Template applied - this modifies headers on every request matching the URL pattern. ' +
+                'Narrow the pattern before saving; do not leave it as "*" (every site).',
+                'info'
+            );
+        } else {
+            this.showMessage('Template applied — review and adjust before saving.', 'info');
+        }
     }
 
     getStatusText(code) {
@@ -786,16 +893,27 @@ class OptionsManager {
         }
     }
 
+    // G-11: `notifications`, `autoBackup`, `defaultHeaders`, `maxResponseSize`,
+    // `requestTimeout` and `cacheSize` used to be collected, validated and
+    // (for two of them) saved from form fields that don't even exist in the
+    // HTML - none of the six are read by any runtime code (interceptor,
+    // background, storage). `maxResponseSize`/`cacheSize` had zero UI at
+    // all, so validateSettings() (U-8) could fail forever on values the user
+    // has no way to see or change. Wiring them into content/injected.js is
+    // out of scope for this file; removed rather than left as switches that
+    // silently do nothing (or, worse, an unfixable dead end). `debugMode` and
+    // `chaosMode` are real - the interceptor actually reads them.
     getDefaultSettings() {
         return {
             theme: 'auto',
-            notifications: true,
-            autoBackup: true,
             debugMode: false,
-            defaultHeaders: '{"Content-Type": "application/json", "X-Mock-Source": "TurboMock"}',
-            maxResponseSize: 1024,
-            requestTimeout: 30000,
-            cacheSize: 100
+            // G-8: chaos mode is fully implemented in content/injected.js
+            // (random request-failure injection) but had no UI anywhere in
+            // the product - shape matches src/storage.js's defaultSettings.
+            chaosMode: {
+                enabled: false,
+                failureRate: 0.1
+            }
         };
     }
 
@@ -860,48 +978,44 @@ class OptionsManager {
             }
         });
 
-        // Toggle switches
-        ['notifications', 'autoBackup', 'debugMode'].forEach(id => {
+        // Toggle switches (G-11: notifications/autoBackup removed - dead, see
+        // getDefaultSettings())
+        ['debugMode'].forEach(id => {
             this.addListener(id, 'change', (e) => {
                 this.settings[id] = e.target.checked;
             });
         });
 
-        // Advanced settings with validation
-        this.addListener('defaultHeaders', 'input', (e) => {
-            this.settings.defaultHeaders = e.target.value;
+        // G-8: Chaos Mode - enable toggle + failure-rate (shown as a 0-100%
+        // field, stored internally as the 0-1 fraction content/injected.js
+        // already reads via settings.chaosMode.failureRate).
+        this.addListener('chaosModeEnabled', 'change', (e) => {
+            if (!this.settings.chaosMode) this.settings.chaosMode = {};
+            this.settings.chaosMode.enabled = e.target.checked;
         });
-
-        this.addListener('maxResponseSize', 'input', (e) => {
-            const value = parseInt(e.target.value, 10);
-            if (!isNaN(value) && value > 0) {
-                this.settings.maxResponseSize = value;
-            }
-        });
-
-        this.addListener('requestTimeout', 'input', (e) => {
-            const value = parseInt(e.target.value, 10);
-            if (!isNaN(value) && value >= 100) {
-                this.settings.requestTimeout = value;
-            }
-        });
-
-        this.addListener('cacheSize', 'input', (e) => {
-            const value = parseInt(e.target.value, 10);
-            if (!isNaN(value) && value > 0) {
-                this.settings.cacheSize = value;
+        this.addListener('chaosFailureRate', 'input', (e) => {
+            const percent = parseFloat(e.target.value);
+            if (!isNaN(percent) && percent >= 0 && percent <= 100) {
+                if (!this.settings.chaosMode) this.settings.chaosMode = {};
+                this.settings.chaosMode.failureRate = percent / 100;
             }
         });
 
         // Click outside modal to close
         this.addDocumentListener('click', (e) => {
             if (e.target.classList.contains('modal')) {
-                e.target.classList.remove('show');
+                this.requestCloseModal(e.target);
             }
         });
 
         // Confirmation modal
         this.addListener('confirmBtn', 'click', () => this.executeConfirmAction());
+
+        // U-4: any genuine user edit inside the rule editor form marks it dirty.
+        // Programmatic `.value = ...` writes during populate/reset don't fire
+        // input/change, so this only reacts to real user interaction.
+        this.addListener('ruleForm', 'input', () => { this.ruleFormDirty = true; });
+        this.addListener('ruleForm', 'change', () => { this.ruleFormDirty = true; });
     }
 
     /**
@@ -911,7 +1025,10 @@ class OptionsManager {
     handleAction(action, el) {
         switch (action) {
             case 'close-modal':
-                this.closeModal(el.dataset.modal);
+                // Explicit Cancel/X always closes, even with unsaved rule-editor
+                // changes (U-4) - accidental closes (backdrop/Escape) are the ones
+                // that get guarded, in requestCloseModal().
+                this.requestCloseModal(document.getElementById(el.dataset.modal), { force: true });
                 break;
             case 'close-confirm':
                 this.closeConfirmModal();
@@ -990,20 +1107,25 @@ class OptionsManager {
         }
 
         // Update toggles
-        ['notifications', 'autoBackup', 'debugMode'].forEach(id => {
+        ['debugMode'].forEach(id => {
             const element = document.getElementById(id);
             if (element) {
                 element.checked = this.settings[id] || false;
             }
         });
 
-        // Update advanced settings
-        ['defaultHeaders', 'maxResponseSize', 'requestTimeout', 'cacheSize'].forEach(id => {
-            const element = document.getElementById(id);
-            if (element && this.settings[id] !== undefined) {
-                element.value = this.settings[id];
-            }
-        });
+        // G-8: Chaos Mode
+        const chaosEnabledEl = document.getElementById('chaosModeEnabled');
+        if (chaosEnabledEl) {
+            chaosEnabledEl.checked = !!(this.settings.chaosMode && this.settings.chaosMode.enabled);
+        }
+        const chaosRateEl = document.getElementById('chaosFailureRate');
+        if (chaosRateEl) {
+            const rate = this.settings.chaosMode && typeof this.settings.chaosMode.failureRate === 'number'
+                ? this.settings.chaosMode.failureRate
+                : 0.1;
+            chaosRateEl.value = Math.round(rate * 100);
+        }
 
         // Update shortcut displays
         const toggleShortcut = document.getElementById('toggleShortcut');
@@ -1053,13 +1175,28 @@ class OptionsManager {
     switchTab(tabName) {
         // Update tab buttons
         document.querySelectorAll('.nav-item').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.tab === tabName);
+            const isActive = btn.dataset.tab === tabName;
+            btn.classList.toggle('active', isActive);
+            // A-11: the active section was communicated purely by a
+            // background-colour class; expose it programmatically too.
+            if (isActive) {
+                btn.setAttribute('aria-current', 'page');
+            } else {
+                btn.removeAttribute('aria-current');
+            }
         });
 
         // Update tab content
         document.querySelectorAll('.tab-content').forEach(content => {
             content.classList.toggle('active', content.dataset.tab === tabName);
         });
+
+        // U-7: the top-bar heading is the largest text on screen and used to
+        // always read "General Settings", even on the Rules/Advanced tabs.
+        const pageTitle = document.getElementById('pageTitle');
+        const title = TAB_TITLES[tabName] || TAB_TITLES.general;
+        if (pageTitle) pageTitle.textContent = title;
+        document.title = `TurboMock - ${title}`;
     }
 
     /**
@@ -1103,19 +1240,26 @@ class OptionsManager {
             this.settings.theme = themeRadio.value;
         }
 
-        ['notifications', 'autoBackup', 'debugMode'].forEach(id => {
+        ['debugMode'].forEach(id => {
             const element = document.getElementById(id);
             if (element) {
                 this.settings[id] = element.checked;
             }
         });
 
-        ['defaultHeaders', 'maxResponseSize', 'requestTimeout', 'cacheSize'].forEach(id => {
-            const element = document.getElementById(id);
-            if (element) {
-                this.settings[id] = element.value;
+        // G-8: Chaos Mode
+        const chaosEnabledEl = document.getElementById('chaosModeEnabled');
+        const chaosRateEl = document.getElementById('chaosFailureRate');
+        if (chaosEnabledEl || chaosRateEl) {
+            if (!this.settings.chaosMode) this.settings.chaosMode = {};
+            if (chaosEnabledEl) this.settings.chaosMode.enabled = chaosEnabledEl.checked;
+            if (chaosRateEl) {
+                const percent = parseFloat(chaosRateEl.value);
+                if (!isNaN(percent) && percent >= 0 && percent <= 100) {
+                    this.settings.chaosMode.failureRate = percent / 100;
+                }
             }
-        });
+        }
     }
 
     async exportSettings() {
@@ -1186,21 +1330,73 @@ class OptionsManager {
 
                 const mergeImport = document.getElementById('mergeImport')?.checked ?? true;
 
-                if (mergeImport) {
-                    // Merge with existing rules
-                    importedRules.forEach(rule => {
+                // Every rule needs an id before it can be validated/merged -
+                // fresh ids on merge (so they can't collide with existing
+                // rules), fill in a missing id on replace.
+                importedRules.forEach(rule => {
+                    if (mergeImport || !rule.id) {
                         rule.id = this.generateId();
+                    }
+                    if (mergeImport) {
                         rule.imported = new Date().toISOString();
-                    });
-                    this.rules = [...importedRules, ...this.rules];
-                } else {
-                    // Replace all rules
-                    this.rules = importedRules;
+                    }
+                });
+
+                // S-2: imported rules used to be persisted and activated
+                // verbatim - no schema check, no URL-pattern check, so a
+                // hostile or malformed file could install a rule matching
+                // every request on every site. Reuse the exact same checks
+                // as save (validateRuleForEditing + Q-10's
+                // validateUrlPattern) rather than writing new validation
+                // logic, and drop anything that fails rather than accepting
+                // the whole file blind.
+                const TurboMockUtils = await getTurboMockUtils();
+                const validRules = [];
+                let rejectedCount = 0;
+                for (const rule of importedRules) {
+                    const structurallyValid = this.validateRuleForEditing(rule);
+                    const urlCheck = structurallyValid
+                        ? TurboMockUtils.validateUrlPattern(rule.match.url)
+                        : { isValid: false };
+                    if (structurallyValid && urlCheck.isValid) {
+                        validRules.push(rule);
+                    } else {
+                        rejectedCount++;
+                    }
                 }
+
+                if (validRules.length === 0) {
+                    this.showMessage('No valid rules found in the imported file.', 'error');
+                    return;
+                }
+
+                // CQ-Q3 (data loss): re-fetch the authoritative rules right
+                // before merging, instead of trusting `this.rules` (a
+                // snapshot that may predate rules added elsewhere - popup,
+                // overlay, another options tab - while this tab was open).
+                // "Merge with existing rules" explicitly promises not to
+                // lose anything; merging against a stale snapshot breaks
+                // that promise exactly like the bulk-write bug in
+                // saveRuleFromEditor (CQ-Q3).
+                let currentRules = this.rules;
+                if (mergeImport) {
+                    try {
+                        const fresh = await chrome.runtime.sendMessage({ type: 'getRules' });
+                        if (fresh && fresh.success && Array.isArray(fresh.rules)) {
+                            currentRules = fresh.rules;
+                        }
+                    } catch (err) {
+                        // Background unreachable - fall back to the local snapshot.
+                    }
+                }
+
+                this.rules = mergeImport ? [...validRules, ...currentRules] : validRules;
 
                 // Route through the background so imported headers/queryparams
                 // rules get a dnrRuleId and DNR is re-synced (a direct storage
-                // write would leave them non-functional).
+                // write would leave them non-functional). `setRules` (bulk
+                // replace) is appropriate here - import is exactly the bulk
+                // operation it's reserved for (see CQ-Q3).
                 const response = await chrome.runtime.sendMessage({ type: 'setRules', rules: this.rules });
                 if (!response || !response.success) {
                     throw new Error((response && response.error) || 'Background did not accept the rules');
@@ -1209,7 +1405,11 @@ class OptionsManager {
                     this.rules = response.rules;
                 }
                 this.loadStatistics();
-                this.showMessage(`Imported ${importedRules.length} rules successfully!`, 'success');
+
+                const skippedNote = rejectedCount > 0
+                    ? ` (${rejectedCount} rule${rejectedCount === 1 ? '' : 's'} skipped - invalid)`
+                    : '';
+                this.showMessage(`Imported ${validRules.length} rules successfully!${skippedNote}`, 'success');
 
             } catch (error) {
                 this.showMessage('Failed to import rules: ' + error.message, 'error');
@@ -1267,7 +1467,11 @@ class OptionsManager {
         container.innerHTML = '';
 
         const messageEl = document.createElement('div');
-        messageEl.className = `message message-${type}`;
+        // U-1: this used to write `message message-${type}`, but options.css
+        // only styles `.message.success` / `.message.error` (space-separated
+        // classes) - the hyphenated class never matched, so every error (23
+        // failure exits in saveRuleFromEditor alone) rendered unstyled.
+        messageEl.className = `message ${type}`;
         messageEl.textContent = message;
 
         container.appendChild(messageEl);
@@ -1278,7 +1482,11 @@ class OptionsManager {
             }
         }, 5000);
 
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        // U-1: `#messageContainer` lives inside `.content-scroll`, not inside
+        // any modal - with the container now fixed-positioned above every
+        // modal (options.css), it's always in view without needing to
+        // scroll a (possibly wrong, possibly non-scrolling) container into
+        // place, so the old `window.scrollTo` call is gone.
     }
 
     showConfirmation(title, message, onConfirm) {
@@ -1292,21 +1500,107 @@ class OptionsManager {
         messageEl.textContent = message;
 
         this.pendingConfirmAction = onConfirm;
-        modal.classList.add('show');
+        this.openModal(modal);
     }
 
     closeConfirmModal() {
-        const modal = document.getElementById('confirmModal');
-        if (modal) {
-            modal.classList.remove('show');
-        }
+        this.closeModalElement(document.getElementById('confirmModal'));
         this.pendingConfirmAction = null;
     }
 
     closeModal(modalId) {
-        const modal = document.getElementById(modalId);
-        if (modal) {
-            modal.classList.remove('show');
+        this.closeModalElement(document.getElementById(modalId));
+    }
+
+    /**
+     * A-4: elements inside `modal` that can receive focus, in DOM order.
+     * Shared by openModal()'s initial focus and its Tab-trap.
+     */
+    _focusableIn(modal) {
+        const selector = 'a[href], button:not([disabled]), textarea:not([disabled]), ' +
+            'input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+        return Array.from(modal.querySelectorAll(selector))
+            .filter(el => el.offsetParent !== null);
+    }
+
+    /**
+     * A-4: open a modal with basic dialog focus management - previously the
+     * three options modals only toggled a CSS class, so focus stayed on
+     * whatever triggered the modal (now hidden behind a blurred backdrop),
+     * Tab could walk out into the page behind it, and focus never returned
+     * anywhere on close. This remembers what had focus, moves focus into the
+     * dialog, and traps Tab within it until closeModalElement() runs.
+     */
+    openModal(modal) {
+        if (!modal) return;
+        this._lastFocusedBeforeModal = document.activeElement;
+        modal.classList.add('show');
+
+        const focusable = this._focusableIn(modal);
+        if (focusable.length > 0) {
+            focusable[0].focus();
+        } else {
+            const content = modal.querySelector('.modal-content');
+            if (content) content.focus();
+        }
+
+        if (!modal._tmFocusTrap) {
+            const trap = (e) => {
+                if (e.key !== 'Tab') return;
+                const items = this._focusableIn(modal);
+                if (items.length === 0) return;
+                const first = items[0];
+                const last = items[items.length - 1];
+                if (e.shiftKey && document.activeElement === first) {
+                    e.preventDefault();
+                    last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                    e.preventDefault();
+                    first.focus();
+                }
+            };
+            modal._tmFocusTrap = trap;
+            modal.addEventListener('keydown', trap);
+        }
+    }
+
+    /**
+     * A-4: tear down the focus trap and restore focus to whatever had it
+     * before the modal opened. Use requestCloseModal() instead when the
+     * close might need to be guarded (e.g. the dirty rule editor, U-4).
+     */
+    closeModalElement(modal) {
+        if (!modal) return;
+        modal.classList.remove('show');
+        if (modal._tmFocusTrap) {
+            modal.removeEventListener('keydown', modal._tmFocusTrap);
+            delete modal._tmFocusTrap;
+        }
+        if (this._lastFocusedBeforeModal && typeof this._lastFocusedBeforeModal.focus === 'function') {
+            this._lastFocusedBeforeModal.focus();
+        }
+        this._lastFocusedBeforeModal = null;
+    }
+
+    /**
+     * U-4: single entry point for every "close this modal" attempt
+     * (backdrop click, Escape, explicit Cancel/X). The rule editor is the
+     * longest form in the product with no draft persistence - an accidental
+     * backdrop click or an Escape meant to dismiss something else used to
+     * destroy it with zero warning. Accidental closes are now ignored while
+     * the form is dirty; pass `force: true` (used by the explicit Cancel/X
+     * button) to always close.
+     */
+    requestCloseModal(modal, { force = false } = {}) {
+        if (!modal) return;
+        if (!force && modal.id === 'ruleEditorModal' && this.ruleFormDirty) {
+            this.showMessage('You have unsaved changes in this rule - click Cancel to discard them.', 'info');
+            return;
+        }
+        if (modal.id === 'confirmModal') {
+            this.closeConfirmModal();
+        } else {
+            this.closeModalElement(modal);
         }
     }
 
@@ -1360,7 +1654,7 @@ class OptionsManager {
         const modal = document.getElementById('dataModal');
         if (!modal) return;
         await this.switchDataTab('rules');
-        modal.classList.add('show');
+        this.openModal(modal);
     }
 
     /**
@@ -1374,7 +1668,13 @@ class OptionsManager {
         this._dataViewerTab = tabName;
 
         document.querySelectorAll('.data-tab').forEach(tab => {
-            tab.classList.toggle('active', tab.dataset.tabName === tabName);
+            const isActive = tab.dataset.tabName === tabName;
+            tab.classList.toggle('active', isActive);
+            // A-11: minimal ARIA tabs pattern - these were plain buttons with
+            // no role/aria-selected, so a screen reader heard four
+            // identical, unlabelled buttons.
+            tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            tab.setAttribute('tabindex', isActive ? '0' : '-1');
         });
 
         const display = document.getElementById('dataDisplay');
@@ -1445,7 +1745,7 @@ class OptionsManager {
             if (e.key === 'Escape') {
                 const openModal = document.querySelector('.modal.show');
                 if (openModal) {
-                    openModal.classList.remove('show');
+                    this.requestCloseModal(openModal);
                 }
             }
         };
@@ -1454,35 +1754,24 @@ class OptionsManager {
         this.listeners.push({ element: document, event: 'keydown', handler });
     }
 
+    // U-8/G-11: this used to validate maxResponseSize and cacheSize, neither
+    // of which has ever had a corresponding form field - if an imported
+    // settings file (importSettings() merges arbitrary values with no
+    // validation of its own) carried an out-of-range value for either,
+    // "Save Changes" would fail forever with an error pointing at a field
+    // the user cannot see or edit, and Factory Reset was the only way out.
+    // Both settings (plus requestTimeout/defaultHeaders/notifications/
+    // autoBackup) were also unread by any runtime code (G-11) and have been
+    // removed entirely rather than kept as dead validation. Only validate
+    // settings the UI actually exposes.
     validateSettings() {
         const errors = [];
 
-        // Validate numeric settings
-        const maxResponseSize = parseInt(this.settings.maxResponseSize, 10);
-        if (isNaN(maxResponseSize) || maxResponseSize < 1 || maxResponseSize > 10240) {
-            errors.push('Max response size must be between 1 and 10240 KB');
-        }
-
-        const requestTimeout = parseInt(this.settings.requestTimeout, 10);
-        if (isNaN(requestTimeout) || requestTimeout < 100 || requestTimeout > 30000) {
-            errors.push('Request timeout must be between 100 and 30000 ms');
-        }
-
-        const cacheSize = parseInt(this.settings.cacheSize, 10);
-        if (isNaN(cacheSize) || cacheSize < 10 || cacheSize > 1000) {
-            errors.push('Cache size must be between 10 and 1000 rules');
-        }
-
-        // Validate default headers JSON
-        try {
-            if (this.settings.defaultHeaders && this.settings.defaultHeaders.trim()) {
-                const parsed = JSON.parse(this.settings.defaultHeaders);
-                if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-                    errors.push('Default headers must be a JSON object');
-                }
+        if (this.settings.chaosMode) {
+            const rate = this.settings.chaosMode.failureRate;
+            if (typeof rate !== 'number' || isNaN(rate) || rate < 0 || rate > 1) {
+                errors.push('Chaos Mode failure rate must be between 0% and 100%');
             }
-        } catch (e) {
-            errors.push('Default headers must be valid JSON: ' + e.message);
         }
 
         return errors;
