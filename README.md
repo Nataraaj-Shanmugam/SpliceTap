@@ -180,7 +180,7 @@ Supporting pieces:
 - `storage` — persist rules and settings locally
 - `contextMenus` — the right-click "create rule" entry
 - `declarativeNetRequestWithHostAccess` — apply `headers` / `queryparams` rules at the network layer, scoped to the host(s) a rule's URL pattern matches
-- `<all_urls>` (host permission) — the in-page interceptor and rule-editor overlay need to run on whatever site you're mocking; there's no way to know that site in advance
+- `<all_urls>` (host permission) — the in-page interceptor and rule-editor overlay need to run on whatever site you're mocking; there's no way to know that site in advance. Both scripts are injected on every page load (even when TurboMock is toggled off or has no rules for that origin) because MV3 content-script injection is static, declared per-manifest, not computed per-request; the interceptor checks the active/rules state internally before doing anything, and the overlay stays dormant until invoked. Scoping injection to only origins with enabled rules (e.g. via `chrome.scripting.registerContentScripts`) is a possible future tightening, tracked as a follow-up rather than done here.
 
 ### Single Purpose & Privacy
 TurboMock's single purpose is local API request mocking and modification for development/testing. It does not collect, transmit, or sell any data: every rule, setting, and log entry stays in `chrome.storage` on your device (see Privacy & Security below), and nothing in the codebase makes a network request on the extension's own behalf.

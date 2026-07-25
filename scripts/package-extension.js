@@ -154,8 +154,19 @@ function addFile(set, relPath) {
     return true;
 }
 
-/** Resolve a relative import/src/href path against the directory of the file that referenced it. */
+/**
+ * Resolve a reference path against the directory of the file that referenced
+ * it. A leading "/" is a package-root-relative path (how Chrome resolves
+ * extension URLs like devtools.js's `chrome.devtools.panels.create('TurboMock',
+ * '/assets/icons/icon-16.png', '/devtools/panel.html', ...)`), so it must
+ * resolve against ROOT, not get joined onto fromRelDir — otherwise
+ * `path.join('devtools', '/devtools/panel.html')` silently produces the
+ * nonexistent 'devtools/devtools/panel.html' and the real file is dropped.
+ */
 function resolveRel(fromRelDir, ref) {
+    if (ref.startsWith('/')) {
+        return ref.slice(1);
+    }
     return path.join(fromRelDir, ref).split(path.sep).join('/');
 }
 
