@@ -14,21 +14,37 @@
     <!-- Header -->
     <header class="header">
       <div class="brand">
-        <div class="logo">
-          <span>TM</span>
+        <div class="logo" aria-hidden="true">
+          <svg viewBox="0 0 128 128" focusable="false">
+            <defs>
+              <linearGradient id="tmLogo" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#1e63f5" />
+                <stop offset="100%" stop-color="#0bbcd4" />
+              </linearGradient>
+            </defs>
+            <rect x="0" y="0" width="128" height="128" rx="30" fill="url(#tmLogo)" />
+            <circle cx="28" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+            <circle cx="52" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+            <circle cx="76" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+            <path d="M88 32 L100 44 L88 56" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" opacity="0.5" />
+            <path d="M100 86 L44 86" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" />
+            <path d="M42 72 L28 86 L42 100" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
         </div>
         <div class="title-group">
           <h1>TurboMock</h1>
-          <button type="button" class="status-badge" id="statusToggle" aria-pressed="true" aria-label="Toggle TurboMock">
-            <span class="status-dot" id="statusDot" aria-hidden="true"></span>
-            <span id="statusText">Active</span>
-          </button>
+          <!-- Populated by popup.js if present; static fallback keeps the row height stable. -->
+          <div class="host-label" id="hostLabel">this tab</div>
         </div>
       </div>
 
       <div class="top-actions">
+        <button type="button" class="status-badge" id="statusToggle" aria-pressed="true" aria-label="Toggle TurboMock">
+          <span class="status-dot" id="statusDot" aria-hidden="true"></span>
+          <span id="statusText">Active</span>
+        </button>
         <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
             <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
             <path
               d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" />
@@ -40,11 +56,11 @@
     <!-- Search -->
     <div class="search-wrapper">
       <div class="search-bar">
-        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">
           <circle cx="11" cy="11" r="8" />
           <path d="m21 21-4.3-4.3" />
         </svg>
-        <input type="text" id="searchInput" placeholder="Search rules..." />
+        <input type="text" id="searchInput" placeholder="Search rules" />
       </div>
     </div>
 
@@ -53,41 +69,46 @@
       <!-- Empty State (Default) -->
       <div class="empty-state">
         <div class="empty-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false">
-            <path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2" />
-            <path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
-            <path d="M9 12h6" />
+          <svg viewBox="0 0 64 64" fill="none" aria-hidden="true" focusable="false">
+            <circle cx="32" cy="32" r="30" fill="rgba(47,125,250,0.10)" />
+            <circle cx="17" cy="25" r="3" fill="currentColor" opacity="0.45" />
+            <circle cx="27" cy="25" r="3" fill="currentColor" opacity="0.45" />
+            <circle cx="37" cy="25" r="3" fill="currentColor" opacity="0.45" />
+            <path d="M45 20 L50 25 L45 30" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity="0.45" />
+            <path d="M50 42 L24 42" stroke="currentColor" stroke-width="5" stroke-linecap="round" />
+            <path d="M23 36 L17 42 L23 48" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </div>
         <h2>No rules yet</h2>
-        <p>Create your first mock rule to get started</p>
+        <p>Point a URL pattern at a canned response and TurboMock answers it before the network does.</p>
+        <div class="empty-hint">Alt + Shift + M toggles mocking</div>
       </div>
     </main>
 
     <!-- Footer Actions -->
     <footer class="footer">
-      <button class="fab-btn" id="newRuleBtn" title="New Rule" aria-label="New Rule">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" focusable="false">
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-      </button>
-
       <div class="footer-stats" id="statsContainer">
         <span id="statsText">0 intercepts</span>
       </div>
 
       <div class="footer-actions-secondary">
-        <button class="icon-btn-small" id="testAllBtn" title="Test All rules" aria-label="Test all rules">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
+        <button class="icon-btn-small" id="testAllBtn" title="Test all rules" aria-label="Test all rules">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
             <path d="M20 6 9 17l-5-5" />
           </svg>
         </button>
         <button class="icon-btn-small" id="refreshBtn" title="Refresh" aria-label="Refresh rules">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
             <path d="M21 12a9 9 0 1 1-2.64-6.36" />
             <path d="M21 3v6h-6" />
           </svg>
+        </button>
+        <button class="fab-btn" id="newRuleBtn" title="New rule" aria-label="New rule">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true" focusable="false">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span class="fab-label">New rule</span>
         </button>
       </div>
     </footer>
@@ -101,6 +122,7 @@
   <div id="toastContainer" class="toast-container"></div>
 
   <script src="popup.js"></script>
+  <script src="popup-host.js"></script>
 </body>
 
 </html>

@@ -60,10 +60,25 @@
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
+        /* Design tokens (audit/DESIGN-SPEC.md §1) are inlined as literal
+           hex/rgba values rather than declared as custom properties. This
+           sheet lives in a shadow root grafted onto arbitrary third-party
+           pages, and for normal declarations the *outer* tree wins on the
+           host element — so a page rule touching custom properties on our
+           host could repaint the dialog. Literals cannot be reached at all.
+             bg-app #0b1018 · bg-card #111a27
+             text-main #e7eefb · text-muted #8b9ab3 · text-dim #6d7c94
+             accent #1e63f5 (only fill allowed under white text, 5.05:1)
+             accent-hover #1d4fd7
+             accent-bright #2f7dfa (focus rings / borders / tints ONLY —
+                                    as a fill under white text it is 3.86:1)
+             border rgba(148,163,184,0.12) · hairline rgba(148,163,184,0.09)
+           Light-theme values are in the .tm-light block at the bottom. */
+
         .tm-backdrop {
             position: fixed;
             inset: 0;
-            background: rgba(8, 12, 20, 0.55);
+            background: rgba(8, 12, 20, 0.6);
             z-index: 2147483647;
             display: flex;
             align-items: flex-start;
@@ -77,11 +92,11 @@
         .tm-panel {
             width: 100%;
             max-width: 620px;
-            background: #1a2130;
-            color: #f1f5f9;
-            border: 1px solid rgba(148, 163, 184, 0.16);
-            border-radius: 14px;
-            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+            background: #111a27;
+            color: #e7eefb;
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            border-radius: 12px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
         }
 
         .tm-head {
@@ -89,119 +104,202 @@
             align-items: center;
             justify-content: space-between;
             gap: 12px;
-            padding: 16px 20px;
-            border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+            padding: 14px 16px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.09);
         }
 
-        .tm-brand { display: flex; align-items: center; gap: 10px; }
+        .tm-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 
         .tm-logo {
             width: 26px; height: 26px;
-            border-radius: 6px;
-            background: #4f6ef7;
+            flex-shrink: 0;
+            border-radius: 7px;
+            background: #1e63f5;
             color: #fff;
             display: flex; align-items: center; justify-content: center;
-            font-size: 0.6875rem; font-weight: 700; letter-spacing: -0.3px;
+            font-size: 0.6875rem; font-weight: 700; letter-spacing: -0.01em;
         }
 
-        .tm-title { font-size: 0.9375rem; font-weight: 600; }
+        .tm-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            line-height: 1.15;
+            min-width: 0;
+        }
 
         .tm-x {
+            width: 26px; height: 26px;
+            flex-shrink: 0;
+            display: inline-flex; align-items: center; justify-content: center;
             background: transparent; border: none; cursor: pointer;
-            color: #94a3b8; font-size: 1.375rem; line-height: 1;
-            padding: 2px 6px; border-radius: 6px;
+            color: #8b9ab3; font-size: 1.125rem; line-height: 1;
+            font-family: inherit;
+            border-radius: 7px;
+            transition: background-color 0.15s, color 0.15s;
         }
-        .tm-x:hover { background: rgba(148, 163, 184, 0.14); color: #f1f5f9; }
+        .tm-x:hover { background: rgba(148, 163, 184, 0.12); color: #e7eefb; }
+        .tm-x:focus-visible { outline: 2px solid #2f7dfa; outline-offset: 1px; }
 
         .tm-hintbar {
             display: flex;
             align-items: flex-start;
             gap: 10px;
-            margin: 14px 20px 0;
-            padding: 10px 12px;
-            border-radius: 8px;
+            margin: 12px 16px 0;
+            padding: 9px 11px;
+            border-radius: 9px;
             font-size: 0.75rem;
-            line-height: 1.4;
-            background: rgba(79, 110, 247, 0.14);
-            color: #dbe4ff;
-            border: 1px solid rgba(79, 110, 247, 0.28);
+            line-height: 1.45;
+            background: rgba(47, 125, 250, 0.12);
+            color: #e7eefb;
+            border: 1px solid rgba(47, 125, 250, 0.3);
         }
         .tm-hintbar[hidden] { display: none; }
-        .tm-hintbar-text { flex: 1; }
+        .tm-hintbar-text { flex: 1; min-width: 0; }
         .tm-hintbar-x {
+            width: 24px; height: 24px;
+            flex-shrink: 0;
+            margin: -3px -3px -3px 0;
+            display: inline-flex; align-items: center; justify-content: center;
             background: transparent; border: none; cursor: pointer;
-            color: inherit; font-size: 1rem; line-height: 1;
-            padding: 0 2px; flex-shrink: 0;
+            color: inherit; font-size: 0.9375rem; line-height: 1;
+            font-family: inherit;
+            border-radius: 6px;
+            transition: background-color 0.15s;
         }
-        .tm-light .tm-hintbar {
-            background: rgba(79, 110, 247, 0.08);
-            color: #2c3e6b;
-            border-color: rgba(79, 110, 247, 0.22);
+        .tm-hintbar-x:hover { background: rgba(148, 163, 184, 0.18); }
+        .tm-hintbar-x:focus-visible { outline: 2px solid #2f7dfa; outline-offset: 1px; }
+
+        .tm-body {
+            padding: 16px;
+            max-height: 65vh;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(148, 163, 184, 0.3) transparent;
+        }
+        .tm-body::-webkit-scrollbar { width: 4px; }
+        .tm-body::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.3);
+            border-radius: 4px;
         }
 
-        .tm-body { padding: 18px 20px; max-height: 65vh; overflow-y: auto; }
+        .tm-row { display: flex; gap: 10px; }
+        .tm-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; flex: 1; min-width: 0; }
 
-        .tm-row { display: flex; gap: 12px; }
-        .tm-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; flex: 1; min-width: 0; }
-        .tm-field > label { font-size: 0.78125rem; font-weight: 600; color: #f1f5f9; }
+        /* Micro-label. :not(.tm-check) keeps the checkbox row's own <label>
+           — a direct child of .tm-field too — out of the uppercase scale.
+           --text-muted rather than --text-dim: #6d7c94 on the #111a27 panel
+           is 4.13:1, under the 4.5:1 bar for 10px text. #8b9ab3 is 6.07:1. */
+        .tm-field > label:not(.tm-check) {
+            font-size: 0.625rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            line-height: 1.35;
+            color: #8b9ab3;
+        }
 
         .tm-field input[type="text"],
         .tm-field input[type="number"],
         .tm-field select,
         .tm-field textarea {
             width: 100%;
-            background: #0b0f19;
-            border: 1px solid rgba(148, 163, 184, 0.16);
-            color: #f1f5f9;
-            border-radius: 6px;
-            padding: 9px 11px;
-            font-size: 0.8125rem;
+            background: #0b1018;
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            color: #e7eefb;
+            border-radius: 8px;
+            font-size: 0.78125rem;
             font-family: inherit;
             outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .tm-field input[type="text"],
+        .tm-field input[type="number"],
+        .tm-field select {
+            height: 32px;
+            padding: 0 10px;
         }
 
         .tm-field textarea {
-            font-family: ui-monospace, 'SF Mono', Consolas, Menlo, monospace;
-            font-size: 0.78125rem;
+            padding: 8px 10px;
+            font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 0.75rem;
             line-height: 1.5;
             resize: vertical;
         }
 
-        .tm-field input:focus, .tm-field select:focus, .tm-field textarea:focus {
-            border-color: #4f6ef7;
-            box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.18);
+        .tm-field input::placeholder,
+        .tm-field textarea::placeholder { color: #6d7c94; opacity: 1; }
+
+        .tm-field input[type="text"]:focus,
+        .tm-field input[type="number"]:focus,
+        .tm-field select:focus,
+        .tm-field textarea:focus {
+            border-color: #2f7dfa;
+            box-shadow: 0 0 0 3px rgba(47, 125, 250, 0.18);
         }
 
-        .tm-hint { font-size: 0.71875rem; color: #94a3b8; line-height: 1.4; }
+        .tm-hint { font-size: 0.6875rem; color: #8b9ab3; line-height: 1.45; }
 
-        .tm-check { display: flex; align-items: center; gap: 8px; font-size: 0.8125rem; color: #f1f5f9; }
-        .tm-check input { width: 15px; height: 15px; accent-color: #4f6ef7; }
+        .tm-check {
+            display: flex; align-items: center; gap: 8px;
+            min-height: 24px;
+            font-size: 0.78125rem;
+            font-weight: 500;
+            color: #e7eefb;
+            cursor: pointer;
+        }
+        .tm-check input {
+            width: 16px; height: 16px;
+            flex-shrink: 0;
+            accent-color: #1e63f5;
+            cursor: pointer;
+        }
+        .tm-check input:focus-visible { outline: 2px solid #2f7dfa; outline-offset: 2px; }
 
         .tm-foot {
-            display: flex; justify-content: flex-end; gap: 10px;
-            padding: 14px 20px;
-            border-top: 1px solid rgba(148, 163, 184, 0.16);
+            display: flex; justify-content: flex-end; gap: 8px;
+            padding: 12px 16px;
+            border-top: 1px solid rgba(148, 163, 184, 0.09);
         }
 
         .tm-btn {
-            border-radius: 8px; padding: 9px 18px; font-size: 0.8125rem;
-            font-weight: 600; cursor: pointer; font-family: inherit;
+            display: inline-flex; align-items: center; justify-content: center;
+            height: 32px;
+            padding: 0 14px;
+            border-radius: 8px;
+            font-size: 0.78125rem;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
             border: 1px solid transparent;
+            transition: background-color 0.15s, border-color 0.15s, color 0.15s;
         }
-        .tm-btn-primary { background: #4f6ef7; color: #fff; }
-        .tm-btn-primary:hover { background: #3f5de6; }
-        .tm-btn-secondary { background: #232c3d; color: #f1f5f9; border-color: rgba(148, 163, 184, 0.16); }
-        .tm-btn-secondary:hover { background: #2b3547; }
+        .tm-btn:focus-visible { outline: 2px solid #2f7dfa; outline-offset: 2px; }
+        .tm-btn:disabled { opacity: 0.6; cursor: default; }
+
+        /* White label => the AA-safe accent, never #2f7dfa (3.86:1 as a fill). */
+        .tm-btn-primary { background: #1e63f5; color: #fff; }
+        .tm-btn-primary:hover:not(:disabled) { background: #1d4fd7; }
+
+        .tm-btn-secondary {
+            background: rgba(148, 163, 184, 0.08);
+            color: #e7eefb;
+            border-color: rgba(148, 163, 184, 0.12);
+        }
+        .tm-btn-secondary:hover:not(:disabled) { background: rgba(148, 163, 184, 0.16); }
 
         .tm-error {
             display: none;
-            margin-bottom: 14px;
-            padding: 10px 14px;
+            margin-bottom: 12px;
+            padding: 9px 11px;
             border-radius: 8px;
-            font-size: 0.78125rem;
+            font-size: 0.75rem;
+            line-height: 1.45;
             background: rgba(239, 68, 68, 0.12);
             color: #f87171;
-            border: 1px solid rgba(239, 68, 68, 0.28);
+            border: 1px solid rgba(239, 68, 68, 0.3);
             white-space: pre-line;
         }
         .tm-error.tm-show { display: block; }
@@ -209,18 +307,78 @@
         [data-types] { display: none; }
         [data-types].tm-visible { display: block; }
         .tm-row[data-types].tm-visible { display: flex; }
+        /* .tm-field is a flex column; restore that when it is a [data-types]
+           block being revealed, so its label/control gap still applies. */
+        .tm-field[data-types].tm-visible { display: flex; }
 
-        /* Light theme (mirrors the extension's theme setting) */
-        .tm-light { color-scheme: light; }
-        .tm-light .tm-panel { background: #ffffff; color: #16202e; border-color: rgba(15, 23, 42, 0.12); }
-        .tm-light .tm-head, .tm-light .tm-foot { border-color: rgba(15, 23, 42, 0.12); }
-        .tm-light .tm-title, .tm-light .tm-field > label, .tm-light .tm-check { color: #16202e; }
-        .tm-light .tm-field input, .tm-light .tm-field select, .tm-light .tm-field textarea {
-            background: #ffffff; color: #16202e; border-color: rgba(15, 23, 42, 0.16);
+        /* ── Light theme (class set on .tm-backdrop by applyTheme) ──────── */
+        .tm-light { color-scheme: light; background: rgba(15, 23, 42, 0.32); }
+        .tm-light .tm-panel {
+            background: #ffffff;
+            color: #101828;
+            border-color: #e6ebf2;
+            box-shadow: 0 6px 20px rgba(15, 23, 42, 0.14);
         }
-        .tm-light .tm-hint, .tm-light .tm-x { color: #5b6b7f; }
-        .tm-light .tm-btn-secondary { background: #eceff4; color: #16202e; border-color: rgba(15, 23, 42, 0.12); }
-        .tm-light .tm-btn-secondary:hover { background: #e2e8f0; }
+        .tm-light .tm-head { border-bottom-color: #eef1f6; }
+        .tm-light .tm-foot { border-top-color: #eef1f6; }
+        .tm-light .tm-title { color: #101828; }
+        .tm-light .tm-field > label:not(.tm-check) { color: #66748a; }
+        .tm-light .tm-hint { color: #66748a; }
+        .tm-light .tm-check { color: #101828; }
+        .tm-light .tm-x { color: #66748a; }
+        .tm-light .tm-x:hover { background: rgba(15, 23, 42, 0.07); color: #101828; }
+        .tm-light .tm-field input[type="text"],
+        .tm-light .tm-field input[type="number"],
+        .tm-light .tm-field select,
+        .tm-light .tm-field textarea {
+            background: #f4f6fa; color: #101828; border-color: #e6ebf2;
+        }
+        .tm-light .tm-field input::placeholder,
+        .tm-light .tm-field textarea::placeholder { color: #8592a6; }
+        .tm-light .tm-hintbar {
+            background: rgba(30, 99, 245, 0.07);
+            color: #101828;
+            border-color: rgba(30, 99, 245, 0.22);
+        }
+        .tm-light .tm-hintbar-x:hover { background: rgba(15, 23, 42, 0.07); }
+        .tm-light .tm-error {
+            background: rgba(220, 38, 38, 0.08);
+            color: #b91c1c;
+            border-color: rgba(220, 38, 38, 0.22);
+        }
+        .tm-light .tm-btn-secondary {
+            background: rgba(15, 23, 42, 0.05);
+            color: #101828;
+            border-color: #e6ebf2;
+        }
+        .tm-light .tm-btn-secondary:hover:not(:disabled) { background: rgba(15, 23, 42, 0.09); }
+        .tm-light .tm-body { scrollbar-color: rgba(15, 23, 42, 0.22) transparent; }
+        .tm-light .tm-body::-webkit-scrollbar-thumb { background: rgba(15, 23, 42, 0.22); }
+
+        /* ── Motion / forced colours ───────────────────────────────────── */
+        @media (prefers-reduced-motion: reduce) {
+            .tm-backdrop,
+            .tm-backdrop *,
+            .tm-backdrop *::before,
+            .tm-backdrop *::after {
+                transition-duration: 0.01ms !important;
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+            }
+        }
+
+        @media (forced-colors: active) {
+            .tm-panel,
+            .tm-error,
+            .tm-hintbar,
+            .tm-btn,
+            .tm-field input[type="text"],
+            .tm-field input[type="number"],
+            .tm-field select,
+            .tm-field textarea {
+                border-color: CanvasText;
+            }
+        }
     `;
 
         return _stylesCache;

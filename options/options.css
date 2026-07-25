@@ -1,39 +1,52 @@
 /* TurboMock Options */
 
 :root {
-    --bg-app: #0f1420;
-    --bg-sidebar: #141b28;
-    --bg-card: #1a2130;
-    --bg-card-hover: #232c3d;
-    --bg-input: #0b0f19;
+    --bg-app: #0b1018;
+    --bg-elevated: #0d141e;
+    --bg-card: #111a27;
+    --bg-card-hover: #101a27;
+    --bg-chip: #1b2735;
 
-    --text-main: #f1f5f9;
-    --text-muted: #94a3b8;
+    --text-main: #e7eefb;
+    --text-muted: #8b9ab3;
+    --text-dim: #6d7c94;
 
-    /* A-7: white text on #4f6ef7 measured 4.28:1, failing the 4.5:1 text
-       minimum - it was the primary button and the active nav item on every
-       dark-theme screen. Reuses the exact value the light theme already
-       uses for the same reason (measured 5.97:1 there). */
-    --accent: #3355e0;
-    --accent-hover: #2846c9;
+    /* Accent roles are split by contrast requirement (audit/DESIGN-SPEC.md §1):
+         --accent        fills that carry white text — white on #1e63f5 is
+                         5.05:1, passing AA. Never use --accent-bright here;
+                         white on #2f7dfa is only 3.86:1.
+         --accent-bright non-text only — focus rings, input borders,
+                         decorative icons (3:1 bar; 4.93:1 on --bg-app). */
+    --accent: #1e63f5;
+    --accent-hover: #1d4fd7;
+    --accent-bright: #2f7dfa;
+    /* Accent used AS TEXT on a dark surface: --accent is only 3.46:1 there.
+       Same light blue the popup uses for its mock badge (8.51:1). */
+    --accent-text: #8ab6ff;
+
+    /* The "active/on" state colour across all surfaces is cyan, not green. */
+    --signal: #0bbcd4;
+    --signal-text: #5fdcf0;
 
     --success: #22c55e;
     --danger: #ef4444;
-    --border: rgba(148, 163, 184, 0.14);
+    --border: rgba(148, 163, 184, 0.12);
+    --hairline: rgba(148, 163, 184, 0.09);
     /* A-7: a stronger border for elements whose boundary needs to be
        reliably visible (form controls, modal edges, the theme-preview
        swatches) - the base --border above is intentionally subtle and
        stays that way for plain card/section dividers. ~3:1 against
-       --bg-input/--bg-sidebar. */
+       --bg-app/--bg-elevated. */
     --border-strong: rgba(148, 163, 184, 0.6);
-    --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.4);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.4);
 
     --font-main: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, 'Liberation Mono', Menlo, monospace;
 
     /* A-14: without this, Chrome computes native form-control chrome
        (placeholder colour, scrollbars, etc.) as if the page were light,
-       over a near-black --bg-input. */
+       over a near-black --bg-app. */
     color-scheme: dark;
 }
 
@@ -41,24 +54,32 @@
    Applied by options.js applyTheme() via body.theme-light
    (either an explicit choice or 'auto' resolving to light). */
 body.theme-light {
-    --bg-app: #f5f6f8;
-    --bg-sidebar: #ffffff;
-    --bg-card: #ffffff;
-    --bg-card-hover: #eceff4;
-    --bg-input: #ffffff;
+    --bg-app: #ffffff;
+    --bg-elevated: #fafbfd;
+    --bg-card: #f4f6fa;
+    --bg-card-hover: #f5f9ff;
+    --bg-chip: #eef2f7;
 
-    --text-main: #16202e;
-    --text-muted: #5b6b7f;
+    --text-main: #101828;
+    --text-muted: #66748a;
+    --text-dim: #8592a6;
 
-    --accent: #3355e0;
-    --accent-hover: #2846c9;
+    --accent: #1e63f5;
+    --accent-hover: #1d4fd7;
+    --accent-bright: #2f7dfa;
+    --accent-text: #1d4fd7;
+
+    --signal: #0694aa;
+    --signal-text: #03707f;
 
     --success: #15803d;
     --danger: #dc2626;
-    --border: rgba(15, 23, 42, 0.12);
+    --border: #e6ebf2;
+    --hairline: #eef1f6;
     /* A-7: see --border-strong in :root. */
     --border-strong: rgba(15, 23, 42, 0.5);
-    --shadow-md: 0 10px 30px rgba(15, 23, 42, 0.10);
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+    --shadow-md: 0 6px 20px rgba(15, 23, 42, 0.14);
 
     color-scheme: light;
 }
@@ -100,15 +121,17 @@ body.theme-light .btn-secondary:hover {
 body.theme-light .setting-item,
 body.theme-light .action-card,
 body.theme-light .reset-card {
-    background: #ffffff;
+    /* Must stay --bg-card (#f4f6fa): light --bg-app is now #ffffff, so a
+       hardcoded #ffffff here would make every card invisible. */
+    background: var(--bg-card);
 }
 
 body.theme-light .setting-item:hover {
-    background: #fbfcfd;
+    background: var(--bg-card-hover);
     border-color: rgba(15, 23, 42, 0.18);
 }
 
-body.theme-light .rule-type-badge[data-type="mock"] { background: rgba(51, 85, 224, 0.12); color: #2846c9; }
+body.theme-light .rule-type-badge[data-type="mock"] { background: rgba(30, 99, 245, 0.12); color: #1d4fd7; }
 body.theme-light .rule-type-badge[data-type="block"] { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
 /* A-7: #b45309 on this background measured 4.32:1, failing 4.5:1 - darkened
    to Tailwind's amber-900 (measured ~7.8:1 against the same background). */
@@ -133,9 +156,9 @@ body.theme-light .message.error {
 }
 
 body.theme-light .message.info {
-    background: rgba(51, 85, 224, 0.10);
-    color: #2846c9;
-    border-color: rgba(51, 85, 224, 0.25);
+    background: rgba(30, 99, 245, 0.10);
+    color: #1d4fd7;
+    border-color: rgba(30, 99, 245, 0.25);
 }
 
 body.theme-light .modal {
@@ -144,7 +167,7 @@ body.theme-light .modal {
 
 /* Select chevron: darker stroke so it stays visible on white. */
 body.theme-light select {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235b6b7f' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2366748a' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 * {
@@ -169,7 +192,7 @@ body {
 /* Sidebar */
 .sidebar {
     width: 260px;
-    background: var(--bg-sidebar);
+    background: var(--bg-elevated);
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
@@ -379,7 +402,7 @@ body.theme-light .btn-danger {
 .setting-item {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 20px;
     display: flex;
     justify-content: space-between;
@@ -408,10 +431,10 @@ input[type="text"],
 input[type="number"],
 textarea,
 select {
-    background: var(--bg-input);
+    background: var(--bg-app);
     /* A-7: the plain --border token measured well under the 3:1 UI-component
-       minimum against both --bg-input and the modal surface (light theme's
-       --bg-input and modal background are both #ffffff, so the boundary
+       minimum against both --bg-app and the modal surface (light theme's
+       --bg-app and modal background are both #ffffff, so the boundary
        relied entirely on this border to be visible at all). */
     border: 1px solid var(--border-strong);
     color: var(--text-main);
@@ -426,8 +449,8 @@ select {
 input:focus,
 textarea:focus,
 select:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(51, 85, 224, 0.16);
+    border-color: var(--accent-bright);
+    box-shadow: 0 0 0 3px rgba(47, 125, 250, 0.18);
 }
 
 textarea {
@@ -436,7 +459,7 @@ textarea {
 
 /* A-15: with no author rule the placeholder colour falls back to the UA
    stylesheet, which - absent a declared color-scheme - Chrome resolves as if
-   the page were light, over a near-black --bg-input. */
+   the page were light, over a near-black --bg-app. */
 ::placeholder {
     color: var(--text-muted);
     opacity: 1;
@@ -452,7 +475,7 @@ textarea {
 .action-card {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 24px;
 }
 
@@ -478,7 +501,7 @@ textarea {
    browser's default focus ring - painted on the input itself - was
    invisible too. There was no compensating focus-visible rule anywhere. */
 .toggle-switch input:focus-visible + .slider {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--accent-bright);
     outline-offset: 2px;
 }
 
@@ -494,7 +517,7 @@ textarea {
        themes (see the removed theme-light override above). */
     background-color: #64748b;
     transition: .3s;
-    border-radius: 24px;
+    border-radius: 999px;
 }
 
 .slider:before {
@@ -528,7 +551,7 @@ input:checked+.slider:before {
 .data-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 16px;
     text-align: center;
 }
@@ -536,7 +559,7 @@ input:checked+.slider:before {
 .data-value {
     font-size: 24px;
     font-weight: 700;
-    color: var(--accent);
+    color: var(--accent-text);
 }
 
 /* Tab Visibility Logic (Crucial) */
@@ -591,13 +614,13 @@ input:checked+.slider:before {
 }
 
 .modal-content {
-    background: var(--bg-sidebar);
+    background: var(--bg-elevated);
     /* A-7: see --border-strong in :root. */
     border: 1px solid var(--border-strong);
-    border-radius: 16px;
+    border-radius: 8px;
     width: 500px;
     max-width: 90%;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-md);
 }
 
 .modal-header {
@@ -631,7 +654,7 @@ input:checked+.slider:before {
     display: inline-block;
 }
 
-.rule-type-badge[data-type="mock"] { background: rgba(79, 110, 247, 0.18); color: #8ea2ff; }
+.rule-type-badge[data-type="mock"] { background: rgba(30, 99, 245, 0.18); color: #8ab6ff; }
 .rule-type-badge[data-type="block"] { background: rgba(244, 63, 94, 0.18); color: #fb7185; }
 .rule-type-badge[data-type="delay"] { background: rgba(251, 146, 60, 0.18); color: #fdba74; }
 .rule-type-badge[data-type="redirect"] { background: rgba(56, 189, 248, 0.18); color: #7dd3fc; }
@@ -642,7 +665,7 @@ input:checked+.slider:before {
 select {
     appearance: none;
     -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238b9ab3' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 10px center;
     padding-right: 34px;
@@ -711,7 +734,7 @@ select {
 }
 
 .btn-secondary:hover {
-    background: #2b3547;
+    background: var(--bg-chip);
     border-color: rgba(148, 163, 184, 0.28);
 }
 
@@ -783,9 +806,9 @@ select {
     justify-content: center;
     width: 40px;
     height: 40px;
-    border-radius: 10px;
-    background: rgba(79, 110, 247, 0.12);
-    color: var(--accent);
+    border-radius: 8px;
+    background: rgba(30, 99, 245, 0.12);
+    color: var(--accent-text);
     margin-bottom: 4px;
 }
 
@@ -831,7 +854,7 @@ select {
 /* A-3: as with the toggle switches, the real <input> is visually hidden, so
    the default focus ring (painted on the input) was invisible. */
 .theme-option input:focus-visible + label .theme-preview {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--accent-bright);
     outline-offset: 2px;
 }
 
@@ -858,11 +881,11 @@ select {
 }
 
 .theme-preview.light { background: #f8fafc; }
-.theme-preview.dark { background: #0f1420; }
-.theme-preview.auto { background: linear-gradient(135deg, #0f1420 50%, #f8fafc 50%); }
+.theme-preview.dark { background: #0b1018; }
+.theme-preview.auto { background: linear-gradient(135deg, #0b1018 50%, #ffffff 50%); }
 
 .theme-option input:checked + label .theme-preview {
-    border-color: var(--accent);
+    border-color: var(--accent-bright);
 }
 
 .theme-option input:checked + label {
@@ -879,7 +902,7 @@ select {
 .reset-card {
     background: rgba(148, 163, 184, 0.03);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 20px;
     display: flex;
     justify-content: space-between;
@@ -918,8 +941,8 @@ select {
 }
 
 .data-tab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
+    color: var(--accent-text);
+    border-bottom-color: var(--accent-bright);
 }
 
 .data-content textarea,
@@ -978,8 +1001,8 @@ select {
 }
 
 .message.info {
-    background: rgba(51, 85, 224, 0.14);
-    color: #8ea2ff;
-    border-color: rgba(51, 85, 224, 0.3);
+    background: rgba(30, 99, 245, 0.14);
+    color: var(--accent-text);
+    border-color: rgba(30, 99, 245, 0.3);
 }
 
