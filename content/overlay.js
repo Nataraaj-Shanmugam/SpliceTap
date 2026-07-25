@@ -296,8 +296,8 @@
         .tm-btn:disabled { opacity: 0.6; cursor: default; }
 
         /* White label => the AA-safe accent, never #2f7dfa (3.86:1 as a fill). */
-        .tm-btn-primary { background: #1e63f5; color: #fff; }
-        .tm-btn-primary:hover:not(:disabled) { background: #1d4fd7; }
+        .tm-btn-primary { background: linear-gradient(135deg, #1e63f5, #0e7490); color: #fff; }
+        .tm-btn-primary:hover:not(:disabled) { background: linear-gradient(135deg, #1d4fd7, #0c6179); }
 
         .tm-btn-secondary {
             background: rgba(148, 163, 184, 0.08);

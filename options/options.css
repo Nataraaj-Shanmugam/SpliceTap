@@ -25,6 +25,13 @@
      white text across this ramp falls from 5.05:1 to 2.29:1, so it must
      never sit behind a label. Used for the mark, decorative icons and rails. */
   --brand-gradient: linear-gradient(135deg, #1e63f5, #0bbcd4);
+  /* Button gradient — the icon's blue->cyan sweep, but ending at cyan-700
+     (#0e7490) instead of the mark's bright #0bbcd4. White stays legible
+     across the WHOLE ramp (worst point 5.05:1); the bright cyan end would
+     drop to 2.29:1, which is why --brand-gradient is decorative-only. */
+  --accent-gradient: linear-gradient(135deg, #1e63f5, #0e7490);
+  --accent-gradient-hover: linear-gradient(135deg, #1d4fd7, #0c6179);
+
   --signal: #0bbcd4;
   --signal-text: #5fdcf0;
   --success: #22c55e;
@@ -269,7 +276,7 @@ body::before {
 }
 
 .btn-primary {
-  background: var(--accent);
+  background: var(--accent-gradient);
   color: #fff;
   border: none;
   height: 32px;
@@ -283,7 +290,7 @@ body::before {
 }
 
 .btn-primary:hover {
-  background: var(--accent-hover);
+  background: var(--accent-gradient-hover);
 }
 
 .btn-ghost {
