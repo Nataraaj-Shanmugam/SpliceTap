@@ -21,6 +21,10 @@
   --accent-hover: #1d4fd7;
   --accent-bright: #2f7dfa;
   --accent-text: #8ab6ff;
+  /* Brand gradient — the icon mark azure->cyan. NON-TEXT SURFACES ONLY:
+     white text across this ramp falls from 5.05:1 to 2.29:1, so it must
+     never sit behind a label. Used for the mark, decorative icons and rails. */
+  --brand-gradient: linear-gradient(135deg, #1e63f5, #0bbcd4);
   --signal: #0bbcd4;
   --signal-text: #5fdcf0;
   --success: #22c55e;
@@ -164,9 +168,23 @@ body {
 }
 
 .nav-item.active {
+  position: relative;
   background: rgba(47, 125, 250, 0.12);
   color: var(--text-main);
-  box-shadow: inset 2px 0 0 var(--accent-bright);
+}
+
+/* Active rail carries the brand gradient. A pseudo-element rather than the
+   previous inset box-shadow, because box-shadow cannot take a gradient.
+   Purely decorative — the label sits on the tint beside it, not on this. */
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--brand-gradient);
 }
 
 .nav-item:focus-visible {
@@ -518,7 +536,11 @@ body.theme-light .btn-danger {
   width: 34px;
   height: 34px;
   border-radius: 9px;
-  background: rgba(47, 125, 250, 0.12);
+  /* Brand-gradient tint at low alpha: reads as the icon's azure->cyan sweep
+     without shifting the effective background enough to affect the glyph's
+     contrast (the glyph is --accent-text, and a 12-14% tint keeps the
+     composited surface within a few % of --bg-card). */
+  background: linear-gradient(135deg, rgba(30, 99, 245, 0.16), rgba(11, 188, 212, 0.14));
   color: var(--accent-text);
   display: flex;
   align-items: center;

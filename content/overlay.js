@@ -90,6 +90,7 @@
         }
 
         .tm-panel {
+            position: relative;
             width: 100%;
             max-width: 620px;
             background: #111a27;
@@ -97,6 +98,19 @@
             border: 1px solid rgba(148, 163, 184, 0.12);
             border-radius: 12px;
             box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Brand gradient hairline along the dialog's top edge. Decorative
+           only — no text sits on it, so the ramp's low-contrast cyan end is
+           not a legibility concern. Inset by the 1px border and clipped to
+           the panel's corner radius. */
+        .tm-panel::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            border-radius: 11px 11px 0 0;
+            background: linear-gradient(135deg, #1e63f5, #0bbcd4);
         }
 
         .tm-head {
@@ -114,11 +128,13 @@
             width: 26px; height: 26px;
             flex-shrink: 0;
             border-radius: 7px;
+            overflow: hidden;
             background: #1e63f5;
             color: #fff;
             display: flex; align-items: center; justify-content: center;
             font-size: 0.6875rem; font-weight: 700; letter-spacing: -0.01em;
         }
+        .tm-logo svg { width: 100%; height: 100%; display: block; }
 
         .tm-title {
             font-size: 0.875rem;
@@ -393,7 +409,23 @@
           <div class="tm-panel" role="dialog" aria-modal="true" aria-labelledby="tmTitle">
             <div class="tm-head">
               <div class="tm-brand">
-                <div class="tm-logo">TM</div>
+                <div class="tm-logo">
+                  <svg viewBox="0 0 128 128" aria-hidden="true" focusable="false">
+                    <defs>
+                      <linearGradient id="tmLogo" x1="0" y1="0" x2="1" y2="1">
+                        <stop offset="0%" stop-color="#1e63f5" />
+                        <stop offset="100%" stop-color="#0bbcd4" />
+                      </linearGradient>
+                    </defs>
+                    <rect x="0" y="0" width="128" height="128" rx="30" fill="url(#tmLogo)" />
+                    <circle cx="28" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <circle cx="52" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <circle cx="76" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <path d="M88 32 L100 44 L88 56" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" opacity="0.5" />
+                    <path d="M100 86 L44 86" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" />
+                    <path d="M42 72 L28 86 L42 100" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </div>
                 <h2 class="tm-title" id="tmTitle">New Rule</h2>
               </div>
               <button class="tm-x" id="tmClose" title="Close">&times;</button>

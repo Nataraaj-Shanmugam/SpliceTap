@@ -25,6 +25,10 @@
   --accent: #1e63f5;
   --accent-hover: #1d4fd7;
   --accent-bright: #2f7dfa;
+  /* Brand gradient — the icon mark azure->cyan. NON-TEXT SURFACES ONLY:
+     white text across this ramp falls from 5.05:1 to 2.29:1, so it must
+     never sit behind a label. Used for the mark, decorative icons and rails. */
+  --brand-gradient: linear-gradient(135deg, #1e63f5, #0bbcd4);
   --signal: #0bbcd4;
   --signal-text: #5fdcf0;
   --success: #22c55e;

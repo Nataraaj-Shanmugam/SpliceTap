@@ -537,7 +537,7 @@ class TurboMockPopup {
             return `
                 <div class="empty-state">
                     <div class="empty-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="url(#tmIconGrad)" stroke-width="1.5" aria-hidden="true" focusable="false"><defs><linearGradient id="tmIconGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1e63f5"/><stop offset="100%" stop-color="#0bbcd4"/></linearGradient></defs><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
                     </div>
                     <h2>No matching rules</h2>
                     <p>No rules found matching "${this.escapeHtml(searchTerm)}"</p>
@@ -548,7 +548,7 @@ class TurboMockPopup {
         return `
             <div class="empty-state">
                 <div class="empty-icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false"><path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/><path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M9 12h6"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="url(#tmIconGrad)" stroke-width="1.5" aria-hidden="true" focusable="false"><defs><linearGradient id="tmIconGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1e63f5"/><stop offset="100%" stop-color="#0bbcd4"/></linearGradient></defs><path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/><path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M9 12h6"/></svg>
                 </div>
                 <h2>No rules yet</h2>
                 <p>Create your first mock rule to get started. Click the + button below.</p>
