@@ -103,6 +103,21 @@ body {
   overflow: hidden;
 }
 
+/* Brand hairline along the top edge — the same motif the options page and
+   the in-page overlay carry. Decorative only (no text sits on it), and
+   `fixed` so it takes no layout space; it overlays the header's 14px top
+   padding. z-index clears .header's 10. */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 20;
+  background: var(--brand-gradient);
+}
+
 .app-container {
   display: flex;
   flex-direction: column;

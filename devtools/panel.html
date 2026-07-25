@@ -93,6 +93,20 @@
             font-size: 12.5px;
         }
 
+        /* Brand hairline along the top edge — same motif as the popup,
+           options page and in-page overlay. Decorative only; `fixed` so it
+           takes no layout space and overlays the body's 16px top padding. */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            z-index: 30;
+            background: var(--brand-gradient);
+        }
+
         /* ── Utilities ────────────────────────────────────────────────── */
         .visually-hidden {
             position: absolute;

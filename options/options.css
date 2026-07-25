@@ -85,6 +85,21 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Brand hairline along the top edge — same motif as the popup, DevTools
+   panel and in-page overlay. Decorative only; `fixed` so it takes no layout
+   space and spans the sidebar and main column alike. z-index clears the
+   sticky .top-bar (20) and .sidebar. */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 30;
+  background: var(--brand-gradient);
+}
+
 .app-container {
   display: flex;
   min-height: 100vh;
