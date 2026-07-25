@@ -1,1008 +1,1034 @@
-/* TurboMock Options */
+/* TurboMock settings — retuned to the popup palette (azure #2f7dfa / cyan #0bbcd4).
+   Selector contract with options.js is unchanged. */
 
 :root {
-    --bg-app: #0b1018;
-    --bg-elevated: #0d141e;
-    --bg-card: #111a27;
-    --bg-card-hover: #101a27;
-    --bg-chip: #1b2735;
+  --bg-app: #0b1018;
+  --bg-elevated: #0d141e;
+  --bg-card: #111a27;
+  --bg-card-hover: #16202e;
+  --bg-chip: #1b2735;
+  --text-main: #e7eefb;
+  --text-muted: #8b9ab3;
+  --text-dim: #8391a8;
+  /* Accent roles are split by contrast requirement (audit/DESIGN-SPEC.md §1).
+     The reference palette used #2f7dfa as the fill under white text, which is
+     only 3.86:1 — below the 4.5:1 AA minimum. Split rather than re-tinted so
+     the design still reads as azure:
+       --accent        fills under white text            5.05:1
+       --accent-bright rings/borders/rails/tints (3:1)   4.93:1
+       --accent-text   accent used AS text/glyph on dark 8.51:1 */
+  --accent: #1e63f5;
+  --accent-hover: #1d4fd7;
+  --accent-bright: #2f7dfa;
+  --accent-text: #8ab6ff;
+  --signal: #0bbcd4;
+  --signal-text: #5fdcf0;
+  --success: #22c55e;
+  --danger: #ef4444;
+  --border: rgba(148, 163, 184, 0.12);
+  --hairline: rgba(148, 163, 184, 0.09);
+  --border-strong: rgba(148, 163, 184, 0.6);
+  --shadow-md: 0 18px 48px rgba(0, 0, 0, 0.5);
 
-    --text-main: #e7eefb;
-    --text-muted: #8b9ab3;
-    --text-dim: #6d7c94;
+  --font-main: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, 'Liberation Mono', Menlo, monospace;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
 
-    /* Accent roles are split by contrast requirement (audit/DESIGN-SPEC.md §1):
-         --accent        fills that carry white text — white on #1e63f5 is
-                         5.05:1, passing AA. Never use --accent-bright here;
-                         white on #2f7dfa is only 3.86:1.
-         --accent-bright non-text only — focus rings, input borders,
-                         decorative icons (3:1 bar; 4.93:1 on --bg-app). */
-    --accent: #1e63f5;
-    --accent-hover: #1d4fd7;
-    --accent-bright: #2f7dfa;
-    /* Accent used AS TEXT on a dark surface: --accent is only 3.46:1 there.
-       Same light blue the popup uses for its mock badge (8.51:1). */
-    --accent-text: #8ab6ff;
-
-    /* The "active/on" state colour across all surfaces is cyan, not green. */
-    --signal: #0bbcd4;
-    --signal-text: #5fdcf0;
-
-    --success: #22c55e;
-    --danger: #ef4444;
-    --border: rgba(148, 163, 184, 0.12);
-    --hairline: rgba(148, 163, 184, 0.09);
-    /* A-7: a stronger border for elements whose boundary needs to be
-       reliably visible (form controls, modal edges, the theme-preview
-       swatches) - the base --border above is intentionally subtle and
-       stays that way for plain card/section dividers. ~3:1 against
-       --bg-app/--bg-elevated. */
-    --border-strong: rgba(148, 163, 184, 0.6);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.4);
-
-    --font-main: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, 'Liberation Mono', Menlo, monospace;
-
-    /* A-14: without this, Chrome computes native form-control chrome
-       (placeholder colour, scrollbars, etc.) as if the page were light,
-       over a near-black --bg-app. */
-    color-scheme: dark;
+  color-scheme: dark;
 }
 
-/* ── Light theme ───────────────────────────────────────────
-   Applied by options.js applyTheme() via body.theme-light
-   (either an explicit choice or 'auto' resolving to light). */
 body.theme-light {
-    --bg-app: #ffffff;
-    --bg-elevated: #fafbfd;
-    --bg-card: #f4f6fa;
-    --bg-card-hover: #f5f9ff;
-    --bg-chip: #eef2f7;
+  --bg-app: #f6f8fb;
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f5f9ff;
+  --bg-chip: #eef2f7;
+  --text-main: #101828;
+  /* Darkened from the reference palette's #66748a / #8592a6, which measured
+     4.46:1 (.section-description on --bg-app) and 3.15:1 (.help-text on a
+     white card) — both under the 4.5:1 AA minimum for body text. WCAG applies
+     to de-emphasised copy too, so the two tiers stay visually distinct but
+     now clear 4.5:1 on --bg-app AND on a white card. */
+  --text-muted: #5d6a80;
+  --text-dim: #667383;
+  --accent: #1e63f5;
+  --accent-hover: #1d4fd7;
+  --accent-bright: #2f7dfa;
+  --accent-text: #1d4fd7;
+  --signal: #0694aa;
+  --signal-text: #03707f;
+  --success: #15803d;
+  --danger: #dc2626;
+  --border: #e2e8f0;
+  --hairline: #eef1f6;
+  --border-strong: rgba(15, 23, 42, 0.5);
+  --shadow-md: 0 18px 48px rgba(15, 23, 42, 0.18);
 
-    --text-main: #101828;
-    --text-muted: #66748a;
-    --text-dim: #8592a6;
-
-    --accent: #1e63f5;
-    --accent-hover: #1d4fd7;
-    --accent-bright: #2f7dfa;
-    --accent-text: #1d4fd7;
-
-    --signal: #0694aa;
-    --signal-text: #03707f;
-
-    --success: #15803d;
-    --danger: #dc2626;
-    --border: #e6ebf2;
-    --hairline: #eef1f6;
-    /* A-7: see --border-strong in :root. */
-    --border-strong: rgba(15, 23, 42, 0.5);
-    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
-    --shadow-md: 0 6px 20px rgba(15, 23, 42, 0.14);
-
-    color-scheme: light;
-}
-
-/* Elements whose colors aren't derived from the tokens above. */
-
-/* Translucent bars/overlays are hardcoded dark for the dark theme; they need
-   light counterparts or they render as grey bands over a light page. */
-body.theme-light .top-bar {
-    background: rgba(255, 255, 255, 0.8);
-}
-
-body.theme-light .nav-item:hover {
-    background: rgba(15, 23, 42, 0.05);
-}
-
-body.theme-light .btn-ghost:hover {
-    background: rgba(15, 23, 42, 0.05);
-    border-color: rgba(15, 23, 42, 0.2);
-}
-
-body.theme-light .btn-small {
-    background: rgba(15, 23, 42, 0.05);
-}
-
-body.theme-light .btn-small:hover {
-    background: rgba(15, 23, 42, 0.1);
-}
-
-/* A-7: .slider's "off" colour is set once, in the theme-independent base
-   rule below - #64748b measures ≥3:1 against both the near-black dark
-   --bg-app and white light --bg-app, so no per-theme override is needed
-   here (the old #cbd5e1 measured only 1.48:1 against white). */
-
-body.theme-light .btn-secondary:hover {
-    background: #e2e8f0;
-}
-
-body.theme-light .setting-item,
-body.theme-light .action-card,
-body.theme-light .reset-card {
-    /* Must stay --bg-card (#f4f6fa): light --bg-app is now #ffffff, so a
-       hardcoded #ffffff here would make every card invisible. */
-    background: var(--bg-card);
-}
-
-body.theme-light .setting-item:hover {
-    background: var(--bg-card-hover);
-    border-color: rgba(15, 23, 42, 0.18);
-}
-
-body.theme-light .rule-type-badge[data-type="mock"] { background: rgba(30, 99, 245, 0.12); color: #1d4fd7; }
-body.theme-light .rule-type-badge[data-type="block"] { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
-/* A-7: #b45309 on this background measured 4.32:1, failing 4.5:1 - darkened
-   to Tailwind's amber-900 (measured ~7.8:1 against the same background). */
-body.theme-light .rule-type-badge[data-type="delay"] { background: rgba(217, 119, 6, 0.14); color: #78350f; }
-body.theme-light .rule-type-badge[data-type="redirect"] { background: rgba(2, 132, 199, 0.12); color: #0369a1; }
-/* A-7: #15803d on this background measured 4.27:1, failing 4.5:1 - reuses
-   the same darker green as .message.success below (measured ~5.65:1 here). */
-body.theme-light .rule-type-badge[data-type="headers"] { background: rgba(21, 128, 61, 0.12); color: #0f6b30; }
-body.theme-light .rule-type-badge[data-type="queryparams"] { background: rgba(124, 58, 237, 0.12); color: #6d28d9; }
-
-body.theme-light .message.success {
-    background: rgba(21, 128, 61, 0.10);
-    /* A-7: #15803d measured 4.07:1 here, failing 4.5:1; darkened (measured ~5.4:1). */
-    color: #0f6b30;
-    border-color: rgba(21, 128, 61, 0.25);
-}
-
-body.theme-light .message.error {
-    background: rgba(220, 38, 38, 0.10);
-    color: #b91c1c;
-    border-color: rgba(220, 38, 38, 0.25);
-}
-
-body.theme-light .message.info {
-    background: rgba(30, 99, 245, 0.10);
-    color: #1d4fd7;
-    border-color: rgba(30, 99, 245, 0.25);
-}
-
-body.theme-light .modal {
-    background: rgba(15, 23, 42, 0.35);
-}
-
-/* Select chevron: darker stroke so it stays visible on white. */
-body.theme-light select {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2366748a' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  color-scheme: light;
 }
 
 * {
-    box-sizing: border-box;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 body {
-    margin: 0;
-    padding: 0;
-    background-color: var(--bg-app);
-    color: var(--text-main);
-    font-family: var(--font-main);
-    height: 100vh;
-    overflow: hidden;
+  background: var(--bg-app);
+  color: var(--text-main);
+  font-family: var(--font-main);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
 }
 
 .app-container {
-    display: flex;
-    height: 100%;
+  display: flex;
+  min-height: 100vh;
 }
 
-/* Sidebar */
+/* ── Sidebar ────────────────────────────────────────────── */
 .sidebar {
-    width: 260px;
-    background: var(--bg-elevated);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    padding: 24px;
+  width: 232px;
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+  padding: 20px 14px;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
 }
 
 .brand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 32px;
-    padding-left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px 20px;
 }
 
 .logo {
-    width: 32px;
-    height: 32px;
-    background: var(--accent);
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 700;
-    font-size: 12px;
-    letter-spacing: -0.3px;
-    color: #fff;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+  color: #fff;
+}
+
+.logo svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .brand h1 {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 700;
-    letter-spacing: -0.5px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .nav-menu {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .nav-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    font-family: var(--font-main);
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    border-radius: 8px;
-    transition: all 0.2s;
-    text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease);
 }
 
 .nav-item:hover {
-    background: rgba(255, 255, 255, 0.05);
-    color: var(--text-main);
+  background: var(--bg-card-hover);
+  color: var(--text-main);
 }
 
 .nav-item.active {
-    background: var(--accent);
-    color: white;
+  background: rgba(47, 125, 250, 0.12);
+  color: var(--text-main);
+  box-shadow: inset 2px 0 0 var(--accent-bright);
+}
+
+.nav-item:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
 }
 
 .nav-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: currentColor;
 }
 
 .nav-icon svg {
-    width: 18px;
-    height: 18px;
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
 }
 
 .sidebar-footer {
-    margin-top: auto;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 11px;
+  margin-top: auto;
+  padding: 12px 8px 0;
+  border-top: 1px solid var(--hairline);
 }
 
-/* Main Content */
+.version {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ── Main ───────────────────────────────────────────────── */
 .main-content {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-app);
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .top-bar {
-    padding: 24px 32px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid var(--border);
-    background: rgba(15, 23, 42, 0.5);
-    backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 28px;
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--border);
 }
 
 .top-bar h2 {
-    margin: 0;
-    font-size: 20px;
-    font-weight: 600;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
 }
 
 .header-actions {
-    display: flex;
-    gap: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .btn-primary {
-    background: var(--accent);
-    color: white;
-    border: none;
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-    transition: background-color 0.15s;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease);
 }
 
 .btn-primary:hover {
-    background: var(--accent-hover);
+  background: var(--accent-hover);
 }
 
 .btn-ghost {
-    background: transparent;
-    color: var(--text-muted);
-    border: 1px solid var(--border);
-    padding: 10px 16px;
-    border-radius: 8px;
-    font-weight: 500;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.2s;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .btn-ghost:hover {
-    background: rgba(255, 255, 255, 0.05);
-    color: var(--text-main);
-    border-color: rgba(255, 255, 255, 0.2);
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+}
+
+.btn-secondary {
+  background: var(--bg-chip);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.btn-secondary:hover {
+  background: var(--bg-card-hover);
+  border-color: rgba(148, 163, 184, 0.28);
 }
 
 .btn-danger {
-    background: rgba(239, 68, 68, 0.1);
-    /* A-7: var(--danger) measured 4.17:1 (dark) / 4.24:1 (light) against this
-       tinted background, both failing 4.5:1. Reuses the same text colours
-       already proven to pass on this exact background pairing in
-       .message.error below/above. */
-    color: #f87171;
-    border: 1px solid rgba(239, 68, 68, 0.2);
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.32);
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s;
 }
 
 body.theme-light .btn-danger {
-    color: #b91c1c;
+  background: rgba(220, 38, 38, 0.08);
+  color: #b91c1c;
+  border-color: rgba(220, 38, 38, 0.3);
 }
 
 .btn-danger:hover {
-    background: rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.2);
 }
 
-/* Content Scroll */
+.btn-small {
+  background: var(--bg-chip);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.btn-small:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+}
+
+.btn-primary:focus-visible,
+.btn-ghost:focus-visible,
+.btn-secondary:focus-visible,
+.btn-danger:focus-visible,
+.btn-small:focus-visible,
+.modal-close:focus-visible,
+.data-tab:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+}
+
 .content-scroll {
-    flex: 1;
-    overflow-y: auto;
-    padding: 32px;
+  flex: 1;
+  padding: 24px 28px 56px;
+  max-width: 900px;
+  width: 100%;
 }
 
-/* Settings Sections */
+/* ── Sections ───────────────────────────────────────────── */
 .settings-section {
-    max-width: 800px;
-    margin-bottom: 40px;
+  margin-bottom: 32px;
 }
 
 .settings-section h2 {
-    font-size: 18px;
-    margin-bottom: 8px;
-    border-bottom: none;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 4px;
 }
 
 .section-description {
-    color: var(--text-muted);
-    margin-bottom: 24px;
-    font-size: 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
 }
 
 .setting-group {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
 }
 
 .setting-item {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 20px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--hairline);
+  transition: background-color 0.15s var(--ease);
+}
+
+.setting-item:last-child {
+  border-bottom: none;
 }
 
 .setting-item:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(255, 255, 255, 0.15);
+  background: var(--bg-card-hover);
+}
+
+.setting-info {
+  min-width: 0;
 }
 
 .setting-info label {
-    font-weight: 600;
-    display: block;
-    margin-bottom: 4px;
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 2px;
 }
 
 .setting-description {
-    font-size: 13px;
-    color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  text-wrap: pretty;
 }
 
-/* Inputs */
-input[type="text"],
-input[type="number"],
-textarea,
-select {
-    background: var(--bg-app);
-    /* A-7: the plain --border token measured well under the 3:1 UI-component
-       minimum against both --bg-app and the modal surface (light theme's
-       --bg-app and modal background are both #ffffff, so the boundary
-       relied entirely on this border to be visible at all). */
-    border: 1px solid var(--border-strong);
-    color: var(--text-main);
-    padding: 10px 12px;
-    border-radius: 6px;
-    font-family: var(--font-main);
-    font-size: 13px;
-    outline: none;
-    transition: border-color 0.15s, box-shadow 0.15s;
+.setting-control {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-input:focus,
-textarea:focus,
-select:focus {
-    border-color: var(--accent-bright);
-    box-shadow: 0 0 0 3px rgba(47, 125, 250, 0.18);
+.setting-control input[type="number"],
+.setting-control input[type="text"] {
+  width: 96px;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  outline: none;
 }
 
-textarea {
-    font-family: var(--font-mono);
+.setting-control input:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px rgba(47, 125, 250, 0.18);
 }
 
-/* A-15: with no author rule the placeholder colour falls back to the UA
-   stylesheet, which - absent a declared color-scheme - Chrome resolves as if
-   the page were light, over a near-black --bg-app. */
-::placeholder {
-    color: var(--text-muted);
-    opacity: 1;
-}
-
-/* Cards Grid */
-.import-export-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 20px;
-}
-
-.action-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 24px;
-}
-
-.action-card h3 {
-    font-size: 16px;
-    margin: 12px 0 8px;
-}
-
-/* Toggle Switch */
+/* ── Toggle ─────────────────────────────────────────────── */
 .toggle-switch {
-    position: relative;
-    width: 44px;
-    height: 24px;
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
 }
 
 .toggle-switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
 }
 
-/* A-3: the real <input> is visually hidden (0x0, opacity 0), so the
-   browser's default focus ring - painted on the input itself - was
-   invisible too. There was no compensating focus-visible rule anywhere. */
 .toggle-switch input:focus-visible + .slider {
-    outline: 2px solid var(--accent-bright);
-    outline-offset: 2px;
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
 }
 
 .slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    /* A-7: #334155 measured 1.66:1 against the surrounding dark card,
-       failing the 3:1 non-text minimum; #64748b measures ≥3:1 in both
-       themes (see the removed theme-light override above). */
-    background-color: #64748b;
-    transition: .3s;
-    border-radius: 999px;
+  position: absolute;
+  inset: 0;
+  background: var(--bg-chip);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  transition: background-color 0.2s var(--ease), border-color 0.2s var(--ease);
+  pointer-events: none;
 }
 
 .slider:before {
-    position: absolute;
-    content: "";
-    height: 18px;
-    width: 18px;
-    left: 3px;
-    bottom: 3px;
-    background-color: white;
-    transition: .3s;
-    border-radius: 50%;
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transform: translateY(-50%);
+  transition: left 0.18s var(--ease), background-color 0.18s;
 }
 
-input:checked+.slider {
-    background-color: var(--success);
+.toggle-switch input:checked + .slider {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
-input:checked+.slider:before {
-    transform: translateX(20px);
+.toggle-switch input:checked + .slider:before {
+  left: 21px;
+  background: #fff;
 }
 
-/* Data Overview */
+/* ── Cards / grids ──────────────────────────────────────── */
+.import-export-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.action-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgba(47, 125, 250, 0.12);
+  color: var(--accent-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 2px;
+}
+
+.card-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.8;
+}
+
+.action-card h3 {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.action-card p {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.card-actions {
+  margin-top: 4px;
+}
+
+.import-options,
+.card-stats {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.import-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.card-stats span {
+  font-family: var(--font-mono);
+  color: var(--signal-text);
+}
+
 .data-overview {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 16px;
-    margin-bottom: 24px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
 }
 
 .data-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
-    text-align: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  font-size: 12.5px;
+  color: var(--text-muted);
 }
 
 .data-value {
-    font-size: 24px;
-    font-weight: 700;
-    color: var(--accent-text);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 2px;
 }
 
-/* Tab Visibility Logic (Crucial) */
 .tab-content {
-    display: none;
+  display: none;
 }
 
 .tab-content.active {
-    display: block;
-    animation: fadeIn 0.3s ease;
+  display: block;
 }
 
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(10px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+/* ── Theme picker ───────────────────────────────────────── */
+.theme-selector {
+  display: flex;
+  gap: 10px;
 }
 
-/* A-14: every animated affordance was unconditional. */
-@media (prefers-reduced-motion: reduce) {
-    .tab-content.active {
-        animation: none;
-    }
-
-    * {
-        transition-duration: 0.01ms !important;
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-    }
+.theme-option input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
 }
 
-/* Modals */
+.theme-option input:focus-visible + label .theme-preview {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+}
+
+.theme-option label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.theme-preview {
+  width: 54px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.theme-preview.light { background: #f6f8fb; }
+.theme-preview.dark { background: #0b1018; }
+.theme-preview.auto { background: linear-gradient(135deg, #0b1018 50%, #f6f8fb 50%); }
+
+.theme-option input:checked + label .theme-preview {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px rgba(47, 125, 250, 0.2);
+}
+
+.theme-option input:checked + label {
+  color: var(--text-main);
+  font-weight: 600;
+}
+
+/* ── Reset cards ────────────────────────────────────────── */
+.reset-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.reset-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reset-card h4 {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+/* ── Modals ─────────────────────────────────────────────── */
 .modal {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
-    z-index: 100;
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(4, 8, 14, 0.68);
+  backdrop-filter: blur(3px);
+  padding: 40px 20px;
+  overflow-y: auto;
+}
+
+body.theme-light .modal {
+  background: rgba(15, 23, 42, 0.42);
 }
 
 .modal.show {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
 }
 
 .modal-content {
-    background: var(--bg-elevated);
-    /* A-7: see --border-strong in :root. */
-    border: 1px solid var(--border-strong);
-    border-radius: 8px;
-    width: 500px;
-    max-width: 90%;
-    box-shadow: var(--shadow-md);
+  width: 100%;
+  max-width: 460px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.modal-content.large {
+  max-width: 760px;
 }
 
 .modal-header {
-    padding: 16px 24px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    justify-content: space-between;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h3 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.modal-close {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.modal-close:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-main);
 }
 
 .modal-body {
-    padding: 24px;
+  padding: 20px;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
 }
 
 .modal-footer {
-    padding: 16px 24px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-app);
 }
 
-/* Rule Type Badge (G5.6) - contract shared with popup/*: a single .rule-type-badge
-   class with a data-type attribute carrying the raw rule.type value. */
-.rule-type-badge {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    display: inline-block;
-}
-
-.rule-type-badge[data-type="mock"] { background: rgba(30, 99, 245, 0.18); color: #8ab6ff; }
-.rule-type-badge[data-type="block"] { background: rgba(244, 63, 94, 0.18); color: #fb7185; }
-.rule-type-badge[data-type="delay"] { background: rgba(251, 146, 60, 0.18); color: #fdba74; }
-.rule-type-badge[data-type="redirect"] { background: rgba(56, 189, 248, 0.18); color: #7dd3fc; }
-.rule-type-badge[data-type="headers"] { background: rgba(34, 197, 94, 0.18); color: #6ee7a0; }
-.rule-type-badge[data-type="queryparams"] { background: rgba(167, 139, 250, 0.18); color: #c4b5fd; }
-
-/* ── Selects ───────────────────────────────────────────── */
-select {
-    appearance: none;
-    -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238b9ab3' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 10px center;
-    padding-right: 34px;
-    cursor: pointer;
-}
-
-/* ── Form layout (rule editor & modals) ────────────────── */
+/* ── Forms ──────────────────────────────────────────────── */
 .form-row {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 4px;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
 .form-group {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-bottom: 16px;
-    flex: 1;
-    min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+  min-width: 0;
+}
+
+.form-row .form-group {
+  margin-bottom: 0;
 }
 
 .form-group > label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-main);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
 }
 
 .form-group input[type="text"],
 .form-group input[type="number"],
 .form-group textarea,
 .form-group select {
-    width: 100%;
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-main);
+  font-family: var(--font-main);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.form-group input:focus,
+.form-group textarea:focus,
+.form-group select:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px rgba(47, 125, 250, 0.18);
+}
+
+.form-group input::placeholder,
+.form-group textarea::placeholder {
+  color: var(--text-dim);
+  opacity: 1;
+}
+
+select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+                    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position: right 14px center, right 9px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px !important;
 }
 
 .help-text {
-    font-size: 12px;
-    color: var(--text-muted);
-    line-height: 1.4;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  text-wrap: pretty;
 }
 
 .code-font {
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    line-height: 1.5;
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+  line-height: 1.55;
+  resize: vertical;
 }
 
 .input-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 8px;
-    flex-wrap: wrap;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-/* ── Buttons (secondary / small) ───────────────────────── */
-.btn-secondary {
-    background: var(--bg-card-hover);
-    color: var(--text-main);
-    border: 1px solid var(--border);
-    padding: 10px 18px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-    transition: background-color 0.15s, border-color 0.15s;
+/* ── Rule-type badges (shared contract with popup) ──────── */
+.rule-type-badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  padding: 1px 5px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: inline-block;
 }
 
-.btn-secondary:hover {
-    background: var(--bg-chip);
-    border-color: rgba(148, 163, 184, 0.28);
+.rule-type-badge[data-type="mock"] { background: rgba(47, 125, 250, 0.16); color: #8ab6ff; }
+.rule-type-badge[data-type="block"] { background: rgba(239, 68, 68, 0.16); color: #fca5a5; }
+.rule-type-badge[data-type="delay"] { background: rgba(217, 119, 6, 0.16); color: #fbbf5a; }
+.rule-type-badge[data-type="redirect"] { background: rgba(2, 132, 199, 0.18); color: #7dd3fc; }
+.rule-type-badge[data-type="headers"] { background: rgba(34, 197, 94, 0.16); color: #6ee7a0; }
+.rule-type-badge[data-type="queryparams"] { background: rgba(167, 139, 250, 0.16); color: #c9a2fb; }
+
+body.theme-light .rule-type-badge[data-type="mock"] { background: rgba(30, 99, 245, 0.12); color: #1d4fd7; }
+body.theme-light .rule-type-badge[data-type="block"] { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
+body.theme-light .rule-type-badge[data-type="delay"] { background: rgba(217, 119, 6, 0.14); color: #78350f; }
+body.theme-light .rule-type-badge[data-type="redirect"] { background: rgba(2, 132, 199, 0.12); color: #0369a1; }
+body.theme-light .rule-type-badge[data-type="headers"] { background: rgba(21, 128, 61, 0.12); color: #0f6b30; }
+body.theme-light .rule-type-badge[data-type="queryparams"] { background: rgba(124, 58, 237, 0.12); color: #6d28d9; }
+
+/* ── Data viewer ────────────────────────────────────────── */
+.data-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.btn-small {
-    background: rgba(148, 163, 184, 0.08);
-    color: var(--text-muted);
-    border: 1px solid var(--border);
-    padding: 5px 12px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background-color 0.15s, color 0.15s;
-}
-
-.btn-small:hover {
-    background: rgba(148, 163, 184, 0.16);
-    color: var(--text-main);
-}
-
-/* ── Modal refinements ─────────────────────────────────── */
-.modal-content.large {
-    width: 640px;
-}
-
-.modal-header {
-    align-items: center;
-}
-
-.modal-header h3 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-}
-
-.modal-close {
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    font-size: 22px;
-    line-height: 1;
-    cursor: pointer;
-    /* A-20: was padding: 0 4px, a ~22x14px hit area - below the 24x24 CSS px
-       minimum for the most important control in every modal. */
-    padding: 8px;
-    min-width: 24px;
-    min-height: 24px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 6px;
-    transition: color 0.15s, background-color 0.15s;
-}
-
-.modal-close:hover {
-    color: var(--text-main);
-    background: rgba(148, 163, 184, 0.12);
-}
-
-.modal-body {
-    max-height: 70vh;
-    overflow-y: auto;
-}
-
-/* ── Import / export cards ─────────────────────────────── */
-.card-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 8px;
-    background: rgba(30, 99, 245, 0.12);
-    color: var(--accent-text);
-    margin-bottom: 4px;
-}
-
-.card-icon svg {
-    width: 20px;
-    height: 20px;
-}
-
-.action-card p {
-    color: var(--text-muted);
-    font-size: 13px;
-    margin: 0 0 16px;
-}
-
-.card-actions {
-    margin-bottom: 12px;
-}
-
-.import-options,
-.card-stats {
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.import-options label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-}
-
-/* ── Theme selector ────────────────────────────────────── */
-.theme-selector {
-    display: flex;
-    gap: 12px;
-}
-
-.theme-option input {
-    position: absolute;
-    opacity: 0;
-}
-
-/* A-3: as with the toggle switches, the real <input> is visually hidden, so
-   the default focus ring (painted on the input) was invisible. */
-.theme-option input:focus-visible + label .theme-preview {
-    outline: 2px solid var(--accent-bright);
-    outline-offset: 2px;
-}
-
-.theme-option label {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.theme-preview {
-    width: 48px;
-    height: 34px;
-    border-radius: 8px;
-    /* A-7: var(--border) measured ~1.05-1.27:1 here, failing the 3:1
-       non-text minimum - the preview swatches (especially the near-white
-       "light" one on a light page) need a reliably visible boundary since
-       their fill is the whole point of the preview. */
-    border: 2px solid var(--border-strong);
-    transition: border-color 0.15s;
-}
-
-.theme-preview.light { background: #f8fafc; }
-.theme-preview.dark { background: #0b1018; }
-.theme-preview.auto { background: linear-gradient(135deg, #0b1018 50%, #ffffff 50%); }
-
-.theme-option input:checked + label .theme-preview {
-    border-color: var(--accent-bright);
-}
-
-.theme-option input:checked + label {
-    color: var(--text-main);
-}
-
-/* ── Reset cards ───────────────────────────────────────── */
-.reset-options {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 16px;
-}
-
-.reset-card {
-    background: rgba(148, 163, 184, 0.03);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 20px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-}
-
-.reset-card h4 {
-    margin: 0;
-    font-size: 14px;
-    font-weight: 600;
-}
-
-/* ── Data viewer modal ─────────────────────────────────── */
 .data-tabs {
-    display: flex;
-    gap: 4px;
-    margin-bottom: 16px;
-    border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  align-self: flex-start;
 }
 
 .data-tab {
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    color: var(--text-muted);
-    padding: 8px 14px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: color 0.15s, border-color 0.15s;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
 }
 
 .data-tab:hover {
-    color: var(--text-main);
+  color: var(--text-main);
 }
 
 .data-tab.active {
-    color: var(--accent-text);
-    border-bottom-color: var(--accent-bright);
+  background: var(--bg-chip);
+  color: var(--text-main);
+  font-weight: 600;
+}
+
+body.theme-light .data-tab.active {
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.1);
 }
 
 .data-content textarea,
 #dataDisplay {
-    width: 100%;
-    min-height: 320px;
-    resize: vertical;
+  width: 100%;
+  min-height: 340px;
+  padding: 12px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
 }
 
-/* ── Message / toast container ─────────────────────────── */
-/* U-1: this container lives in .content-scroll, outside every modal - and
-   modals are `position: fixed; inset: 0` with a blurred backdrop at
-   z-index: 100. Any message rendered here (including every one of
-   saveRuleFromEditor's 20+ validation-error exits) was painted underneath
-   that backdrop whenever a modal was open, i.e. invisible. Making the
-   container itself `position: fixed` with a higher z-index than `.modal`
-   lifts it above any open modal regardless of where it sits in the DOM, and
-   also means options.js no longer needs `window.scrollTo(...)` to bring it
-   into view (body has `overflow: hidden`, and the real scroller is
-   `.content-scroll` anyway - that scrollTo call never did anything useful).
-   */
+/* ── Messages ───────────────────────────────────────────── */
 .message-container:empty {
-    display: none;
+  display: none;
 }
 
 .message-container {
-    position: fixed;
-    top: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 1000;
-    width: min(560px, calc(100% - 40px));
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .message {
-    padding: 12px 16px;
-    border-radius: 8px;
-    font-size: 13px;
-    border: 1px solid transparent;
-    box-shadow: var(--shadow-md);
+  padding: 10px 14px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid transparent;
 }
 
 .message.success {
-    background: rgba(34, 197, 94, 0.1);
-    color: #6ee7a0;
-    border-color: rgba(34, 197, 94, 0.22);
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #6ee7a0;
 }
 
 .message.error {
-    background: rgba(239, 68, 68, 0.1);
-    color: #f87171;
-    border-color: rgba(239, 68, 68, 0.22);
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.32);
+  color: #fca5a5;
 }
 
 .message.info {
-    background: rgba(30, 99, 245, 0.14);
-    color: var(--accent-text);
-    border-color: rgba(30, 99, 245, 0.3);
+  background: rgba(47, 125, 250, 0.12);
+  border-color: rgba(47, 125, 250, 0.3);
+  color: #8ab6ff;
 }
 
+body.theme-light .message.success { background: rgba(21, 128, 61, 0.1); color: #166534; }
+body.theme-light .message.error { background: rgba(220, 38, 38, 0.1); color: #b91c1c; }
+body.theme-light .message.info { background: rgba(30, 99, 245, 0.1); color: #1d4fd7; }
+
+/* ── Light-theme surface tweaks ─────────────────────────── */
+body.theme-light .top-bar { background: #ffffff; }
+body.theme-light .nav-item:hover { background: #f0f4fa; }
+body.theme-light .btn-ghost:hover { background: #f0f4fa; }
+body.theme-light .btn-small { background: #f4f6fa; }
+body.theme-light .btn-small:hover { background: #eaeff7; }
+body.theme-light .btn-secondary { background: #f4f6fa; }
+body.theme-light .btn-secondary:hover { background: #eaeff7; }
+body.theme-light .setting-item,
+body.theme-light .action-card,
+body.theme-light .reset-card { box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04); }
+body.theme-light .setting-item:hover { background: #f7faff; }
+body.theme-light select {
+  background-image: linear-gradient(45deg, transparent 50%, #5d6a80 50%),
+                    linear-gradient(135deg, #5d6a80 50%, transparent 50%);
+}
+body.theme-light .slider:before { background: #fff; }
+
+/* ── Motion / forced colours ────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .setting-group,
+  .action-card,
+  .reset-card,
+  .data-card,
+  .modal-content,
+  .theme-preview,
+  .slider,
+  .form-group input,
+  .form-group textarea,
+  .form-group select {
+    border-color: CanvasText;
+  }
+
+  .toggle-switch input:checked + .slider {
+    background: Highlight;
+    border-color: Highlight;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-container { flex-direction: column; }
+  .sidebar {
+    width: 100%;
+    height: auto;
+    position: static;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-menu { flex-direction: row; flex-wrap: wrap; }
+  .content-scroll { padding: 20px 16px 40px; }
+  .top-bar { padding: 14px 16px; flex-wrap: wrap; }
+}

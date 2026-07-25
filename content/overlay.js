@@ -67,7 +67,7 @@
            host element — so a page rule touching custom properties on our
            host could repaint the dialog. Literals cannot be reached at all.
              bg-app #0b1018 · bg-card #111a27
-             text-main #e7eefb · text-muted #8b9ab3 · text-dim #6d7c94
+             text-main #e7eefb · text-muted #8b9ab3 · text-dim #8391a8
              accent #1e63f5 (only fill allowed under white text, 5.05:1)
              accent-hover #1d4fd7
              accent-bright #2f7dfa (focus rings / borders / tints ONLY —
@@ -188,7 +188,7 @@
 
         /* Micro-label. :not(.tm-check) keeps the checkbox row's own <label>
            — a direct child of .tm-field too — out of the uppercase scale.
-           --text-muted rather than --text-dim: #6d7c94 on the #111a27 panel
+           --text-muted rather than --text-dim: #8391a8 on the #111a27 panel
            is 4.13:1, under the 4.5:1 bar for 10px text. #8b9ab3 is 6.07:1. */
         .tm-field > label:not(.tm-check) {
             font-size: 0.625rem;
@@ -230,7 +230,7 @@
         }
 
         .tm-field input::placeholder,
-        .tm-field textarea::placeholder { color: #6d7c94; opacity: 1; }
+        .tm-field textarea::placeholder { color: #8391a8; opacity: 1; }
 
         .tm-field input[type="text"]:focus,
         .tm-field input[type="number"]:focus,
@@ -322,10 +322,10 @@
         .tm-light .tm-head { border-bottom-color: #eef1f6; }
         .tm-light .tm-foot { border-top-color: #eef1f6; }
         .tm-light .tm-title { color: #101828; }
-        .tm-light .tm-field > label:not(.tm-check) { color: #66748a; }
-        .tm-light .tm-hint { color: #66748a; }
+        .tm-light .tm-field > label:not(.tm-check) { color: #5d6a80; }
+        .tm-light .tm-hint { color: #5d6a80; }
         .tm-light .tm-check { color: #101828; }
-        .tm-light .tm-x { color: #66748a; }
+        .tm-light .tm-x { color: #5d6a80; }
         .tm-light .tm-x:hover { background: rgba(15, 23, 42, 0.07); color: #101828; }
         .tm-light .tm-field input[type="text"],
         .tm-light .tm-field input[type="number"],
@@ -334,7 +334,7 @@
             background: #f4f6fa; color: #101828; border-color: #e6ebf2;
         }
         .tm-light .tm-field input::placeholder,
-        .tm-light .tm-field textarea::placeholder { color: #8592a6; }
+        .tm-light .tm-field textarea::placeholder { color: #667383; }
         .tm-light .tm-hintbar {
             background: rgba(30, 99, 245, 0.07);
             color: #101828;
