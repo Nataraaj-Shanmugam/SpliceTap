@@ -1,5 +1,5 @@
 /**
- * TurboMock Extension - Enhanced Popup JavaScript
+ * SpliceTap Extension - Enhanced Popup JavaScript
  * Fixed version with working navigation and proper state management
  */
 
@@ -21,7 +21,7 @@
     }
 })();
 
-class TurboMockPopup {
+class SpliceTapPopup {
     constructor() {
         this.rules = [];
         this.filteredRules = [];
@@ -70,7 +70,7 @@ class TurboMockPopup {
 
             // Animate popup entrance
             document.body.classList.add('loaded');
-            console.log('TurboMock popup initialized');
+            console.log('SpliceTap popup initialized');
         } catch (error) {
             console.error('Failed to initialize popup:', error);
             this.showError('Failed to load extension data');
@@ -162,7 +162,7 @@ class TurboMockPopup {
     }
 
     /**
-     * Render (or clear) the "TurboMock doesn't have access to this site"
+     * Render (or clear) the "SpliceTap doesn't have access to this site"
      * banner based on this.siteAccessOrigin.
      */
     renderSiteAccessNotice() {
@@ -180,7 +180,7 @@ class TurboMockPopup {
         notice.setAttribute('role', 'note');
 
         const text = document.createElement('span');
-        text.textContent = "TurboMock doesn't have access to this site.";
+        text.textContent = "SpliceTap doesn't have access to this site.";
         notice.appendChild(text);
 
         const grantBtn = document.createElement('button');
@@ -1430,8 +1430,8 @@ class TurboMockPopup {
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
-        window.turboMockPopup = new TurboMockPopup();
+        window.spliceTapPopup = new SpliceTapPopup();
     });
 } else {
-    window.turboMockPopup = new TurboMockPopup();
+    window.spliceTapPopup = new SpliceTapPopup();
 }

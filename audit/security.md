@@ -1,12 +1,12 @@
-# Security Audit — TurboMock
+# Security Audit — SpliceTap
 _Reviewer lens: browser-extension security. Method: static review of 21 files (manifest, both content-script worlds, overlay, service worker, DNR mapper, shared `src/` modules, popup, options, devtools), branch `V1` @ `9921ee9`. Two claims verified by executing the relevant module under Node; everything else is static reading with line citations._
 
 ## Threat model
 
-- **Malicious/compromised web page (primary).** Every site the user visits hosts TurboMock's MAIN-world interceptor and ISOLATED-world relay. It wants to: forge messages into the extension, read or steer the in-page rule editor, plant a persistent rule, fingerprint the user, or defeat mocking.
+- **Malicious/compromised web page (primary).** Every site the user visits hosts SpliceTap's MAIN-world interceptor and ISOLATED-world relay. It wants to: forge messages into the extension, read or steer the in-page rule editor, plant a persistent rule, fingerprint the user, or defeat mocking.
 - **Third-party iframe on an otherwise-benign page** (ad, analytics, embed). Same capabilities as above for `window.postMessage`-reachable surfaces, because the relay runs `all_frames: true` and does no source validation.
-- **Malicious rules file.** Rule sets are shareable JSON — a Slack link, a Gist, a "TurboMock config for our staging env" in a README. Import is one click and applies immediately with no preview. This is TurboMock's most realistic attack vector.
-- **Another installed extension.** Wants to drive TurboMock's message router to install rules. (Ruled out below — no `externally_connectable`, no `onMessageExternal`.)
+- **Malicious rules file.** Rule sets are shareable JSON — a Slack link, a Gist, a "SpliceTap config for our staging env" in a README. Import is one click and applies immediately with no preview. This is SpliceTap's most realistic attack vector.
+- **Another installed extension.** Wants to drive SpliceTap's message router to install rules. (Ruled out below — no `externally_connectable`, no `onMessageExternal`.)
 - **Accidental self-exposure.** The interceptor sees every fetch/XHR on banking, webmail, and internal tools. Anything it logs, persists, or emits back to the page is a data-handling liability regardless of attacker.
 - **Chrome Web Store reviewer.** `<all_urls>` + MAIN-world injection + `declarativeNetRequest` on every site is the highest-scrutiny permission combination there is; unjustified breadth is a rejection risk.
 
@@ -24,10 +24,10 @@ _Reviewer lens: browser-extension security. Method: static review of 21 files (m
 ### [High] S-1: Host page can read and drive the in-page rule editor (open Shadow DOM)
 
 - **Where:** `content/overlay.js:319` (`attachShadow({ mode: 'open' })`), `:329` (host appended to `document.documentElement`), `:331-333` (plain `addEventListener` on Save, no `isTrusted` check), `:429-525` (`collect()` reads live DOM values at click time), `:543` (`chrome.runtime.sendMessage({ type: 'saveRule' })`).
-- **What:** The rule editor renders inside a Shadow DOM to isolate *styles*, but `mode: 'open'` means `document.getElementById('turbomock-rule-overlay-host').shadowRoot` is fully readable and writable from the page's own JS. `collect()` reads the form fields at the moment Save is clicked, and the Save handler accepts untrusted (synthetic) click events. `populate()` (`:387-423`) writes the *entire* rule being edited into those fields first.
+- **What:** The rule editor renders inside a Shadow DOM to isolate *styles*, but `mode: 'open'` means `document.getElementById('splicetap-rule-overlay-host').shadowRoot` is fully readable and writable from the page's own JS. `collect()` reads the form fields at the moment Save is clicked, and the Save handler accepts untrusted (synthetic) click events. `populate()` (`:387-423`) writes the *entire* rule being edited into those fields first.
 - **Attack scenario:**
-  1. User is on `evil.com` and opens TurboMock's rule editor (popup "New Rule"/"Edit", or right-click → "Mock this request"). Both paths render the overlay in the current tab (`popup/popup.js:413-438`, `service_worker/background.js:436-441`).
-  2. `evil.com` detects the host element (`MutationObserver` on `documentElement`, or poll for `#turbomock-rule-overlay-host`).
+  1. User is on `evil.com` and opens SpliceTap's rule editor (popup "New Rule"/"Edit", or right-click → "Mock this request"). Both paths render the overlay in the current tab (`popup/popup.js:413-438`, `service_worker/background.js:436-441`).
+  2. `evil.com` detects the host element (`MutationObserver` on `documentElement`, or poll for `#splicetap-rule-overlay-host`).
   3. Exfiltration: it reads `shadowRoot.getElementById('tmBody').value`, `tmHdrReq`, `tmMatchHeaders` — i.e. whatever the user baked into that rule, which in practice includes API keys, bearer tokens and internal hostnames.
   4. Escalation: just before/instead of the user's click it sets `tmType=headers`, `tmUrl=*`, `tmHdrRes=[{"op":"remove","name":"content-security-policy"}]` and calls `shadowRoot.getElementById('tmSave').click()`. The rule is persisted by the background, gets a `dnrRuleId`, and is registered in DNR globally.
 - **Impact:** A drive-by page escalates to a persistent, browser-wide network rule (see S-2/S-3 for what that buys), and can read the contents of any rule the user edits while on that page. The visual dialog the user sees does not have to match what gets saved.
@@ -36,9 +36,9 @@ _Reviewer lens: browser-extension security. Method: static review of 21 files (m
 
 ### [High] S-2: Rule import performs no validation — one file yields full traffic MITM on every site
 
-- **Where:** `options/options.js:1165-1220` (`importRules`: `JSON.parse` → assign new ids → `sendMessage({type:'setRules'})`, no schema check), `service_worker/background.js:140-161` (`setRules`: only allocates `dnrRuleId`, no validation), `src/storage.js:75-100`/`:117-130` (`saveRules`/`normalizeRule`: only defaults `type` and `response.mode`). `TurboMockUtils.validateUrlPattern` (`src/utils.js:12`) and `validateRule` (`service_worker/background.js:292`) exist but are only reachable from the manual "Test" button, never from save or import.
+- **Where:** `options/options.js:1165-1220` (`importRules`: `JSON.parse` → assign new ids → `sendMessage({type:'setRules'})`, no schema check), `service_worker/background.js:140-161` (`setRules`: only allocates `dnrRuleId`, no validation), `src/storage.js:75-100`/`:117-130` (`saveRules`/`normalizeRule`: only defaults `type` and `response.mode`). `SpliceTapUtils.validateUrlPattern` (`src/utils.js:12`) and `validateRule` (`service_worker/background.js:292`) exist but are only reachable from the manual "Test" button, never from save or import.
 - **What:** Imported rules are persisted and activated verbatim. There is no check that `match.url` is narrower than "everything", no check on `redirect.destination`, no cap on rule count, and no preview of what is about to be installed. The success toast says only `Imported N rules successfully!` (`:1212`).
-- **Attack scenario:** Attacker publishes `turbomock-staging-rules.json` containing:
+- **Attack scenario:** Attacker publishes `splicetap-staging-rules.json` containing:
   ```json
   [{"name":"Staging API","enabled":true,"type":"redirect",
     "match":{"method":"*","url":"/^https:\\/\\/(.*)$/"},
@@ -72,18 +72,18 @@ _Reviewer lens: browser-extension security. Method: static review of 21 files (m
 
 ### [Medium] S-4: `window.postMessage` bridge validates neither `event.source` nor origin
 
-- **Where:** `content/content.js:112-130` (relay listener — checks only `event.data.source === 'turbomock-injected'`), `content/injected.js:593-615` (interceptor listener — checks only `event.data.source === 'turbomock-extension'`), `content/injected.js:66-78` (sender posts with target origin `'*'`), `service_worker/background.js:212-221` (`logInterception` handler — pushes `request.entry` with no shape, type or size validation), `:90-99` (router does not inspect `sender`).
+- **Where:** `content/content.js:112-130` (relay listener — checks only `event.data.source === 'splicetap-injected'`), `content/injected.js:593-615` (interceptor listener — checks only `event.data.source === 'splicetap-extension'`), `content/injected.js:66-78` (sender posts with target origin `'*'`), `service_worker/background.js:212-221` (`logInterception` handler — pushes `request.entry` with no shape, type or size validation), `:90-99` (router does not inspect `sender`).
 - **What:** `event.data.source` is a string the page can trivially write. Neither listener compares `event.source` to `window`, so a same-page script *or any third-party iframe* posting to `parent` reaches the relay, which forwards straight to the privileged background.
 - **Attack scenario:** Any page (or embedded ad frame) runs:
   ```js
   for (let i = 0; i < 5000; i++) window.postMessage({
-    source: 'turbomock-injected', type: 'logInterception',
+    source: 'splicetap-injected', type: 'logInterception',
     entry: { ts: Date.now(), url: 'A'.repeat(50000), method: 'GET',
              ruleId: 'x', ruleName: 'x" style=background:url(//evil/?p)',
              ruleType: 'mock', status: 200 }}, '*');
   ```
   Every message is relayed (`content.js:123-128`) and appended to `this.interceptionLog` (`background.js:214`) with `_applyStatsIncrement(1)` (`:218`) and periodic persistence into `chrome.storage.session` (`:282`).
-- **Impact:** (a) The DevTools interception log — the user's audit trail of what TurboMock did — is fully forgeable, so a page can hide its own interception among noise or fabricate history; (b) the persisted `intercepted` stat in `chrome.storage.local` is attacker-controlled; (c) 200 unbounded entries can be pushed toward the session-storage quota and the SW is kept busy by an unthrottled in-memory push path (only *persistence* is throttled, `:274-279`); (d) the injected strings land in the devtools panel's attribute sinks — see S-6. Separately, the reverse direction lets a page forge `syncState` (`injected.js:594`) to set `tmState.active = false` or replace `tmState.rules` for itself, defeating the user's mocking on that page.
+- **Impact:** (a) The DevTools interception log — the user's audit trail of what SpliceTap did — is fully forgeable, so a page can hide its own interception among noise or fabricate history; (b) the persisted `intercepted` stat in `chrome.storage.local` is attacker-controlled; (c) 200 unbounded entries can be pushed toward the session-storage quota and the SW is kept busy by an unthrottled in-memory push path (only *persistence* is throttled, `:274-279`); (d) the injected strings land in the devtools panel's attribute sinks — see S-6. Separately, the reverse direction lets a page forge `syncState` (`injected.js:594`) to set `tmState.active = false` or replace `tmState.rules` for itself, defeating the user's mocking on that page.
 - **Recommended fix:** In both listeners require `event.source === window` and, for the relay, `event.origin === window.location.origin`. In `background.js:212`, validate `sender.id === chrome.runtime.id` and the entry shape (whitelist keys, coerce types, cap `url`/`ruleName` length), and rate-limit per tab. Treat every `chrome.runtime.onMessage` payload originating from a content script as untrusted input.
 - **Confidence:** High.
 
@@ -113,14 +113,14 @@ _Reviewer lens: browser-extension security. Method: static review of 21 files (m
 
 - **Where:** `content/injected.js:535-542`.
 - **What:** When a `mock`/`patch` rule matches an XHR, the interceptor abandons the XHR and re-issues the request with `originalFetch(requestUrl, { method, headers: requestHeaders, body, credentials: 'include' })`. `XMLHttpRequest.withCredentials` defaults to **false** for cross-origin requests, and the code neither reads nor honours it. The fetch path does not have this problem — it forwards the caller's original arguments (`:195`).
-- **Attack scenario:** A page issues a deliberately anonymous cross-origin XHR to `https://api.partner.com/...`. With a patch rule active, TurboMock re-sends it with the user's `partner.com` cookies attached. The response is still CORS-gated, so it is not directly readable — but the *request* executes server-side with the user's session (a CSRF-style side effect the page never asked for). Chain it with an S-3 rule setting `ACAO: *` + `ACAC: true` and the response becomes readable too.
+- **Attack scenario:** A page issues a deliberately anonymous cross-origin XHR to `https://api.partner.com/...`. With a patch rule active, SpliceTap re-sends it with the user's `partner.com` cookies attached. The response is still CORS-gated, so it is not directly readable — but the *request* executes server-side with the user's session (a CSRF-style side effect the page never asked for). Chain it with an S-3 rule setting `ACAO: *` + `ACAC: true` and the response becomes readable too.
 - **Impact:** Silent credential attachment to cross-origin requests on every site where a patch rule matches; ambient-authority side effects; loss of the page's intentional anonymity guarantee.
 - **Recommended fix:** Map `xhr.withCredentials` to `credentials: 'include' | 'omit'` and preserve same-origin default behaviour (`'same-origin'`). Also drop forbidden request headers rather than replaying `requestHeaders` wholesale.
 - **Confidence:** High.
 
 ### [Low] S-8: Interception log records full URLs (query strings included) and persists them
 
-- **Where:** `content/injected.js:65-79` (entry construction — `url` is the full request URL), `service_worker/background.js:214` (ring buffer, 200 entries), `:282` (`chrome.storage.session.set({ turboMockInterceptionLog })`), `:286` + `src/storage.js:228-246` (stats to `chrome.storage.local`), `devtools/panel.js:165` (rendered with a full-URL `title` tooltip).
+- **Where:** `content/injected.js:65-79` (entry construction — `url` is the full request URL), `service_worker/background.js:214` (ring buffer, 200 entries), `:282` (`chrome.storage.session.set({ spliceTapInterceptionLog })`), `:286` + `src/storage.js:228-246` (stats to `chrome.storage.local`), `devtools/panel.js:165` (rendered with a full-URL `title` tooltip).
 - **What:** Every applied rule logs the complete URL. URLs routinely carry bearer tokens, `?access_token=`, password-reset nonces, order ids and email addresses. There is no redaction, no truncation at capture time (only display truncation at `panel.js:45-48`), and no user-facing "don't log" switch. Persistence is `chrome.storage.session`, so it survives service-worker suspension for the whole browser session.
 - **Impact:** Sensitive query parameters accumulate in extension storage, readable by anything with access to the profile directory and by any future code path that exports storage (the options "Raw Data" viewer at `options/options.js:1384-1393` does `chrome.storage.local.get(null)` and dumps it into a textarea the user may copy/paste). Bounded by the fact that only *matched* requests are logged, and no request/response **bodies** are captured.
 - **Recommended fix:** Store origin + path and strip the query string by default (or redact values of a known-sensitive parameter list), cap entry length, and add a settings toggle for logging. Document the retention in the store listing.
@@ -128,10 +128,10 @@ _Reviewer lens: browser-extension security. Method: static review of 21 files (m
 
 ### [Low] S-9: The extension is trivially fingerprintable and leaks rule names to every page
 
-- **Where:** `content/injected.js:17-18` (`window.__TURBOMOCK_INITIALIZED__ = true` — a MAIN-world global on every page), `:119`/`:253` (patched `fetch`/`XMLHttpRequest`, detectable via `Function.prototype.toString`), `:237-238` and `:213-214` (`x-turbomock` / `x-turbomock-rule` response headers readable by the page), `:66-78` (`postMessage(..., '*')` broadcasts `ruleId`, `ruleName`, `url` into the page where any script can listen), `:58-61` (unconditional `console.error` on missing globals), `content/content.js:157`/`:161`/`:171` (unconditional `console.log`s on every page).
-- **What:** Any site can detect TurboMock with a one-liner, and — once a rule fires — learn the rule's **name** (frequently internal project/service names) from either the broadcast message or the `x-turbomock-rule` header.
-- **Impact:** Extension fingerprinting for tracking; anti-tamper/anti-bot systems can single out and block TurboMock users; minor internal-naming leak. Also lets a hostile page tailor the S-1/S-4 attacks to only fire when TurboMock is present.
-- **Recommended fix:** Use a non-enumerable, randomly-named guard (or a `WeakSet` in the ISOLATED world). Drop `x-turbomock-rule` (or make it opt-in behind debug mode). Target the `postMessage` at `window.location.origin` and send only `ruleId`, resolving the name in the background. Gate the informational `console.log`s behind `settings.debugMode` as the interceptor already does (`injected.js:32-36`).
+- **Where:** `content/injected.js:17-18` (`window.__SPLICETAP_INITIALIZED__ = true` — a MAIN-world global on every page), `:119`/`:253` (patched `fetch`/`XMLHttpRequest`, detectable via `Function.prototype.toString`), `:237-238` and `:213-214` (`x-splicetap` / `x-splicetap-rule` response headers readable by the page), `:66-78` (`postMessage(..., '*')` broadcasts `ruleId`, `ruleName`, `url` into the page where any script can listen), `:58-61` (unconditional `console.error` on missing globals), `content/content.js:157`/`:161`/`:171` (unconditional `console.log`s on every page).
+- **What:** Any site can detect SpliceTap with a one-liner, and — once a rule fires — learn the rule's **name** (frequently internal project/service names) from either the broadcast message or the `x-splicetap-rule` header.
+- **Impact:** Extension fingerprinting for tracking; anti-tamper/anti-bot systems can single out and block SpliceTap users; minor internal-naming leak. Also lets a hostile page tailor the S-1/S-4 attacks to only fire when SpliceTap is present.
+- **Recommended fix:** Use a non-enumerable, randomly-named guard (or a `WeakSet` in the ISOLATED world). Drop `x-splicetap-rule` (or make it opt-in behind debug mode). Target the `postMessage` at `window.location.origin` and send only `ruleId`, resolving the name in the background. Gate the informational `console.log`s behind `settings.debugMode` as the interceptor already does (`injected.js:32-36`).
 - **Confidence:** High.
 
 ### [Low] S-10: Regex URL patterns are compiled from rule data and run on every request (ReDoS)
@@ -139,7 +139,7 @@ _Reviewer lens: browser-extension security. Method: static review of 21 files (m
 - **Where:** `src/matcher.js:31-34` (`new RegExp(pattern.slice(1,-1), 'i')` then `.test(url)`), `:25-30` (wildcard branch), `content/injected.js:88-99` (`computeRedirectUrl` compiles the same pattern again per redirect), `service_worker/dnr.js:33` (`regexFilter` — Chrome enforces its own regex budget here, so DNR is the safer path).
 - **What:** `findMatchingRule` runs on every intercepted `fetch` and `XMLHttpRequest.send`, iterating all enabled rules and compiling their regexes. Nothing rejects catastrophic-backtracking patterns; `validateUrlPattern` (`src/utils.js:38-45`) only checks that the regex *compiles*, and is not on the save/import path anyway (S-2).
 - **Attack scenario:** Imported rule with `match.url: "/^(a+)+$/"` (or any nested-quantifier pattern) plus a long non-matching URL. Every request on every page then burns exponential time on the page's main thread.
-- **Impact:** Browser-wide denial of service that looks like "the web got slow", hard for a user to attribute to TurboMock. No confidentiality impact.
+- **Impact:** Browser-wide denial of service that looks like "the web got slow", hard for a user to attribute to SpliceTap. No confidentiality impact.
 - **Recommended fix:** Compile each rule's regex once at load (cache on the rule) rather than per request; reject patterns with nested quantifiers; and/or execute matching against a length-capped URL with a complexity guard. Prefer DNR for pure URL matching where possible.
 - **Confidence:** Medium (ReDoS is pattern-dependent; the unbounded compile-and-run-per-request path is verified).
 
@@ -156,7 +156,7 @@ _Reviewer lens: browser-extension security. Method: static review of 21 files (m
 
 ### [Nit] S-12: Rule name copied into a response header; test/demo pages ship in the package
 
-- **Where:** `content/injected.js:214` and `:238` (`headers.set('x-turbomock-rule', rule.name)`), `demo.html:197` (`resultsDiv.innerHTML = \`<pre>${JSON.stringify(data,null,2)}</pre>\``), `tests/browser_test.html`, `tests/simulation.html`, and the absence of a packaging step (`package.json` has no build/zip script).
+- **Where:** `content/injected.js:214` and `:238` (`headers.set('x-splicetap-rule', rule.name)`), `demo.html:197` (`resultsDiv.innerHTML = \`<pre>${JSON.stringify(data,null,2)}</pre>\``), `tests/browser_test.html`, `tests/simulation.html`, and the absence of a packaging step (`package.json` has no build/zip script).
 - **What:** `Headers.set` validates its value — a rule name containing a newline, `\0`, or certain non-ASCII characters throws a `TypeError` inside the `fetch` wrapper, which rejects the page's fetch with a confusing error rather than serving the mock. Header *injection* is not possible (the API blocks it), so this is a robustness bug, not a vuln. Separately, `demo.html` and `tests/*.html` would be included in an unfiltered zip; none are in `web_accessible_resources` so no page can frame them, but they are dead weight and an extra reviewer question.
 - **Recommended fix:** Sanitise/omit the rule name in the header (or send `rule.id`), wrap the `set` in a try/catch, and add a packaging step that excludes `tests/`, `demo.html`, `node_modules/`, and `*.txt` scratch files.
 - **Confidence:** High.

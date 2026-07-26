@@ -1,4 +1,4 @@
-# QA / Edge-Case Audit — TurboMock
+# QA / Edge-Case Audit — SpliceTap
 
 _Reviewer lens: adversarial functional testing. Method: static trace of ~30 code paths across
 `content/injected.js`, `content/content.js`, `content/overlay.js`, `src/matcher.js`, `src/storage.js`,
@@ -83,7 +83,7 @@ Findings the prompt listed as already fixed are excluded.
   diverges by transport.
 - **Recommended fix:** in `injected.js`, pass `null` as the body when
   `[101,204,205,304].includes(status)`; clamp/reject statuses < 200 at save time in both editors
-  and in `TurboMockUtils.validateStatusCode`.
+  and in `SpliceTapUtils.validateStatusCode`.
 - **Confidence:** Confirmed (traced **and** executed — `node -e "new Response('',{status:204})"`
   throws `TypeError`; `{status:100}` throws `RangeError`).
 
@@ -131,10 +131,10 @@ Findings the prompt listed as already fixed are excluded.
   Only Factory Reset recovers.
 - **Why it happens:** `options.js:importRules` accepts any array and forwards it to
   `setRules`; the background only spreads each entry (`{...incoming}`) and persists.
-  `TurboMockUtils.importRulesFromFile` (`src/utils.js:243-275`) *does* filter entries lacking
+  `SpliceTapUtils.importRulesFromFile` (`src/utils.js:243-275`) *does* filter entries lacking
   `id`/`name`/`match`/`response` — but nothing calls it (see Q-21).
 - **Recommended fix:** validate imported entries in `options.js:importRules` (reuse
-  `TurboMockUtils.validateRuleStructure`), report skipped counts, and additionally guard
+  `SpliceTapUtils.validateRuleStructure`), report skipped counts, and additionally guard
   `rule.match` in `getRuleCardHTML`/`handleSearch`/`getRuleSummaryText`.
 - **Confidence:** Confirmed (traced).
 
@@ -282,7 +282,7 @@ Findings the prompt listed as already fixed are excluded.
 - **Actual:** the rule saves and intercepts **every** request on every site, because
   `'/'.slice(1,-1) === ''` and `new RegExp('', 'i').test(anything) === true`. Executed check:
   `matchUrl('https://anything.example/x', '/') === true`. `//` behaves identically.
-- **Why it happens:** `TurboMockUtils.validateUrlPattern` explicitly rejects an empty regex body,
+- **Why it happens:** `SpliceTapUtils.validateUrlPattern` explicitly rejects an empty regex body,
   but it is only reachable through the `testRule` message handler
   (`service_worker/background.js:304`) — i.e. the popup's Test button. Neither editor calls it on
   save; both only check non-empty and length.
@@ -366,24 +366,24 @@ Findings the prompt listed as already fixed are excluded.
 
 ---
 
-### [Medium] Q-14: Any script in the page — or a cross-origin iframe — can replace, disable or read TurboMock's rules
+### [Medium] Q-14: Any script in the page — or a cross-origin iframe — can replace, disable or read SpliceTap's rules
 
 - **Where:** `content/injected.js:593-615`; `content/content.js:54-58`, `:112-131`
-- **Repro (hijack):** on any page with TurboMock active, run in the page console:
+- **Repro (hijack):** on any page with SpliceTap active, run in the page console:
   ```js
-  window.postMessage({ source:'turbomock-extension', type:'syncState',
+  window.postMessage({ source:'splicetap-extension', type:'syncState',
                        payload:{ active:false, rules:[], settings:{} } }, '*');
   ```
   All mocking stops for the rest of the page's life. Substituting attacker-authored `rules` installs
   arbitrary mocks instead. A third-party iframe can do the same via `parent.postMessage(...)`.
 - **Repro (disclosure):** run `addEventListener('message', e => { if (e.data?.source ===
-  'turbomock-extension') console.log(e.data.payload.rules); })` before load. The page receives the
+  'splicetap-extension') console.log(e.data.payload.rules); })` before load. The page receives the
   **entire** rules array, including `match.headers` (which commonly holds API keys/bearer tokens)
   and mock response bodies.
 - **Expected:** state sync is not forgeable or readable by page content.
 - **Actual:** the injected listener checks only `event.data.source` — no `event.source === window`
   check, no `event.origin` check. Symmetrically, `content.js:112` accepts any
-  `source:'turbomock-injected'` message and forwards it to the background, so a page can inject
+  `source:'splicetap-injected'` message and forwards it to the background, so a page can inject
   fabricated entries into the 200-entry DevTools log and inflate `stats.intercepted`.
 - **Why it happens:** `postMessage` with `'*'` and no provenance validation in either direction.
 - **Recommended fix:** in `injected.js`, require `event.source === window` and
@@ -405,7 +405,7 @@ Findings the prompt listed as already fixed are excluded.
   2. While that is in flight, use the popup to duplicate an existing `headers` rule (`saveRule`).
   3. Inspect `chrome://extensions` → service worker console.
 - **Expected:** distinct DNR ids; all rules registered.
-- **Actual (when the interleave hits):** both allocations read the same `turboMockDnrCounter` value
+- **Actual (when the interleave hits):** both allocations read the same `spliceTapDnrCounter` value
   and return the same id. `chrome.declarativeNetRequest.updateDynamicRules` then rejects with a
   duplicate-id error. `syncDnrRules` swallows it (`dnr.js:137-139` logs and returns), so **every**
   headers/queryparams rule stops working with no user-visible signal.
@@ -577,7 +577,7 @@ Findings the prompt listed as already fixed are excluded.
   1. Rule: type `redirect`, method `*`, url `*/api/*`, destination `http://localhost:3000/x`.
   2. Page runs `const x = new XMLHttpRequest(); x.open('GET','/api/thing');` and **never** calls
      `send()` (a common pattern in feature-detection and in aborted request pools).
-  3. Open the TurboMock DevTools panel.
+  3. Open the SpliceTap DevTools panel.
 - **Expected:** no entry, `intercepted` unchanged.
 - **Actual:** one entry with status 302 and `stats.intercepted` incremented. Re-`open()`ing the same
   XHR object (legal per spec) logs again each time.
@@ -704,7 +704,7 @@ Findings the prompt listed as already fixed are excluded.
 ### [Low] Q-31: Daily stats reset is a rolling 24 h and never fires if `lastReset` is unparseable
 
 - **Where:** `service_worker/background.js:250-266`
-- **Repro:** set `turboMockStats` to `{"intercepted":5}` (no `lastReset`) via the Raw Data viewer,
+- **Repro:** set `spliceTapStats` to `{"intercepted":5}` (no `lastReset`) via the Raw Data viewer,
   then trigger an interception.
 - **Actual:** `new Date(undefined)` → `Invalid Date` → `daysSinceReset` is `NaN` → `NaN >= 1` is
   `false` → the counter increments forever and never resets. Even in the healthy case the reset is
@@ -719,7 +719,7 @@ Findings the prompt listed as already fixed are excluded.
 
 - `index.js` (repo root) does `require('./popup/popup.js')`, which references `document` at module
   scope (`popup/popup.js:866-871`) → `ReferenceError` under Node. It also destructures
-  `TurboMockUtils` / `TurboMockStorage` from `src/index.js`, which exports neither. Nothing imports
+  `SpliceTapUtils` / `SpliceTapStorage` from `src/index.js`, which exports neither. Nothing imports
   it; `package.json` `main` points at `manifest.json`.
 - `options/options.js:1527-1534` defines `getRuleTypeLabel` / `renderRuleTypeBadge` and
   `RULE_TYPE_LABELS`, none of which are called — the options page's Rules tab has **no rule list at
@@ -827,8 +827,8 @@ This needs a jsdom harness with a fake `window.fetch`/`XMLHttpRequest`. Concrete
 - **`findMatchingRule` first-match-wins with two overlapping rules** — deterministic array order,
   disabled rules skipped, `headers`/`queryparams` correctly excluded from the interceptor path
   (`matcher.js:100`). Behaves as documented.
-- **Double injection of the interceptor** — `window.__TURBOMOCK_INITIALIZED__` (`injected.js:17`)
-  and `window.__TURBOMOCK_OVERLAY_INITIALIZED__` (`overlay.js:18`) both guard correctly.
+- **Double injection of the interceptor** — `window.__SPLICETAP_INITIALIZED__` (`injected.js:17`)
+  and `window.__SPLICETAP_OVERLAY_INITIALIZED__` (`overlay.js:18`) both guard correctly.
 - **Overlay opened twice / overlay + popup interaction** — `ensureHost` is idempotent while the host
   is connected, `populate()` fully repaints every field including the type-specific groups, and
   `close()` removes the `keydown` listener it added. Escape and backdrop-click both close. (One

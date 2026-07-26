@@ -1,5 +1,5 @@
 /**
- * TurboMock Options Page Script
+ * SpliceTap Options Page Script
  * Handles settings, data management, and configuration
  * 
  * FIXED: Race conditions, validation, cleanup, duplicate code
@@ -37,19 +37,19 @@ const TAB_TITLES = {
 
 /**
  * Q-10/S-2: options.js is a classic (non-module) script, but the shared
- * `TurboMockUtils.validateUrlPattern` lives in src/utils.js, an ES module
- * (`export class TurboMockUtils`). Rather than reimplementing pattern
+ * `SpliceTapUtils.validateUrlPattern` lives in src/utils.js, an ES module
+ * (`export class SpliceTapUtils`). Rather than reimplementing pattern
  * validation here, lazily dynamic-import the real module and cache the
  * promise - dynamic `import()` is valid inside a classic script (unlike a
  * static `import` declaration, which would require `type="module"`).
  */
-let _turboMockUtilsPromise = null;
-function getTurboMockUtils() {
-    if (!_turboMockUtilsPromise) {
-        _turboMockUtilsPromise = import(chrome.runtime.getURL('src/utils.js'))
-            .then(mod => mod.TurboMockUtils);
+let _spliceTapUtilsPromise = null;
+function getSpliceTapUtils() {
+    if (!_spliceTapUtilsPromise) {
+        _spliceTapUtilsPromise = import(chrome.runtime.getURL('src/utils.js'))
+            .then(mod => mod.SpliceTapUtils);
     }
-    return _turboMockUtilsPromise;
+    return _spliceTapUtilsPromise;
 }
 
 class OptionsManager {
@@ -89,7 +89,7 @@ class OptionsManager {
                 this.checkUrlParams();
             }
 
-            console.log('TurboMock options page initialized');
+            console.log('SpliceTap options page initialized');
         } catch (error) {
             console.error('Failed to initialize options page:', error);
             this.showMessage('Failed to load options page', 'error');
@@ -98,24 +98,24 @@ class OptionsManager {
 
     /**
      * G5.4: Prefill the rule editor from a context-menu-triggered request.
-     * background.js writes { turboMockPrefill: { url, ts } } before opening this page.
+     * background.js writes { spliceTapPrefill: { url, ts } } before opening this page.
      * Returns true if a prefill was found (and handled), false otherwise.
      */
     async checkPrefill() {
         try {
-            const result = await chrome.storage.local.get(['turboMockPrefill']);
-            const prefill = result.turboMockPrefill;
+            const result = await chrome.storage.local.get(['spliceTapPrefill']);
+            const prefill = result.spliceTapPrefill;
 
             if (!prefill || typeof prefill.ts !== 'number' || !prefill.url) {
                 return false;
             }
 
             if (Date.now() - prefill.ts > PREFILL_MAX_AGE_MS) {
-                await chrome.storage.local.remove('turboMockPrefill');
+                await chrome.storage.local.remove('spliceTapPrefill');
                 return false;
             }
 
-            await chrome.storage.local.remove('turboMockPrefill');
+            await chrome.storage.local.remove('spliceTapPrefill');
 
             this.switchTab('rules');
 
@@ -387,8 +387,8 @@ class OptionsManager {
         // empty string, which matches every request on every site
         // (`new RegExp('', 'i').test(x) === true`). validateUrlPattern already
         // rejects that - it just wasn't being called from either save path.
-        const TurboMockUtils = await getTurboMockUtils();
-        const urlValidation = TurboMockUtils.validateUrlPattern(url);
+        const SpliceTapUtils = await getSpliceTapUtils();
+        const urlValidation = SpliceTapUtils.validateUrlPattern(url);
         if (!urlValidation.isValid) {
             this.showMessage(`Invalid URL pattern: ${urlValidation.error}`, 'error');
             document.getElementById('ruleUrl').focus();
@@ -792,7 +792,7 @@ class OptionsManager {
                 method: '*',
                 url: '*://localhost/*',
                 headersModRequest: JSON.stringify([
-                    { op: 'set', name: 'User-Agent', value: 'Mozilla/5.0 (TurboMock)' }
+                    { op: 'set', name: 'User-Agent', value: 'Mozilla/5.0 (SpliceTap)' }
                 ], null, 2)
             }
         };
@@ -877,14 +877,14 @@ class OptionsManager {
     async loadData() {
         try {
             const result = await chrome.storage.local.get([
-                'turboMockSettings',
-                'turboMockShortcuts',
-                'turboMockRules'
+                'spliceTapSettings',
+                'spliceTapShortcuts',
+                'spliceTapRules'
             ]);
 
-            this.settings = result.turboMockSettings || this.getDefaultSettings();
-            this.shortcuts = result.turboMockShortcuts || this.getDefaultShortcuts();
-            this.rules = result.turboMockRules || [];
+            this.settings = result.spliceTapSettings || this.getDefaultSettings();
+            this.shortcuts = result.spliceTapShortcuts || this.getDefaultShortcuts();
+            this.rules = result.spliceTapRules || [];
 
         } catch (error) {
             console.error('Error loading data:', error);
@@ -1197,7 +1197,7 @@ class OptionsManager {
         const pageTitle = document.getElementById('pageTitle');
         const title = TAB_TITLES[tabName] || TAB_TITLES.rules;
         if (pageTitle) pageTitle.textContent = title;
-        document.title = `TurboMock - ${title}`;
+        document.title = `SpliceTap - ${title}`;
     }
 
     /**
@@ -1214,8 +1214,8 @@ class OptionsManager {
             }
 
             await chrome.storage.local.set({
-                turboMockSettings: this.settings,
-                turboMockShortcuts: this.shortcuts
+                spliceTapSettings: this.settings,
+                spliceTapShortcuts: this.shortcuts
             });
 
             // Notify background script
@@ -1271,7 +1271,7 @@ class OptionsManager {
             shortcuts: this.shortcuts
         };
 
-        this.downloadJSON(exportData, `turbomock-settings-${new Date().toISOString().split('T')[0]}.json`);
+        this.downloadJSON(exportData, `splicetap-settings-${new Date().toISOString().split('T')[0]}.json`);
         this.showMessage('Settings exported successfully!', 'success');
     }
 
@@ -1351,13 +1351,13 @@ class OptionsManager {
                 // validateUrlPattern) rather than writing new validation
                 // logic, and drop anything that fails rather than accepting
                 // the whole file blind.
-                const TurboMockUtils = await getTurboMockUtils();
+                const SpliceTapUtils = await getSpliceTapUtils();
                 const validRules = [];
                 let rejectedCount = 0;
                 for (const rule of importedRules) {
                     const structurallyValid = this.validateRuleForEditing(rule);
                     const urlCheck = structurallyValid
-                        ? TurboMockUtils.validateUrlPattern(rule.match.url)
+                        ? SpliceTapUtils.validateUrlPattern(rule.match.url)
                         : { isValid: false };
                     if (structurallyValid && urlCheck.isValid) {
                         validRules.push(rule);
@@ -1429,7 +1429,7 @@ class OptionsManager {
             rules: this.rules
         };
 
-        this.downloadJSON(exportData, `turbomock-rules-${new Date().toISOString().split('T')[0]}.json`);
+        this.downloadJSON(exportData, `splicetap-rules-${new Date().toISOString().split('T')[0]}.json`);
         this.showMessage(`Exported ${this.rules.length} rules successfully!`, 'success');
     }
 
@@ -1685,11 +1685,11 @@ class OptionsManager {
             const all = await chrome.storage.local.get(null);
             let data;
             switch (tabName) {
-                case 'settings': data = all.turboMockSettings || {}; break;
-                case 'stats': data = all.turboMockStats || {}; break;
+                case 'settings': data = all.spliceTapSettings || {}; break;
+                case 'stats': data = all.spliceTapStats || {}; break;
                 case 'raw': data = all; break;
                 case 'rules':
-                default: data = all.turboMockRules || []; break;
+                default: data = all.spliceTapRules || []; break;
             }
             display.value = JSON.stringify(data, null, 2);
         } catch (error) {

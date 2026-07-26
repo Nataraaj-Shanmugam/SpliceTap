@@ -1,11 +1,11 @@
-# Privacy Policy — TurboMock
+# Privacy Policy — SpliceTap
 
-TurboMock is a local development tool. It does not collect, transmit, sell,
+SpliceTap is a local development tool. It does not collect, transmit, sell,
 or share any data with the developer or any third party.
 
-## What TurboMock stores, and where
+## What SpliceTap stores, and where
 
-Everything TurboMock stores lives in `chrome.storage` on your own device —
+Everything SpliceTap stores lives in `chrome.storage` on your own device —
 Chrome's built-in extension storage, never a remote server:
 
 - **Rules** (`chrome.storage.local`) — the mock/block/delay/redirect/headers/
@@ -24,17 +24,17 @@ Chrome's built-in extension storage, never a remote server:
   Common sensitive query-string parameters (tokens, API keys, session ids)
   are redacted before a URL is written to this log.
 
-None of the above ever leaves your device. TurboMock has no backend, no
+None of the above ever leaves your device. SpliceTap has no backend, no
 analytics SDK, and no telemetry — a repo-wide search confirms the only
 network requests the extension code itself ever issues are the pass-through
 `fetch()` calls the interceptor makes on your behalf when a rule is in
 "patch" mode (to fetch the real response it then modifies) — never a request
-initiated independently by the extension to any TurboMock-controlled server,
+initiated independently by the extension to any SpliceTap-controlled server,
 because none exists.
 
-## What TurboMock can see
+## What SpliceTap can see
 
-To do its job, TurboMock's content scripts run on every page you visit
+To do its job, SpliceTap's content scripts run on every page you visit
 (`<all_urls>` host permission) and can observe `fetch`/`XMLHttpRequest`
 traffic on those pages in order to match it against your rules. This access
 is used only to apply your rules and log the metadata described above — it

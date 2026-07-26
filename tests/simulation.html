@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>TurboMock Interception Simulation</title>
+    <title>SpliceTap Interception Simulation</title>
     <style>
         body {
             font-family: system-ui;
@@ -61,7 +61,7 @@
 </head>
 
 <body>
-    <h1>TurboMock Interception Simulator</h1>
+    <h1>SpliceTap Interception Simulator</h1>
     <p>This page loads the <code>content/injected.js</code> script to simulate how it hijacks <code>window.fetch</code>.
     </p>
 
@@ -84,7 +84,7 @@
     <!-- 1. Load the shared UMD modules injected.js requires (same order as
          manifest.json's MAIN-world content_scripts entry), then the
          interceptor itself. (CQ-Q13: without these, injected.js's
-         turboMockGlobalsReady guard trips and fetch/XHR are left unpatched —
+         spliceTapGlobalsReady guard trips and fetch/XHR are left unpatched —
          this page previously "ran" against the real, unmocked network with
          no indication anything was wrong.) -->
     <script src="../src/matcher.js"></script>
@@ -140,7 +140,7 @@
 
         function activateRules(chaos = false) {
             window.postMessage({
-                source: 'turbomock-extension',
+                source: 'splicetap-extension',
                 type: 'syncState',
                 payload: {
                     active: true,

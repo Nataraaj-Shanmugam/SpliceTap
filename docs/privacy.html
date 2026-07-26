@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="SpliceTap privacy policy — SpliceTap collects no data, has no backend, and sends nothing anywhere. Everything stays in chrome.storage on your own device.">
+    <meta property="og:title" content="SpliceTap - Privacy Policy">
+    <meta property="og:description"
+        content="SpliceTap collects no data, has no backend, and sends nothing anywhere.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://nataraaj-shanmugam.github.io/SpliceTap/privacy.html">
+    <title>Privacy Policy - SpliceTap</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #1e63f5;
+            --primary-dark: #1554d6;
+            --accent: #0bbcd4;
+            --success: #10b981;
+            --bg-light: #f6f8fb;
+            --bg-white: #ffffff;
+            --bg-dark: #0b1220;
+            --text-dark: #0f172a;
+            --text-muted: #55637a;
+            --border: #e2e8f0;
+            --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+            --gradient-primary: linear-gradient(135deg, #1e63f5 0%, #1257c9 45%, #0e7490 100%);
+            --gradient-accent: linear-gradient(135deg, #1e63f5 0%, #0bbcd4 100%);
+            --gradient-tint: linear-gradient(135deg, rgba(30, 99, 245, 0.10), rgba(11, 188, 212, 0.10));
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.7;
+            color: var(--text-dark);
+            background: var(--bg-light);
+        }
+
+        header {
+            background: rgba(255, 255, 255, 0.97);
+            backdrop-filter: blur(10px);
+            padding: 1rem 0;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        nav {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            text-decoration: none;
+            letter-spacing: -0.02em;
+        }
+
+        .logo svg {
+            width: 36px;
+            height: 36px;
+            border-radius: 9px;
+            display: block;
+            flex-shrink: 0;
+        }
+
+        .back-link {
+            color: var(--text-dark);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.95rem;
+            transition: color 0.2s;
+        }
+
+        .back-link:hover { color: var(--primary); }
+
+        .page-hero {
+            background: var(--gradient-primary);
+            color: white;
+            padding: 4rem 2rem 3.5rem;
+            text-align: center;
+        }
+
+        .page-hero h1 {
+            font-size: 2.75rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.75rem;
+        }
+
+        .page-hero p {
+            font-size: 1.1rem;
+            opacity: 0.93;
+            max-width: 620px;
+            margin: 0 auto;
+        }
+
+        /* Dark tint rather than the usual white one: the gradient's lightest
+           stop leaves white text at 5.05:1, so lightening it drops under 4.5:1
+           (a white 0.2 overlay measures 3.59:1). Darkening lands at 6.6:1. */
+        .updated {
+            display: inline-block;
+            margin-top: 1.25rem;
+            background: rgba(0, 0, 0, 0.16);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            backdrop-filter: blur(10px);
+            padding: 0.4rem 1rem;
+            border-radius: 999px;
+            font-size: 0.82rem;
+            font-weight: 600;
+        }
+
+        main {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 3.5rem 2rem 5rem;
+        }
+
+        .summary {
+            background: var(--bg-white);
+            border-radius: 16px;
+            box-shadow: var(--shadow-lg);
+            padding: 2rem;
+            margin-bottom: 3rem;
+            border-left: 4px solid var(--success);
+        }
+
+        .summary h2 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+
+        .summary ul {
+            list-style: none;
+            display: grid;
+            gap: 0.6rem;
+        }
+
+        .summary li {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.6rem;
+            color: var(--text-muted);
+        }
+
+        .summary li::before {
+            content: '✓';
+            color: var(--success);
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .card {
+            background: var(--bg-white);
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+            padding: 2.25rem;
+            margin-bottom: 1.75rem;
+        }
+
+        .card h2 {
+            font-size: 1.6rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            letter-spacing: -0.01em;
+        }
+
+        .card h3 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin: 1.5rem 0 0.6rem;
+        }
+
+        .card h3:first-of-type { margin-top: 1rem; }
+
+        .card p {
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+        }
+
+        .card p:last-child { margin-bottom: 0; }
+
+        .card ul, .card ol {
+            color: var(--text-muted);
+            padding-left: 1.35rem;
+            margin-bottom: 1rem;
+        }
+
+        .card li { margin-bottom: 0.5rem; }
+
+        code {
+            background: var(--bg-light);
+            border: 1px solid var(--border);
+            padding: 0.12rem 0.4rem;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Consolas', 'Courier New', monospace;
+            font-size: 0.86em;
+            color: var(--primary-dark);
+            word-break: break-word;
+        }
+
+        .table-wrap {
+            overflow-x: auto;
+            margin-bottom: 1rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.92rem;
+            min-width: 520px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 0.8rem 0.9rem;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+
+        th {
+            background: var(--bg-light);
+            font-weight: 700;
+            color: var(--text-dark);
+        }
+
+        td { color: var(--text-muted); }
+
+        tbody tr:last-child td { border-bottom: none; }
+
+        .callout {
+            background: var(--gradient-tint);
+            border-radius: 12px;
+            padding: 1.25rem 1.4rem;
+            margin-bottom: 1rem;
+            color: var(--text-dark);
+            font-weight: 500;
+        }
+
+        .callout:last-child { margin-bottom: 0; }
+
+        a { color: var(--primary); }
+
+        footer {
+            background: var(--bg-dark);
+            color: rgba(255, 255, 255, 0.6);
+            text-align: center;
+            padding: 2.5rem 2rem;
+            font-size: 0.875rem;
+        }
+
+        footer a {
+            color: rgba(255, 255, 255, 0.85);
+            text-decoration: none;
+        }
+
+        footer a:hover { color: white; }
+
+        .footer-links {
+            display: flex;
+            gap: 1.5rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 1rem;
+        }
+
+        @media (max-width: 640px) {
+            .page-hero h1 { font-size: 2rem; }
+            .card { padding: 1.5rem; }
+            main { padding: 2.5rem 1.25rem 3.5rem; }
+            nav { padding: 0 1.25rem; }
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <nav>
+            <a href="index.html" class="logo" aria-label="SpliceTap home">
+                <svg viewBox="0 0 128 128" aria-hidden="true" focusable="false">
+                    <defs>
+                        <linearGradient id="stLogoPriv" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#1e63f5" />
+                            <stop offset="100%" stop-color="#0bbcd4" />
+                        </linearGradient>
+                    </defs>
+                    <rect x="0" y="0" width="128" height="128" rx="30" fill="url(#stLogoPriv)" />
+                    <circle cx="28" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <circle cx="52" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <circle cx="76" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <path d="M88 32 L100 44 L88 56" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round"
+                        stroke-linejoin="round" opacity="0.5" />
+                    <path d="M100 86 L44 86" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" />
+                    <path d="M42 72 L28 86 L42 100" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round"
+                        stroke-linejoin="round" />
+                </svg>
+                SpliceTap
+            </a>
+            <a href="index.html" class="back-link">← Back to home</a>
+        </nav>
+    </header>
+
+    <div class="page-hero">
+        <h1>Privacy Policy</h1>
+        <p>SpliceTap is a local development tool. It does not collect, transmit, sell, or share any data with the
+            developer or any third party.</p>
+        <span class="updated">Last updated: 27 July 2026</span>
+    </div>
+
+    <main>
+        <div class="summary">
+            <h2>The short version</h2>
+            <ul>
+                <li>SpliceTap has no backend, no analytics SDK, and no telemetry.</li>
+                <li>Nothing you create or capture ever leaves your device.</li>
+                <li>There is no account, no sign-in, and no user identifier of any kind.</li>
+                <li>Response and request bodies are never stored.</li>
+                <li>The full source is public and auditable under the MIT License.</li>
+            </ul>
+        </div>
+
+        <section class="card">
+            <h2>What SpliceTap stores, and where</h2>
+            <p>Everything SpliceTap stores lives in <code>chrome.storage</code> on your own device — Chrome's
+                built-in extension storage, never a remote server.</p>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Data</th>
+                            <th>Where</th>
+                            <th>What it contains</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Rules</strong></td>
+                            <td><code>storage.local</code></td>
+                            <td>The rules you create: names, URL patterns, methods, response bodies and headers, and
+                                the internal rule id used to register header and query-param rules with
+                                <code>chrome.declarativeNetRequest</code>.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Settings</strong></td>
+                            <td><code>storage.local</code></td>
+                            <td>Theme, debug mode, and chaos-mode configuration.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Stats</strong></td>
+                            <td><code>storage.local</code></td>
+                            <td>A running count of intercepted requests and the last-reset timestamp, for the
+                                popup's stats display.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Interception log</strong></td>
+                            <td><code>storage.session</code></td>
+                            <td>Metadata for the last 200 intercepted requests (URL, method, rule name and type,
+                                response status) so the DevTools panel keeps history across service-worker restarts.
+                                Clears automatically when the browser closes.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="callout">
+                Request and response <strong>bodies are never written to the log</strong> — only metadata. Common
+                sensitive query-string parameters (tokens, API keys, session ids) are redacted before a URL is
+                recorded.
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>What SpliceTap can see</h2>
+            <p>To do its job, SpliceTap's content scripts run on every page you visit (the <code>&lt;all_urls&gt;</code>
+                host permission) and can observe <code>fetch</code> and <code>XMLHttpRequest</code> traffic on those
+                pages in order to match it against your rules.</p>
+            <p>This access is used only to apply your rules and to record the metadata described above. It is never
+                transmitted anywhere. The permission is broad because there is no way to know in advance which site
+                you will want to mock — the interceptor checks your rules internally before acting, and the rule
+                editor overlay stays dormant until you invoke it.</p>
+        </section>
+
+        <section class="card">
+            <h2>Network requests</h2>
+            <p>SpliceTap never initiates a request to any server operated by the developer, because no such server
+                exists. The only network activity the extension's own code performs is the pass-through
+                <code>fetch()</code> the interceptor makes on your behalf when a rule is in <strong>patch
+                    mode</strong> — it fetches the real response from <em>your</em> API so it can modify a few
+                fields before handing it back to the page.</p>
+        </section>
+
+        <section class="card">
+            <h2>Rule import and export</h2>
+            <p>Exporting writes a JSON file to your own downloads folder. Importing reads a file you choose from
+                your own disk, validates it, and applies it locally. Neither operation uploads anything.</p>
+        </section>
+
+        <section class="card">
+            <h2>Third parties</h2>
+            <p>SpliceTap bundles no third-party libraries, SDKs, trackers, or fonts. It makes no calls to
+                advertising networks, analytics providers, crash reporters, or content delivery networks.</p>
+            <p>No data is sold, rented, shared, or disclosed to anyone — there is no data collection to enable it.</p>
+        </section>
+
+        <section class="card">
+            <h2>Children's privacy</h2>
+            <p>SpliceTap is a developer tool and is not directed at children. Since it collects no data at all, it
+                collects no data from children.</p>
+        </section>
+
+        <section class="card">
+            <h2>Deleting your data</h2>
+            <p>All SpliceTap data lives on your device, so you control it completely:</p>
+            <ul>
+                <li>Delete individual rules from the popup or the options page.</li>
+                <li>Use <strong>Options → Advanced → Reset</strong> to clear all stored data at once.</li>
+                <li>Uninstalling the extension removes everything Chrome has stored for it.</li>
+            </ul>
+        </section>
+
+        <section class="card">
+            <h2>Changes to this policy</h2>
+            <p>If this policy changes, the updated version will be published on this page with a new
+                "last updated" date, and the change will appear in the project's public commit history.</p>
+        </section>
+
+        <section class="card">
+            <h2>Contact</h2>
+            <p>Questions about privacy, or something here that looks wrong? Open an issue at
+                <a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/issues" target="_blank"
+                    rel="noopener">github.com/Nataraaj-Shanmugam/SpliceTap/issues</a>.</p>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-links">
+            <a href="index.html">Home</a>
+            <a href="https://github.com/Nataraaj-Shanmugam/SpliceTap" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/issues" target="_blank" rel="noopener">Issues</a>
+            <a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/blob/master/LICENSE" target="_blank"
+                rel="noopener">MIT License</a>
+        </div>
+        <p>&copy; 2026 SpliceTap by Nataraaj Shanmugam.</p>
+    </footer>
+</body>
+
+</html>

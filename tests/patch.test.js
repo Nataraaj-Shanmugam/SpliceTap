@@ -1,8 +1,8 @@
 
-const { TurboMockPatch } = require('../src/index');
-const { jsonMergePatch } = TurboMockPatch;
+const { SpliceTapPatch } = require('../src/index');
+const { jsonMergePatch } = SpliceTapPatch;
 
-describe('TurboMockPatch.jsonMergePatch (RFC 7386)', () => {
+describe('SpliceTapPatch.jsonMergePatch (RFC 7386)', () => {
     test('nested objects merge recursively', () => {
         const original = { a: { b: 1, c: 2 }, d: 3 };
         const patch = { a: { b: 99 } };

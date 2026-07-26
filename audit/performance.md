@@ -1,4 +1,4 @@
-# Performance Audit — TurboMock
+# Performance Audit — SpliceTap
 
 _Reviewer lens: hot-path cost, memory, IPC. Method: static trace of 6 paths — (1) `fetch` with no matching rule, (2) `fetch` with a matching static mock, (3) `XMLHttpRequest` construct → `open` → `send` passthrough, (4) rule-mutation fan-out (`broadcastState` + `syncDnrRules`), (5) MV3 service-worker cold start, (6) page load / script injection. Branch: `V1`. No code was executed; all timing figures are labelled estimates with their reasoning shown._
 
@@ -74,7 +74,7 @@ Per *construction*, before any request is made and regardless of rule count: 1 r
 
 ### Path D — service-worker cold start
 
-`new TurboMockBackground()` (`background.js:496`) → constructor calls `loadStoredData()` (`background.js:50`) → `chrome.storage.local.get` of 8 keys + `chrome.storage.session.get` → **`await this.broadcastState()`** (all tabs, full rule set) → **`await syncDnrRules(...)`** (`dnr.js:130-136`: `getDynamicRules` + full-replace `updateDynamicRules`). This entire sequence runs on *every* wake, and wakes are frequent (see P-5).
+`new SpliceTapBackground()` (`background.js:496`) → constructor calls `loadStoredData()` (`background.js:50`) → `chrome.storage.local.get` of 8 keys + `chrome.storage.session.get` → **`await this.broadcastState()`** (all tabs, full rule set) → **`await syncDnrRules(...)`** (`dnr.js:130-136`: `getDynamicRules` + full-replace `updateDynamicRules`). This entire sequence runs on *every* wake, and wakes are frequent (see P-5).
 
 ---
 
@@ -84,7 +84,7 @@ Per *construction*, before any request is made and regardless of rule count: 1 r
 
 - **Where:** `content/injected.js:119-165` (guard is only `if (!tmState.active)` at `:120`)
 - **Cost:** Per `fetch()`, unconditionally: rest-args array, async-function promise, `headers = {}` object (`:135`), a `.some()` closure (`:145`), and a request-descriptor object literal (`:162`) — ~4 heap allocations — before `findMatchingRule` can report "nothing matched". Runs in every frame of every page (`manifest.json:21-25`, `all_frames: true`).
-- **User impact:** A user who installs TurboMock and configures **zero rules** still pays this on 100 % of the browser's `fetch` traffic, including third-party iframes they never see. This is the cost most likely to show up as "the browser feels slower with this extension installed".
+- **User impact:** A user who installs SpliceTap and configures **zero rules** still pays this on 100 % of the browser's `fetch` traffic, including third-party iframes they never see. This is the cost most likely to show up as "the browser feels slower with this extension installed".
 - **Recommended fix:** Add a first-line bail before any allocation:
   ```js
   if (!tmState.active || tmState.rules.length === 0) return originalFetch.apply(this, args);
@@ -178,7 +178,7 @@ Per *construction*, before any request is made and regardless of rule count: 1 r
 - **Where:** `manifest.json:33-38`; `content/overlay.js` — 599 lines / 24 151 bytes, of which a ~4 KB `STYLES` template literal (`:38-175`) and the `markup()` builder (`:177-308`) are materialised or defined at script-eval time
 - **Cost:** ~24 KB of script compiled and executed on **every** top-level navigation, purely so that `chrome.runtime.onMessage` at `:586` can respond if the user later opens the in-page rule editor — an action most page loads never see. (V8's code cache amortises re-compilation after the first load of a given script, but the execution, closure creation, and the ~4 KB string allocation happen every time.)
 - **User impact:** Adds to the `document_idle` work of every page load, competing with the page's own initialisation.
-- **Recommended fix:** Remove the declarative `overlay.js` content-script entry and inject it on demand with `chrome.scripting.executeScript({target:{tabId}, files:['content/overlay.js']})` from the two call sites that actually need it (`background.js:436` context menu, `popup/popup.js:427`). The existing `__TURBOMOCK_OVERLAY_INITIALIZED__` guard at `:18` already makes re-injection idempotent. Expected saving: ~24 KB of parse+exec removed from ~100 % of page loads. This is the largest single startup win available, and it is close to free.
+- **Recommended fix:** Remove the declarative `overlay.js` content-script entry and inject it on demand with `chrome.scripting.executeScript({target:{tabId}, files:['content/overlay.js']})` from the two call sites that actually need it (`background.js:436` context menu, `popup/popup.js:427`). The existing `__SPLICETAP_OVERLAY_INITIALIZED__` guard at `:18` already makes re-injection idempotent. Expected saving: ~24 KB of parse+exec removed from ~100 % of page loads. This is the largest single startup win available, and it is close to free.
 - **Confidence:** High.
 
 ### [Medium] P-10: XHR constructor allocates ~10 objects per instance and de-optimises the instance shape
@@ -208,8 +208,8 @@ Per *construction*, before any request is made and regardless of rule count: 1 r
 ### [Medium] P-13: A `message` listener in each world means every page `postMessage` is cloned across the world boundary
 
 - **Where:** `content/content.js:112` (isolated world) and `content/injected.js:593` (MAIN world), both `all_frames: true`
-- **Cost:** `window.addEventListener('message')` in the isolated world receives *every* message the page posts to itself, and each delivery requires the payload to be structured-cloned from the MAIN world into the isolated world before the `event.data.source !== 'turbomock-injected'` check at `content.js:113` can reject it. Pages that use `postMessage` heavily — ad frames, embedded video players, payment iframes, React DevTools bridges, Google Tag Manager — can post hundreds of messages per second, each now cloned twice (once for the page's own listeners, once for TurboMock's).
-- **User impact:** On postMessage-heavy pages this can dominate TurboMock's total cost, and it is entirely unrelated to whether any rule exists.
+- **Cost:** `window.addEventListener('message')` in the isolated world receives *every* message the page posts to itself, and each delivery requires the payload to be structured-cloned from the MAIN world into the isolated world before the `event.data.source !== 'splicetap-injected'` check at `content.js:113` can reject it. Pages that use `postMessage` heavily — ad frames, embedded video players, payment iframes, React DevTools bridges, Google Tag Manager — can post hundreds of messages per second, each now cloned twice (once for the page's own listeners, once for SpliceTap's).
+- **User impact:** On postMessage-heavy pages this can dominate SpliceTap's total cost, and it is entirely unrelated to whether any rule exists.
 - **Recommended fix:** Use a dedicated `MessageChannel` established once at injection time (MAIN world creates the channel and hands one port to the isolated world via a single `postMessage`), so subsequent interception logs travel on a private port and no page traffic is observed. Fallback: use a `CustomEvent` on `document` with a namespaced type, which is filtered by the event dispatcher before any cloning. Either eliminates the per-page-message clone entirely.
 - **Confidence:** Medium — the clone-before-filter behaviour is the documented model for cross-world `message` events; the magnitude depends heavily on the page.
 
@@ -218,7 +218,7 @@ Per *construction*, before any request is made and regardless of rule count: 1 r
 - **Where:** `service_worker/background.js:274-287`; `src/storage.js:228-246` (`updateStats` = `getStats()` then `set`)
 - **Cost:** (The 1 500 ms throttle at `:276` is already in place and is not being re-reported.) What remains: each flush writes the **entire** `interceptionLog` array (up to 200 entries, ~40–60 KB) to `chrome.storage.session`, not a delta, and `updateStats` performs a `chrome.storage.local.get` **followed by** a `set` — so sustained mocking costs ~0.67 × (1 session write of 40–60 KB + 1 local read + 1 local disk write) per second. `chrome.storage.local` is LevelDB-backed, so those are real disk writes.
 - **User impact:** Background disk I/O during heavy mocking sessions; contributes to `chrome.storage.session`'s 10 MB budget churn, though the 200-entry cap keeps absolute size safe.
-- **Recommended fix:** Keep the stats counter in memory and flush it on a much longer interval (e.g. 30 s) or on `chrome.runtime.onSuspend`; cache `this.stats` in `TurboMockStorage` so `updateStats` skips the read. Consider persisting only the last N *new* entries. Also add a `force`-flush on suspend so the final entries are not lost — `_persistVolatile(true)` already supports it but is never called with `force`.
+- **Recommended fix:** Keep the stats counter in memory and flush it on a much longer interval (e.g. 30 s) or on `chrome.runtime.onSuspend`; cache `this.stats` in `SpliceTapStorage` so `updateStats` skips the read. Consider persisting only the last N *new* entries. Also add a `force`-flush on suspend so the final entries are not lost — `_persistVolatile(true)` already supports it but is never called with `force`.
 - **Confidence:** High.
 
 ### [Low] P-15: XHR mock progress `setInterval` is created but usually cleared before its first tick
@@ -242,7 +242,7 @@ Per *construction*, before any request is made and regardless of rule count: 1 r
 - **Where:** `src/storage.js:284-298` (`checkQuota` → `cleanOldBackups`), `:352-379` and `:386` (`chrome.storage.local.get(null)`)
 - **Cost:** `saveRules` calls `checkQuota()` first (`:78`); once usage crosses 80 %, that calls `cleanOldBackups`, which does `chrome.storage.local.get(null)` — deserialising **every key in local storage**, including all backups (up to 5 full snapshots of rules + settings + stats) into memory, just to read their `timestamp` fields. With a large rule set, each backup is itself a full copy, so this can be several MB of deserialisation on a user-facing save.
 - **User impact:** A visible stall when saving a rule, but only for users near the quota ceiling — precisely the users with the most data, where the stall is worst.
-- **Recommended fix:** Maintain a `turboMockBackupIndex` key holding just `[{key, timestamp}]`, and use it for both `cleanOldBackups` and `getAllBackups` so neither needs `get(null)`. Also skip `checkQuota()` on the hot save path and run it on a timer or after N saves.
+- **Recommended fix:** Maintain a `spliceTapBackupIndex` key holding just `[{key, timestamp}]`, and use it for both `cleanOldBackups` and `getAllBackups` so neither needs `get(null)`. Also skip `checkQuota()` on the hot save path and run it on a timer or after N saves.
 - **Confidence:** High.
 
 ### [Nit] P-18: Small avoidable allocations in the fetch preamble

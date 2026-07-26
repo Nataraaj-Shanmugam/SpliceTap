@@ -1,5 +1,5 @@
 /**
- * TurboMock DevTools Entry Point
+ * SpliceTap DevTools Entry Point
  * Creates the DevTools panel with proper error handling.
  *
  * Note: this file intentionally does NOT listen for
@@ -35,23 +35,23 @@
                 win[hookName]();
             }
         } catch (error) {
-            console.error('TurboMock: failed to notify panel (' + hookName + ')', error);
+            console.error('SpliceTap: failed to notify panel (' + hookName + ')', error);
         }
     }
 
     // Create DevTools panel with error handling
     chrome.devtools.panels.create(
-        'TurboMock',
+        'SpliceTap',
         '/assets/icons/icon-16.png',
         '/devtools/panel.html',
         function(panel) {
             // Check for errors
             if (chrome.runtime.lastError) {
-                console.error('TurboMock: Panel creation failed:', chrome.runtime.lastError);
+                console.error('SpliceTap: Panel creation failed:', chrome.runtime.lastError);
                 return;
             }
 
-            console.log('TurboMock DevTools panel created successfully');
+            console.log('SpliceTap DevTools panel created successfully');
 
             if (!panel) {
                 return;
@@ -63,18 +63,18 @@
             // missing.
             if (panel.onShown && typeof panel.onShown.addListener === 'function') {
                 panel.onShown.addListener(function(panelWindow) {
-                    console.log('TurboMock panel shown');
+                    console.log('SpliceTap panel shown');
                     if (panelWindow) {
                         lastPanelWindow = panelWindow;
                     }
-                    notifyPanel(lastPanelWindow, '__turboMockPanelShown');
+                    notifyPanel(lastPanelWindow, '__spliceTapPanelShown');
                 });
             }
 
             if (panel.onHidden && typeof panel.onHidden.addListener === 'function') {
                 panel.onHidden.addListener(function() {
-                    console.log('TurboMock panel hidden');
-                    notifyPanel(lastPanelWindow, '__turboMockPanelHidden');
+                    console.log('SpliceTap panel hidden');
+                    notifyPanel(lastPanelWindow, '__spliceTapPanelHidden');
                 });
             }
         }

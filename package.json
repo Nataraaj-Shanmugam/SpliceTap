@@ -1,6 +1,6 @@
 {
-  "name": "turbomock-browser-extension",
-  "version": "1.1.0",
+  "name": "splicetap-browser-extension",
+  "version": "0.0.1",
   "description": "Mock any API in 30 seconds, directly in your browser. Perfect for frontend development and testing.",
   "main": "manifest.json",
   "scripts": {
@@ -25,13 +25,13 @@
   ],
   "author": "Nataraaj Shanmugam",
   "license": "MIT",
-  "homepage": "https://github.com/Nataraaj-Shanmugam/TurboMock",
+  "homepage": "https://github.com/Nataraaj-Shanmugam/SpliceTap",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Nataraaj-Shanmugam/TurboMock.git"
+    "url": "https://github.com/Nataraaj-Shanmugam/SpliceTap.git"
   },
   "bugs": {
-    "url": "https://github.com/Nataraaj-Shanmugam/TurboMock/issues"
+    "url": "https://github.com/Nataraaj-Shanmugam/SpliceTap/issues"
   },
   "devDependencies": {
     "eslint": "^10.7.0",

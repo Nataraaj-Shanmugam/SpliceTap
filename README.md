@@ -1,4 +1,4 @@
-# 🎭 TurboMock - API Mocker Browser Extension
+# 🎭 SpliceTap - API Mocker Browser Extension
 
 Mock, block, delay, redirect, and rewrite any API call directly in your browser. Perfect for frontend development, testing, and debugging — no proxy, no backend changes, no build step.
 
@@ -9,7 +9,7 @@ Mock, block, delay, redirect, and rewrite any API call directly in your browser.
 - **GraphQL-aware matching**: Target a single `operationName` on a shared `/graphql` endpoint
 - **Pattern Matching**: Wildcard, regex, and substring URL matching, plus optional header and GraphQL conditions
 - **Dynamic placeholders**: Inject timestamps, GUIDs, random data, and request details into responses
-- **Live DevTools panel**: A "TurboMock" panel that logs every intercepted request
+- **Live DevTools panel**: A "SpliceTap" panel that logs every intercepted request
 - **Dark/Light Theme**: Automatic theme detection or manual selection
 - **Import/Export**: Backup and share your rules; v1 rule files migrate automatically
 - **Keyboard Shortcuts & Context Menu**: Fast rule creation from anywhere
@@ -23,7 +23,7 @@ Mock, block, delay, redirect, and rewrite any API call directly in your browser.
 2. Open Chrome and navigate to `chrome://extensions/`
 3. Enable "Developer mode" in the top right
 4. Click "Load unpacked" and select the extension directory
-5. The TurboMock icon should appear in your toolbar
+5. The SpliceTap icon should appear in your toolbar
 
 #### For Production:
 - Install from Chrome Web Store (coming soon)
@@ -31,7 +31,7 @@ Mock, block, delay, redirect, and rewrite any API call directly in your browser.
 ### Basic Usage
 
 1. **Create Your First Rule**:
-   - Click the TurboMock icon in your toolbar and click "New Rule", or right-click on any page and choose the TurboMock context-menu entry — both open the in-page rule editor overlay with the current host prefilled, falling back to the full options page only where the overlay can't run (e.g. `chrome://` pages, the Web Store)
+   - Click the SpliceTap icon in your toolbar and click "New Rule", or right-click on any page and choose the SpliceTap context-menu entry — both open the in-page rule editor overlay with the current host prefilled, falling back to the full options page only where the overlay can't run (e.g. `chrome://` pages, the Web Store)
    - Pick a **Rule Type**, configure the matching and behavior fields
    - Save — the rule takes effect immediately on matching requests
 
@@ -47,7 +47,7 @@ Mock, block, delay, redirect, and rewrite any API call directly in your browser.
 
 ## 🧩 Rule Types
 
-Every rule has a `type`. Rules exported before v1.1.0 have no `type` field and are automatically migrated to `mock` on load.
+Every rule has a `type`. Legacy rules exported without a `type` field are automatically migrated to `mock` on load.
 
 ### `mock` — Return a synthetic or patched response
 Two response **modes**:
@@ -58,7 +58,7 @@ Mock rules also support two optional matching conditions:
 - **`match.graphql.operationName`** — matches against the request body's `operationName`. This is the key to mocking a single query/mutation on a shared single-endpoint GraphQL API. (Requires method `POST` or `*`.)
 - **`match.headers`** — an object of `{ 'header-name': 'value-substring' }`; **all** entries must match. Names are compared case-insensitively; values by substring.
 
-All successful mock/patch responses carry `x-turbomock: true` and `x-turbomock-rule: <rule name>` headers so you can confirm interception in the console/Network response headers.
+All successful mock/patch responses carry `x-splicetap: true` and `x-splicetap-rule: <rule name>` headers so you can confirm interception in the console/Network response headers.
 
 ### `block` — Fail the request
 `fetch` rejects with a `TypeError('Failed to fetch')`; XHR fires an `error` event with `status: 0`. Useful for testing error and offline states.
@@ -161,12 +161,12 @@ The rule editor's "Quick Template" dropdown includes six ready-to-use presets: G
 - **Migration**: v1 rule files (no `type` field) load transparently — each rule is normalized to `type: 'mock'` with `response.mode: 'static'`
 
 ### DevTools Panel
-Open Chrome DevTools and select the **TurboMock** panel. Because mocked/blocked/delayed/redirected requests never reach the real network stack (and so can't appear in the normal Network tab), the panel instead shows TurboMock's own interception log: it polls the background service worker every 2 seconds and renders each applied rule (method, URL, rule name, type, status, relative time), newest first. A "Clear" button empties the log.
+Open Chrome DevTools and select the **SpliceTap** panel. Because mocked/blocked/delayed/redirected requests never reach the real network stack (and so can't appear in the normal Network tab), the panel instead shows SpliceTap's own interception log: it polls the background service worker every 2 seconds and renders each applied rule (method, URL, rule name, type, status, relative time), newest first. A "Clear" button empties the log.
 
 ## 🔧 Technical Details
 
 ### Architecture
-TurboMock intercepts requests through **two independent mechanisms**, depending on rule type:
+SpliceTap intercepts requests through **two independent mechanisms**, depending on rule type:
 
 - **MAIN-world fetch/XHR monkey-patching** (`content/injected.js`) handles `mock`, `block`, `delay`, and `redirect`. A content script declared with `"world": "MAIN"` and `run_at: "document_start"` injects the interceptor before any page script runs, in all frames. The interceptor wraps `window.fetch` and `XMLHttpRequest` so it can synthesize, reject, delay, or reroute requests entirely in-page — these requests never touch the network stack.
 - **`chrome.declarativeNetRequest` dynamic rules** (`service_worker/dnr.js`) handle `headers` and `queryparams`. These are real network-layer modifications applied by the browser, so they affect traffic the in-page interceptor can't see (and correctly show up in the normal DevTools Network tab).
@@ -180,10 +180,10 @@ Supporting pieces:
 - `storage` — persist rules and settings locally
 - `contextMenus` — the right-click "create rule" entry
 - `declarativeNetRequestWithHostAccess` — apply `headers` / `queryparams` rules at the network layer, scoped to the host(s) a rule's URL pattern matches
-- `<all_urls>` (host permission) — the in-page interceptor and rule-editor overlay need to run on whatever site you're mocking; there's no way to know that site in advance. Both scripts are injected on every page load (even when TurboMock is toggled off or has no rules for that origin) because MV3 content-script injection is static, declared per-manifest, not computed per-request; the interceptor checks the active/rules state internally before doing anything, and the overlay stays dormant until invoked. Scoping injection to only origins with enabled rules (e.g. via `chrome.scripting.registerContentScripts`) is a possible future tightening, tracked as a follow-up rather than done here.
+- `<all_urls>` (host permission) — the in-page interceptor and rule-editor overlay need to run on whatever site you're mocking; there's no way to know that site in advance. Both scripts are injected on every page load (even when SpliceTap is toggled off or has no rules for that origin) because MV3 content-script injection is static, declared per-manifest, not computed per-request; the interceptor checks the active/rules state internally before doing anything, and the overlay stays dormant until invoked. Scoping injection to only origins with enabled rules (e.g. via `chrome.scripting.registerContentScripts`) is a possible future tightening, tracked as a follow-up rather than done here.
 
 ### Single Purpose & Privacy
-TurboMock's single purpose is local API request mocking and modification for development/testing. It does not collect, transmit, or sell any data: every rule, setting, and log entry stays in `chrome.storage` on your device (see Privacy & Security below), and nothing in the codebase makes a network request on the extension's own behalf.
+SpliceTap's single purpose is local API request mocking and modification for development/testing. It does not collect, transmit, or sell any data: every rule, setting, and log entry stays in `chrome.storage` on your device (see Privacy & Security below), and nothing in the codebase makes a network request on the extension's own behalf.
 
 ### Browser Compatibility
 - **Chrome / Edge**: 120+ (full support; `minimum_chrome_version` is 120)
@@ -206,7 +206,7 @@ TurboMock's single purpose is local API request mocking and modification for dev
 ### Storage Structure
 ```javascript
 {
-  "turboMockRules": [
+  "spliceTapRules": [
     {
       "id": "rule_123456789",
       "name": "User Profile API",
@@ -233,9 +233,9 @@ TurboMock's single purpose is local API request mocking and modification for dev
       "hitCount": 42
     }
   ],
-  "turboMockActive": true,
-  "turboMockStats": { "intercepted": 156, "rulesCount": 12, "lastUpdated": "2026-01-01T00:00:00Z" },
-  "turboMockSettings": { "theme": "auto", "notifications": true, "autoBackup": true, "debugMode": false }
+  "spliceTapActive": true,
+  "spliceTapStats": { "intercepted": 156, "rulesCount": 12, "lastUpdated": "2026-01-01T00:00:00Z" },
+  "spliceTapSettings": { "theme": "auto", "notifications": true, "autoBackup": true, "debugMode": false }
 }
 ```
 Type-specific fields also include `delayMs` (delay), `redirect.destination` (redirect), `headersMod` (headers), `queryParams` (queryparams), and an internal `dnrRuleId` allocated by the background worker for declarativeNetRequest-backed rules.
@@ -246,17 +246,28 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ### Development Setup
 ```bash
-git clone https://github.com/turbomock/browser-extension.git
-cd browser-extension
+git clone https://github.com/Nataraaj-Shanmugam/SpliceTap.git
+cd SpliceTap
 npm install
 npm test                              # Jest test suite
 node scripts/validate-manifest.js     # Manifest sanity check
 # Then load unpacked in chrome://extensions/ (Developer mode)
 ```
 
+### Building a Store Package
+```bash
+./build.sh          # validate + test + lint, then write dist/splicetap-v<version>.zip
+./build.sh --fast   # package only, skipping the gates
+```
+
+The ZIP contains only files `manifest.json` actually references — the allowlist is
+derived by walking the manifest, so docs, tests, and tooling can never leak into a
+release by accident. Upload the result at the
+[Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole).
+
 ### Project Structure
 ```
-turbomock-extension/
+splicetap-extension/
 ├── manifest.json              # Extension manifest (MV3)
 ├── assets/                    # Icons and static assets
 ├── src/                       # Shared utilities (UMD — load everywhere, no divergence)
@@ -279,7 +290,10 @@ turbomock-extension/
 │   ├── panel.html             # DevTools panel markup
 │   └── panel.js               # Interception-log polling + rendering
 ├── scripts/
-│   └── validate-manifest.js   # Manifest validation
+│   ├── validate-manifest.js   # Manifest validation
+│   └── package-extension.js   # Allowlist ZIP packager
+├── docs/                      # GitHub Pages site (landing page + privacy policy)
+├── build.sh                   # One-command store build → dist/
 └── tests/                     # Jest test suites
 ```
 
@@ -289,9 +303,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/turbomock/browser-extension/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/turbomock/browser-extension/discussions)
+- **Website**: [nataraaj-shanmugam.github.io/SpliceTap](https://nataraaj-shanmugam.github.io/SpliceTap/)
+- **Privacy Policy**: [PRIVACY.md](PRIVACY.md) · [hosted version](https://nataraaj-shanmugam.github.io/SpliceTap/privacy.html)
+- **Issues**: [GitHub Issues](https://github.com/Nataraaj-Shanmugam/SpliceTap/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/Nataraaj-Shanmugam/SpliceTap/discussions)
 
 ---
 
-Made with ❤️ by the TurboMock team
+Made with ❤️ by [Nataraaj Shanmugam](https://github.com/Nataraaj-Shanmugam)

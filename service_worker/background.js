@@ -1,23 +1,23 @@
 /**
- * TurboMock Background Service Worker
+ * SpliceTap Background Service Worker
  * Manages extension state, rules storage, and communication with content scripts.
  * 
  * NOTE: Interception logic has moved to content/content.js (Monkey Patching) 
  * to support dynamic responses and chaos mode in Manifest V3 without blocking permissions.
  */
 
-import { TurboMockStorage } from '../src/storage.js';
-import { TurboMockUtils } from '../src/utils.js';
+import { SpliceTapStorage } from '../src/storage.js';
+import { SpliceTapUtils } from '../src/utils.js';
 // dnr.js is UMD-only (see its file header for why) — side-effect import it,
 // then read the API off globalThis, the same pattern injected.js uses for
-// the G1 shared modules via `window.TurboMockMatcher` etc.
+// the G1 shared modules via `window.SpliceTapMatcher` etc.
 import './dnr.js';
 
-const { syncDnrRules } = globalThis.TurboMockDnr;
+const { syncDnrRules } = globalThis.SpliceTapDnr;
 
-class TurboMockBackground {
+class SpliceTapBackground {
     constructor() {
-        this.storage = new TurboMockStorage();
+        this.storage = new SpliceTapStorage();
         this.isActive = true;
         this.rules = [];
         this.stats = {
@@ -63,7 +63,7 @@ class TurboMockBackground {
         this.setupSuspendFlush();
 
         this.ready = this.loadStoredData()
-            .then(() => console.log('TurboMock background service worker initialized (Config Mode)'))
+            .then(() => console.log('SpliceTap background service worker initialized (Config Mode)'))
             .catch((error) => console.error('Failed to initialize background service worker:', error));
     }
 
@@ -93,9 +93,9 @@ class TurboMockBackground {
             // Restore the volatile interception log from session storage so the
             // DevTools panel keeps its history across SW suspensions.
             try {
-                const sess = await chrome.storage.session.get('turboMockInterceptionLog');
-                if (Array.isArray(sess.turboMockInterceptionLog)) {
-                    this.interceptionLog = sess.turboMockInterceptionLog;
+                const sess = await chrome.storage.session.get('spliceTapInterceptionLog');
+                if (Array.isArray(sess.spliceTapInterceptionLog)) {
+                    this.interceptionLog = sess.spliceTapInterceptionLog;
                 }
             } catch (e) {
                 // session storage unavailable — non-fatal
@@ -301,7 +301,7 @@ class TurboMockBackground {
                 case 'clearInterceptionLog':
                     this.interceptionLog = [];
                     try {
-                        await chrome.storage.session.remove('turboMockInterceptionLog');
+                        await chrome.storage.session.remove('spliceTapInterceptionLog');
                     } catch (e) {
                         // non-fatal
                     }
@@ -379,7 +379,7 @@ class TurboMockBackground {
         this._lastPersist = now;
 
         try {
-            await chrome.storage.session.set({ turboMockInterceptionLog: this.interceptionLog });
+            await chrome.storage.session.set({ spliceTapInterceptionLog: this.interceptionLog });
         } catch (e) {
             // session storage unavailable — non-fatal
         }
@@ -419,7 +419,7 @@ class TurboMockBackground {
         if (!rule.match || !rule.match.url) {
             errors.push('URL pattern is required');
         } else {
-            const urlValidation = TurboMockUtils.validateUrlPattern(rule.match.url);
+            const urlValidation = SpliceTapUtils.validateUrlPattern(rule.match.url);
             if (!urlValidation.isValid) {
                 errors.push(`Invalid URL pattern: ${urlValidation.error}`);
             }
@@ -435,7 +435,7 @@ class TurboMockBackground {
             if (!rule.response) {
                 errors.push('Response configuration is required');
             } else {
-                const statusValidation = TurboMockUtils.validateStatusCode(rule.response.statusCode);
+                const statusValidation = SpliceTapUtils.validateStatusCode(rule.response.statusCode);
                 if (!statusValidation.isValid) {
                     errors.push(`Invalid status code: ${statusValidation.error}`);
                 }
@@ -464,7 +464,7 @@ class TurboMockBackground {
             if (!rule.headersMod || (!(rule.headersMod.request || []).length && !(rule.headersMod.response || []).length)) {
                 errors.push('At least one request or response header operation is required');
             } else {
-                const dnr = globalThis.TurboMockDnr;
+                const dnr = globalThis.SpliceTapDnr;
                 if (dnr && typeof dnr.validateHeadersMod === 'function') {
                     const headerValidation = dnr.validateHeadersMod(rule.headersMod);
                     if (!headerValidation.valid) {
@@ -573,7 +573,7 @@ class TurboMockBackground {
         chrome.runtime.onInstalled.addListener(() => {
             try {
                 chrome.contextMenus.create({
-                    id: "turbomock-add-rule",
+                    id: "splicetap-add-rule",
                     title: "Mock this request",
                     contexts: ["action", "page"]
                 });
@@ -583,7 +583,7 @@ class TurboMockBackground {
         });
 
         chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-            if (info.menuItemId !== "turbomock-add-rule") return;
+            if (info.menuItemId !== "splicetap-add-rule") return;
 
             // Prefer the in-page overlay so the user never leaves the page.
             if (tab && tab.id && tab.url && /^https?:/i.test(tab.url)) {
@@ -607,7 +607,7 @@ class TurboMockBackground {
 
                 try {
                     await chrome.storage.local.set({
-                        turboMockPrefill: { url: prefillUrl, ts: Date.now() }
+                        spliceTapPrefill: { url: prefillUrl, ts: Date.now() }
                     });
                 } catch (error) {
                     console.error('Failed to store rule prefill data:', error);
@@ -622,10 +622,10 @@ class TurboMockBackground {
         // Handle installation
         chrome.runtime.onInstalled.addListener((details) => {
             if (details.reason === 'install') {
-                console.log('TurboMock installed, opening options page');
+                console.log('SpliceTap installed, opening options page');
                 chrome.runtime.openOptionsPage();
             } else if (details.reason === 'update') {
-                console.log('TurboMock updated to version', chrome.runtime.getManifest().version);
+                console.log('SpliceTap updated to version', chrome.runtime.getManifest().version);
                 // Could trigger migration here if needed
             }
         });
@@ -719,7 +719,7 @@ class TurboMockBackground {
 }
 
 // Initialize
-const backgroundService = new TurboMockBackground();
+const backgroundService = new SpliceTapBackground();
 
 // Export for testing if needed
 export default backgroundService;

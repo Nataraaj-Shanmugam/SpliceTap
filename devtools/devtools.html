@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TurboMock DevTools</title>
+    <title>SpliceTap DevTools</title>
 </head>
 <body>
     <script src="devtools.js"></script>
     <!-- <script>
         // Create DevTools panel
         chrome.devtools.panels.create(
-            'TurboMock',
+            'SpliceTap',
             '/assets/icons/icon-16.png',
             '/devtools/panel.html',
             function(panel) {
-                console.log('TurboMock DevTools panel created');
+                console.log('SpliceTap DevTools panel created');
             }
         );
         
@@ -24,11 +24,11 @@
             const isMocked = request.response && 
                 request.response.headers && 
                 request.response.headers.some(header => 
-                    header.name.toLowerCase() === 'x-turbomock' && header.value === 'true'
+                    header.name.toLowerCase() === 'x-splicetap' && header.value === 'true'
                 );
             
             if (isMocked) {
-                console.log('TurboMock: Detected mocked request', request.request.url);
+                console.log('SpliceTap: Detected mocked request', request.request.url);
             }
         });
     </script> -->

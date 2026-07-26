@@ -1,4 +1,4 @@
-# TurboMock — Requestly Parity Implementation TODO
+# SpliceTap — Requestly Parity Implementation TODO
 
 > **How to use this document (read first):**
 > This is the single source of truth for the implementation. All architectural decisions are
@@ -12,7 +12,7 @@
 
 ## 0. Context (do not re-explore the repo to learn this)
 
-**What TurboMock is:** MV3 Chrome extension that mocks API calls. Interception works by
+**What SpliceTap is:** MV3 Chrome extension that mocks API calls. Interception works by
 monkey-patching `window.fetch` and `XMLHttpRequest` in the page's MAIN world
 (`content/injected.js`). There is **no build step** — files are loaded as-is.
 
@@ -106,15 +106,15 @@ Three new files in `src/`, each written in this exact UMD shape so the SAME file
     function fnA(...) { ... }
     const api = { fnA, ... };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
-    global.TurboMockXxx = api;   // exact global names below
+    global.SpliceTapXxx = api;   // exact global names below
 })(typeof window !== 'undefined' ? window : globalThis);
 ```
 
 | File | Global name | Contents |
 |---|---|---|
-| `src/placeholders.js` | `TurboMockPlaceholders` | `processDynamicResponse(body, requestDetails)` — the SUPERSET of both current engines (G1) |
-| `src/matcher.js` | `TurboMockMatcher` | `matchUrl`, `matchHeaders`, `matchGraphQL`, `findMatchingRule` (G1) |
-| `src/patch.js` | `TurboMockPatch` | `jsonMergePatch(original, patch)` — RFC 7386 semantics: objects merge recursively, `null` deletes a key, arrays/scalars replace (G1) |
+| `src/placeholders.js` | `SpliceTapPlaceholders` | `processDynamicResponse(body, requestDetails)` — the SUPERSET of both current engines (G1) |
+| `src/matcher.js` | `SpliceTapMatcher` | `matchUrl`, `matchHeaders`, `matchGraphQL`, `findMatchingRule` (G1) |
+| `src/patch.js` | `SpliceTapPatch` | `jsonMergePatch(original, patch)` — RFC 7386 semantics: objects merge recursively, `null` deletes a key, arrays/scalars replace (G1) |
 
 These load in the MAIN world BEFORE `injected.js` via the manifest content_scripts array (G3).
 `injected.js` DELETES its local copies and uses the globals. `src/utils.js` DELETES its
@@ -129,15 +129,15 @@ interceptor run before ANY page script, in ALL frames, with no retry logic. (G3)
 ### 1.5 Interception log pipeline (replaces the broken DevTools detection)
 
 **Critical fact:** mocked requests NEVER hit the network stack, so
-`chrome.devtools.network.onRequestFinished` can never see them. The `x-turbomock` header
+`chrome.devtools.network.onRequestFinished` can never see them. The `x-splicetap` header
 check in `devtools/devtools.js` is dead code. The working design:
 
-1. `injected.js` — on every applied rule, `window.postMessage({ source: 'turbomock-injected', type: 'logInterception', entry })` where `entry = { ts: Date.now(), url, method, ruleId, ruleName, ruleType, status }`.
+1. `injected.js` — on every applied rule, `window.postMessage({ source: 'splicetap-injected', type: 'logInterception', entry })` where `entry = { ts: Date.now(), url, method, ruleId, ruleName, ruleType, status }`.
 2. `content.js` — forwards it: `chrome.runtime.sendMessage({ type: 'logInterception', entry })`.
 3. `background.js` — keeps an in-memory ring buffer, max **200** entries; increments stats from this message (the old separate `updateStats` message from injected.js is removed; keep the background handler for compatibility). New message types: `getInterceptionLog` → `{ success, entries }`, `clearInterceptionLog` → `{ success }`.
 4. DevTools panel polls `getInterceptionLog` every 2 s while visible. (G7)
 
-Still ADD `x-turbomock: true` and `x-turbomock-rule: <name>` headers to mocked/patched
+Still ADD `x-splicetap: true` and `x-splicetap-rule: <name>` headers to mocked/patched
 responses — useful for users inspecting responses in the console.
 
 ### 1.6 New message types (complete list of additions)
@@ -162,15 +162,15 @@ responses — useful for users inspecting responses in the console.
 **Files to open:** `src/utils.js`, `src/index.js`, `tests/utils.test.js`, `tests/dynamic.test.js`. **Create:** `src/placeholders.js`, `src/matcher.js`, `src/patch.js`, `tests/matcher.test.js`, `tests/patch.test.js`.
 **Do not open:** anything else.
 
-- [x] **G1.1** Create `src/placeholders.js` (UMD per §1.3, global `TurboMockPlaceholders`). Port `processDynamicResponse` from `src/utils.js:378` as the canonical version. Must support ALL of: `{{timestamp}}`, `{{timestamp_ms}}`, `{{date}}`, `{{time}}`, `{{guid}}`, `{{randomInt}}`, `{{randomInt:max}}`, `{{randomFloat}}`, `{{randomString}}`, `{{randomString:len}}`, `{{randomEmail}}`, `{{randomBool}}`, `{{request.url}}`, `{{request.method}}`. Behavior: accepts object or string body; returns same shape (object in → object out via JSON round-trip, string in → string out).
-- [x] **G1.2** Create `src/matcher.js` (UMD, global `TurboMockMatcher`) with:
+- [x] **G1.1** Create `src/placeholders.js` (UMD per §1.3, global `SpliceTapPlaceholders`). Port `processDynamicResponse` from `src/utils.js:378` as the canonical version. Must support ALL of: `{{timestamp}}`, `{{timestamp_ms}}`, `{{date}}`, `{{time}}`, `{{guid}}`, `{{randomInt}}`, `{{randomInt:max}}`, `{{randomFloat}}`, `{{randomString}}`, `{{randomString:len}}`, `{{randomEmail}}`, `{{randomBool}}`, `{{request.url}}`, `{{request.method}}`. Behavior: accepts object or string body; returns same shape (object in → object out via JSON round-trip, string in → string out).
+- [x] **G1.2** Create `src/matcher.js` (UMD, global `SpliceTapMatcher`) with:
   - `matchUrl(url, pattern)` — port from `content/injected.js:77` (wildcard → full-match regex, `/re/` → regex test, else substring; `'*'` matches everything). NOTE: port the injected.js version, not the utils.js version, and ALSO handle the `/regex/` case which injected.js currently lacks — final behavior: `*`-wildcard full match, `/.../` regex, else substring, all case-insensitive.
   - `matchHeaders(requestHeaders, ruleHeaders)` — per §1.1: all rule entries must match; header name compare case-insensitive; value compare = substring. Empty/absent ruleHeaders → true.
   - `matchGraphQL(bodyText, graphqlMatch)` — parse bodyText as JSON, compare `parsed.operationName === graphqlMatch.operationName`; on parse failure fall back to regex `"operationName"\s*:\s*"<name>"`. Absent graphqlMatch → true.
   - `findMatchingRule(rules, { url, method, headers, bodyText })` — first enabled rule (array order) whose type is one of `mock|block|delay|redirect` and whose url+method+headers+graphql all match. Method `'*'` matches any.
-- [x] **G1.3** Create `src/patch.js` (UMD, global `TurboMockPatch`) with `jsonMergePatch(original, patch)` — RFC 7386: if patch is not an object or is an array → return patch; else copy original (object or `{}`), for each key: `null` deletes, object recurses, else replaces.
+- [x] **G1.3** Create `src/patch.js` (UMD, global `SpliceTapPatch`) with `jsonMergePatch(original, patch)` — RFC 7386: if patch is not an object or is an array → return patch; else copy original (object or `{}`), for each key: `null` deletes, object recurses, else replaces.
 - [x] **G1.4** Rewrite `src/utils.js`: DELETE its `processDynamicResponse` and `matchUrl` bodies; keep the methods as thin delegates to the globals (utils.js is loaded after the UMD files in every context that uses it — in Jest via `src/index.js`, in pages via script order). Keep everything else (validation, export/import, templates) unchanged. Keep the ESM `export` AND window global as-is.
-- [x] **G1.5** Fix `src/index.js` so `npm test` runs: `require('./utils')` fails because utils.js is ESM. Change `src/index.js` to require the three UMD modules directly and re-export `{ TurboMockPlaceholders, TurboMockMatcher, TurboMockPatch }`. Then update `tests/utils.test.js` / `tests/dynamic.test.js` to import what they need from the UMD modules instead of `TurboMockUtils` where the tested logic moved (placeholder tests → `TurboMockPlaceholders.processDynamicResponse`). If a test targets utils-only logic that can't load under CommonJS, port that logic's test to target the UMD module or delete the test with a comment.
+- [x] **G1.5** Fix `src/index.js` so `npm test` runs: `require('./utils')` fails because utils.js is ESM. Change `src/index.js` to require the three UMD modules directly and re-export `{ SpliceTapPlaceholders, SpliceTapMatcher, SpliceTapPatch }`. Then update `tests/utils.test.js` / `tests/dynamic.test.js` to import what they need from the UMD modules instead of `SpliceTapUtils` where the tested logic moved (placeholder tests → `SpliceTapPlaceholders.processDynamicResponse`). If a test targets utils-only logic that can't load under CommonJS, port that logic's test to target the UMD module or delete the test with a comment.
 - [x] **G1.6** Write `tests/matcher.test.js`: wildcard/regex/substring/`'*'` URL cases; method wildcard; header match (case-insensitive name, substring value, multi-header AND); graphql operationName hit/miss/malformed JSON; `findMatchingRule` precedence (first match wins) and that disabled rules and DNR-type rules are skipped.
 - [x] **G1.7** Write `tests/patch.test.js`: nested merge, null-deletes-key, array replaces, scalar replaces, patching into missing branch creates it.
 - [x] **G1.8** Run `npx jest` — ALL tests must pass. Fix failures before moving on.
@@ -181,28 +181,28 @@ responses — useful for users inspecting responses in the console.
 
 ## G2 — Interceptor rewrite
 
-**Files to open:** `content/injected.js` only. (Globals `TurboMockPlaceholders` / `TurboMockMatcher` / `TurboMockPatch` will exist at runtime after G3 — code against them now.)
+**Files to open:** `content/injected.js` only. (Globals `SpliceTapPlaceholders` / `SpliceTapMatcher` / `SpliceTapPatch` will exist at runtime after G3 — code against them now.)
 
-- [x] **G2.1** Delete local `processDynamicContent` and `matchUrl`; use `window.TurboMockPlaceholders.processDynamicResponse(body, { url, method })` and `window.TurboMockMatcher.*`. Guard at top: if the globals are missing, log an error once and leave fetch/XHR unpatched.
+- [x] **G2.1** Delete local `processDynamicContent` and `matchUrl`; use `window.SpliceTapPlaceholders.processDynamicResponse(body, { url, method })` and `window.SpliceTapMatcher.*`. Guard at top: if the globals are missing, log an error once and leave fetch/XHR unpatched.
 - [x] **G2.2** Add helper `logInterception(rule, url, method, status)` implementing §1.5 step 1. Replace the existing `incrementStats()` calls with it (delete `incrementStats`).
 - [x] **G2.3 Fetch path** — restructure `window.fetch` patch:
   1. If inactive → passthrough. Chaos check unchanged.
   2. Compute `url`, `method`. Read request headers into a plain lowercase-keyed object (from `config.headers` — plain object, `Headers`, or entries array — or from the `Request` object).
   3. Body text: only if some enabled rule has `match.graphql` AND its url+method match — then `bodyText = typeof config?.body === 'string' ? config.body : (resource instanceof Request ? await resource.clone().text() : null)`. Otherwise skip body reading entirely (perf).
-  4. `const rule = TurboMockMatcher.findMatchingRule(tmState.rules, { url, method, headers, bodyText })`. No rule → passthrough.
+  4. `const rule = SpliceTapMatcher.findMatchingRule(tmState.rules, { url, method, headers, bodyText })`. No rule → passthrough.
   5. By `rule.type`:
      - `block` → `logInterception(...)`, return `Promise.reject(new TypeError('Failed to fetch'))`.
      - `delay` → log, `await sleep(rule.delayMs)`, passthrough to `originalFetch`.
      - `redirect` → compute destination: if `rule.match.url` is `/regex/`, `newUrl = url.replace(new RegExp(body-of-regex, 'i'), rule.redirect.destination)` (enables `$1`), else `newUrl = rule.redirect.destination`. Log. `originalFetch(resource instanceof Request ? new Request(newUrl, resource) : newUrl, config)`.
-     - `mock` + `mode !== 'patch'` → existing static behavior (delay, placeholders, `new Response`) PLUS headers `x-turbomock: true`, `x-turbomock-rule: <rule.name>`. Log.
-     - `mock` + `mode === 'patch'` → `const real = await originalFetch(...args)`; try `const data = await real.clone().json()` — on failure return `real` unmodified (debug-log). Else `merged = TurboMockPatch.jsonMergePatch(data, TurboMockPlaceholders.processDynamicResponse(rule.response.patch, {url, method}))`; apply `rule.response.delay` if set; return `new Response(JSON.stringify(merged), { status: real.status, statusText: real.statusText, headers: copy-of-real-headers + x-turbomock headers })`. Log.
+     - `mock` + `mode !== 'patch'` → existing static behavior (delay, placeholders, `new Response`) PLUS headers `x-splicetap: true`, `x-splicetap-rule: <rule.name>`. Log.
+     - `mock` + `mode === 'patch'` → `const real = await originalFetch(...args)`; try `const data = await real.clone().json()` — on failure return `real` unmodified (debug-log). Else `merged = SpliceTapPatch.jsonMergePatch(data, SpliceTapPlaceholders.processDynamicResponse(rule.response.patch, {url, method}))`; apply `rule.response.delay` if set; return `new Response(JSON.stringify(merged), { status: real.status, statusText: real.statusText, headers: copy-of-real-headers + x-splicetap headers })`. Log.
 - [x] **G2.4 XHR path** — MOVE all rule matching from `open()` into `send(body)` (headers and body are only known there):
   - In `open()`: only record `requestMethod` / `requestUrl`; for `redirect`-type rules, matching must still happen here to rewrite the URL passed to `originalOpen` — do a redirect-only pre-match in `open()` (url+method only; a redirect rule with `match.headers`/`graphql` is invalid — G5 enforces).
   - Override `setRequestHeader` to RECORD `{ name: value }` into a local map AND always call through (headers must reach the network for the passthrough case).
   - In `send(body)`: chaos check (move from open), then `findMatchingRule` with recorded headers + `bodyText = typeof body === 'string' ? body : null`. Apply per type: `block` → existing chaos-style error path + log; `delay` → `setTimeout(() => originalSend.call(this, body), delayMs)` + log; `mock` static → existing defineProperty/event flow + log (keep the existing abort/timeout/progress handling intact); `mock` patch → `originalFetch(requestUrl, { method: requestMethod, body: body ?? undefined, credentials: 'include' })`, json-parse, merge-patch, then run the SAME defineProperty/event flow with the merged body and the real status; on any failure fall back to `originalSend` (debug-log).
 - [x] **G2.5** Keep the existing state-sync `message` listener, double-injection guard, chaos mode, and prototype preservation untouched.
 
-**Acceptance:** file has zero local copies of matcher/placeholder logic; every applied rule emits exactly one `logInterception` postMessage; static-mock behavior is byte-identical to before except the two new `x-turbomock-*` headers.
+**Acceptance:** file has zero local copies of matcher/placeholder logic; every applied rule emits exactly one `logInterception` postMessage; static-mock behavior is byte-identical to before except the two new `x-splicetap-*` headers.
 
 ---
 
@@ -238,11 +238,11 @@ responses — useful for users inspecting responses in the console.
     - `headers` action: `{ type: 'modifyHeaders', requestHeaders: [...], responseHeaders: [...] }` mapping `op:'set'` → `{ header: name, operation: 'set', value }`, `op:'remove'` → `{ header: name, operation: 'remove' }`. Omit empty arrays.
     - `queryparams` action: `{ type: 'redirect', redirect: { transform: { queryTransform: { addOrReplaceParams: add, removeParams: remove } } } }`.
   - `export async function syncDnrRules(rules, isActive)` — computes desired set = enabled `headers`/`queryparams` rules when `isActive`, else empty. Fetches current via `chrome.declarativeNetRequest.getDynamicRules()`, then one `updateDynamicRules({ removeRuleIds: allCurrentIds, addRules: desired })` call (full replace — simple and idempotent). Wrap in try/catch, log errors.
-  - Make the file dual-loadable for Jest: after the `export`s, add the same `module.exports` guard as §1.3 (a file can have both when Jest requires it — if Jest chokes on `export` syntax here, instead write it UMD-only and import it in background.js via a side-effect `import './dnr.js'` + `globalThis.TurboMockDnr`; pick whichever makes `npx jest` pass and note the choice in a one-line comment).
-- [x] **G4.2** `src/storage.js`: add `normalizeRule(rule)` — sets `type: 'mock'` if absent, `response.mode: 'static'` if type mock and mode absent. Apply it in `getRules()` and `loadAll()` (map over rules). Add `allocateDnrId()` — reads/increments an integer counter under a new storage key `turboMockDnrCounter` (start at 1), returns the new value.
+  - Make the file dual-loadable for Jest: after the `export`s, add the same `module.exports` guard as §1.3 (a file can have both when Jest requires it — if Jest chokes on `export` syntax here, instead write it UMD-only and import it in background.js via a side-effect `import './dnr.js'` + `globalThis.SpliceTapDnr`; pick whichever makes `npx jest` pass and note the choice in a one-line comment).
+- [x] **G4.2** `src/storage.js`: add `normalizeRule(rule)` — sets `type: 'mock'` if absent, `response.mode: 'static'` if type mock and mode absent. Apply it in `getRules()` and `loadAll()` (map over rules). Add `allocateDnrId()` — reads/increments an integer counter under a new storage key `spliceTapDnrCounter` (start at 1), returns the new value.
 - [x] **G4.3** `service_worker/background.js`: import dnr.js. Call `syncDnrRules(this.rules, this.isActive)` after every point where `this.rules` or `this.isActive` changes (`loadStoredData`, `saveRule`, `toggleRule`, `deleteRule`, `clearRules`, `toggleExtension`). In the `saveRule` handler: if the incoming rule is type `headers`/`queryparams` and has no `dnrRuleId`, assign one via `storage.allocateDnrId()` before saving.
 - [x] **G4.4** `service_worker/background.js`: interception log per §1.5-3 — `this.interceptionLog = []`, cap 200 (drop oldest). Handle `logInterception` (push entry + increment `this.stats.intercepted` with the existing daily-reset logic — extract that logic from the `updateStats` case into a private method both cases call), `getInterceptionLog`, `clearInterceptionLog`.
-- [x] **G4.5** `service_worker/background.js` context menu: change `contexts` to `["action", "page"]`. On click: `chrome.runtime.openOptionsPage()` then store the active tab's host pattern so options can prefill — implementation: write `{ turboMockPrefill: { url: '*<host>*', ts: Date.now() } }` to `chrome.storage.local` before opening (options.js consumes it in G5; use `new URL(tab.url).host`, guard non-http tabs).
+- [x] **G4.5** `service_worker/background.js` context menu: change `contexts` to `["action", "page"]`. On click: `chrome.runtime.openOptionsPage()` then store the active tab's host pattern so options can prefill — implementation: write `{ spliceTapPrefill: { url: '*<host>*', ts: Date.now() } }` to `chrome.storage.local` before opening (options.js consumes it in G5; use `new URL(tab.url).host`, guard non-http tabs).
 - [x] **G4.6** `tests/dnr.test.js` for `ruleToDnr`: headers set+remove mapping, queryparams mapping, wildcard→urlFilter, regex→regexFilter, method mapping, `'*'` method omits requestMethods.
 - [x] **G4.7** Run `npx jest` — green.
 
@@ -263,7 +263,7 @@ responses — useful for users inspecting responses in the console.
   - `queryparams` only: `<textarea id="queryParamsAdd">` (JSON array of `{key, value}`) and `<input id="queryParamsRemove">` (comma-separated keys).
 - [x] **G5.2** `options.js`: on `#ruleType` change, toggle visibility of `[data-rule-types]` groups (`el.dataset.ruleTypes.split(' ').includes(type)`). Update the rule save path to build the v2 schema per §1.1 from the visible fields, and the rule load path (edit) to populate them. Preserve `dnrRuleId` on edit (hidden field or carry-over from the loaded rule object).
 - [x] **G5.3** `options.js` validation on save, per type: `mock`+graphql requires method POST or `'*'`; `redirect` requires non-empty destination and NO `match.headers`/`graphql`; `headers` requires at least one op and NO `match.headers`/`graphql` (per §1.7); `queryparams` same restriction; `delay` requires `delayMs` 1–30000; JSON textareas must parse (reuse the existing inline-error style of the form).
-- [x] **G5.4** `options.js` prefill: on load, read `turboMockPrefill` from `chrome.storage.local`; if present and `ts` within last 30 s, open the rule editor with URL pattern prefilled and type `mock`, then remove the key.
+- [x] **G5.4** `options.js` prefill: on load, read `spliceTapPrefill` from `chrome.storage.local`; if present and `ts` within last 30 s, open the rule editor with URL pattern prefilled and type `mock`, then remove the key.
 - [x] **G5.5** Templates (`insertTemplate` at options.js:951 + wherever templates render): add presets — "GraphQL Mock" (type mock, method POST, url `*/graphql*`, graphql.operationName placeholder), "Patch Response" (mode patch, patch `{"data": null}` example), "Block Request", "Redirect to localhost" (destination `http://localhost:3000$1`, regex hint), "CORS Unblock" (type headers, response ops: set `Access-Control-Allow-Origin: *`, set `Access-Control-Allow-Headers: *`), "Custom User-Agent" (type headers, request op: set `User-Agent`).
 - [x] **G5.6** Rules list rendering in options (if it lists rules) — show a small type badge per rule. Add minimal badge CSS in options.css (one class per type is overkill — one `.rule-type-badge` class + text content is enough).
 
@@ -287,7 +287,7 @@ responses — useful for users inspecting responses in the console.
 
 **Files to open:** `devtools/devtools.js`, `devtools/panel.html`. **Create:** `devtools/panel.js`.
 
-- [x] **G7.1** `devtools/devtools.js`: DELETE the `onRequestFinished` x-turbomock detection and the `onNavigated` listener (dead code per §1.5) — keep only panel creation.
+- [x] **G7.1** `devtools/devtools.js`: DELETE the `onRequestFinished` x-splicetap detection and the `onNavigated` listener (dead code per §1.5) — keep only panel creation.
 - [x] **G7.2** Create `devtools/panel.js`; reference it from `panel.html` with `<script src="panel.js"></script>` (no inline JS — MV3 CSP). Implement: on load and every 2 s, `chrome.runtime.sendMessage({ type: 'getInterceptionLog' })`; render entries into the existing `.requests-list` markup (method badge — the CSS classes `method-get` etc. already exist — url, rule name, type, status, relative time); newest first; update the existing stat cards (total intercepted from `getRules` stats + entry count). Wire the existing `.clear-btn` to `clearInterceptionLog` + re-render.
 - [x] **G7.3** `panel.html`: keep existing markup/CSS; only add the script tag, ids the panel.js needs, and an empty-state row ("No intercepted requests yet — trigger a mocked call").
 
@@ -301,7 +301,7 @@ responses — useful for users inspecting responses in the console.
 
 - [x] **G8.1** README: fix the architecture section — interception is MAIN-world fetch/XHR patching for mock/block/delay/redirect and declarativeNetRequest for headers/queryparams (the current DNR claim is false for mocking). Document: all rule types with their schema fields, the full placeholder list (G1.1), GraphQL matching, patch mode semantics (RFC 7386, `null` deletes), rule precedence (first match wins), the §1.7 limitations, and the DevTools log panel.
 - [x] **G8.2** Append a dated section to `changes.txt` summarizing this implementation (one line per group).
-- [x] **G8.3** Final gate — run and confirm ALL of: `npx jest` (green), `node scripts/validate-manifest.js` (pass). Then manual smoke test list (perform what's automatable, otherwise leave as a checklist for the user at the bottom of changes.txt): load unpacked → create one rule of each type via options → static mock returns mock body with `x-turbomock` header → patch mode alters one field of a real API → block makes fetch reject → delay visibly delays → redirect lands on destination → headers rule visible in DevTools Network on a real request → queryparams rule adds the param → DevTools TurboMock panel logs entries → popup toggles still work → import of a v1 rules JSON still loads (migration).
+- [x] **G8.3** Final gate — run and confirm ALL of: `npx jest` (green), `node scripts/validate-manifest.js` (pass). Then manual smoke test list (perform what's automatable, otherwise leave as a checklist for the user at the bottom of changes.txt): load unpacked → create one rule of each type via options → static mock returns mock body with `x-splicetap` header → patch mode alters one field of a real API → block makes fetch reject → delay visibly delays → redirect lands on destination → headers rule visible in DevTools Network on a real request → queryparams rule adds the param → DevTools SpliceTap panel logs entries → popup toggles still work → import of a v1 rules JSON still loads (migration).
 
 **Acceptance:** both commands green; README contains no claims the code doesn't implement.
 

@@ -1,13 +1,13 @@
 /**
- * TurboMock Injected Interceptor
+ * SpliceTap Injected Interceptor
  *
  * This script runs in the MAIN world (same context as the page).
  * It monkey-patches window.fetch and XMLHttpRequest to intercept requests.
  *
  * Matching / placeholder / patch logic lives in the shared UMD modules
- * (src/placeholders.js -> window.TurboMockPlaceholders,
- *  src/matcher.js      -> window.TurboMockMatcher,
- *  src/patch.js        -> window.TurboMockPatch), which must be loaded
+ * (src/placeholders.js -> window.SpliceTapPlaceholders,
+ *  src/matcher.js      -> window.SpliceTapMatcher,
+ *  src/patch.js        -> window.SpliceTapPatch), which must be loaded
  * BEFORE this script (see manifest content_scripts order, G3). This file
  * no longer contains any local copy of that logic.
  *
@@ -20,17 +20,17 @@
 (function () {
     // Protect against double injection. Non-enumerable so a page scanning
     // `Object.keys(window)` / `for...in` doesn't trivially discover it (S-9).
-    if (window.__TURBOMOCK_INITIALIZED__) return;
+    if (window.__SPLICETAP_INITIALIZED__) return;
     try {
-        Object.defineProperty(window, '__TURBOMOCK_INITIALIZED__', {
+        Object.defineProperty(window, '__SPLICETAP_INITIALIZED__', {
             value: true, enumerable: false, configurable: true
         });
     } catch (e) {
-        window.__TURBOMOCK_INITIALIZED__ = true;
+        window.__SPLICETAP_INITIALIZED__ = true;
     }
 
-    const SYNC_STATE_EVENT = '__turbomock_sync_state__';
-    const LOG_INTERCEPTION_EVENT = '__turbomock_log__';
+    const SYNC_STATE_EVENT = '__splicetap_sync_state__';
+    const LOG_INTERCEPTION_EVENT = '__splicetap_log__';
 
     // Store originals
     const originalFetch = window.fetch;
@@ -51,7 +51,7 @@
     // Helper: Logging with debug mode check
     function log(msg, ...args) {
         if (tmState.settings?.debugMode) {
-            console.log(`%c[TurboMock] ${msg}`, 'color: #2563eb; font-weight: bold;', ...args);
+            console.log(`%c[SpliceTap] ${msg}`, 'color: #2563eb; font-weight: bold;', ...args);
         }
     }
 
@@ -74,15 +74,15 @@
     // Guard: the shared UMD modules must be present (loaded earlier in the
     // manifest's MAIN-world content_scripts array). If they're missing, log
     // once and leave fetch/XHR unpatched rather than throwing.
-    const turboMockGlobalsReady = !!(
-        window.TurboMockPlaceholders && typeof window.TurboMockPlaceholders.processDynamicResponse === 'function' &&
-        window.TurboMockMatcher && typeof window.TurboMockMatcher.findMatchingRule === 'function' &&
-        window.TurboMockPatch && typeof window.TurboMockPatch.jsonMergePatch === 'function'
+    const spliceTapGlobalsReady = !!(
+        window.SpliceTapPlaceholders && typeof window.SpliceTapPlaceholders.processDynamicResponse === 'function' &&
+        window.SpliceTapMatcher && typeof window.SpliceTapMatcher.findMatchingRule === 'function' &&
+        window.SpliceTapPatch && typeof window.SpliceTapPatch.jsonMergePatch === 'function'
     );
 
-    if (!turboMockGlobalsReady) {
+    if (!spliceTapGlobalsReady) {
         console.error(
-            '[TurboMock] Required globals (TurboMockPlaceholders / TurboMockMatcher / TurboMockPatch) were not found. ' +
+            '[SpliceTap] Required globals (SpliceTapPlaceholders / SpliceTapMatcher / SpliceTapPatch) were not found. ' +
             'fetch/XHR interception is disabled for this page load.'
         );
     }
@@ -308,7 +308,7 @@
     }
 
     // --- INTERCEPTOR: FETCH ---
-    if (turboMockGlobalsReady) {
+    if (spliceTapGlobalsReady) {
         const EMPTY_HEADERS = Object.freeze({});
 
         // Sync outer wrapper: P-1/P-2. Bails to the real fetch, with zero
@@ -343,7 +343,7 @@
             if (tmState.settings?.chaosMode?.enabled) {
                 if (getSecureRandom() < (tmState.settings.chaosMode.failureRate || 0.1)) {
                     log(`Chaos Mode: Blocked ${url}`);
-                    return Promise.reject(new TypeError('Failed to fetch (TurboMock Chaos Mode)'));
+                    return Promise.reject(new TypeError('Failed to fetch (SpliceTap Chaos Mode)'));
                 }
             }
 
@@ -364,7 +364,7 @@
             }
 
             // 4. Find matching rule
-            const rule = window.TurboMockMatcher.findMatchingRule(tmState.rules, { url, method, headers, bodyText });
+            const rule = window.SpliceTapMatcher.findMatchingRule(tmState.rules, { url, method, headers, bodyText });
             if (!rule) {
                 return originalFetch.apply(this, args);
             }
@@ -407,8 +407,8 @@
                     return real;
                 }
 
-                const patchPayload = window.TurboMockPlaceholders.processDynamicResponse(cfg.patch, { url, method });
-                const merged = window.TurboMockPatch.jsonMergePatch(data, patchPayload);
+                const patchPayload = window.SpliceTapPlaceholders.processDynamicResponse(cfg.patch, { url, method });
+                const merged = window.SpliceTapPatch.jsonMergePatch(data, patchPayload);
 
                 if (cfg.delay > 0) {
                     await sleepAbortable(cfg.delay, signal);
@@ -419,8 +419,8 @@
 
                 const mergedHeaders = {};
                 real.headers.forEach((value, key) => { mergedHeaders[key] = value; });
-                mergedHeaders['x-turbomock'] = 'true';
-                mergedHeaders['x-turbomock-rule'] = rule.name;
+                mergedHeaders['x-splicetap'] = 'true';
+                mergedHeaders['x-splicetap-rule'] = rule.name;
 
                 log(`Patched ${method} ${url} (Rule: ${rule.name})`);
                 logInterception(rule, url, method, real.status);
@@ -449,12 +449,12 @@
                 return Promise.reject(abortError());
             }
 
-            const body = window.TurboMockPlaceholders.processDynamicResponse(cfg.body, { url, method });
+            const body = window.SpliceTapPlaceholders.processDynamicResponse(cfg.body, { url, method });
             const responseBody = typeof body === 'string' ? body : JSON.stringify(body);
 
             const headerObj = Object.assign({ 'Content-Type': 'application/json' }, cfg.headers || {});
-            headerObj['x-turbomock'] = 'true';
-            headerObj['x-turbomock-rule'] = rule.name;
+            headerObj['x-splicetap'] = 'true';
+            headerObj['x-splicetap-rule'] = rule.name;
 
             logInterception(rule, url, method, cfg.statusCode);
 
@@ -463,7 +463,7 @@
     }
 
     // --- INTERCEPTOR: XHR (COMPLETE IMPLEMENTATION) ---
-    if (turboMockGlobalsReady) {
+    if (spliceTapGlobalsReady) {
         window.XMLHttpRequest = function () {
             // P-1/P-10: bail to a pristine native XHR (zero added allocations,
             // zero own-property overrides) when there's nothing this instance
@@ -496,11 +496,11 @@
             const originalGetAllResponseHeaders = xhr.getAllResponseHeaders;
 
             // Build the header set exposed to the page for a mocked response —
-            // user headers (defaulted) plus the x-turbomock markers (Q-7).
+            // user headers (defaulted) plus the x-splicetap markers (Q-7).
             function buildMockHeaders(userHeaders, rule) {
                 const merged = Object.assign({ 'Content-Type': 'application/json' }, userHeaders || {});
-                merged['x-turbomock'] = 'true';
-                merged['x-turbomock-rule'] = rule.name;
+                merged['x-splicetap'] = 'true';
+                merged['x-splicetap-rule'] = rule.name;
                 return merged;
             }
 
@@ -590,7 +590,7 @@
             // right before delivery instead.
             function runStaticMockFlow(rule) {
                 const cfg = getResponseConfig(rule);
-                const bodyContent = window.TurboMockPlaceholders.processDynamicResponse(cfg.body, { url: requestUrl, method: requestMethod });
+                const bodyContent = window.SpliceTapPlaceholders.processDynamicResponse(cfg.body, { url: requestUrl, method: requestMethod });
                 const responseText = typeof bodyContent === 'string' ? bodyContent : JSON.stringify(bodyContent);
                 const status = cfg.statusCode;
                 const statusText = cfg.statusText;
@@ -681,7 +681,7 @@
                     const redirectRule = tmState.rules.find((rule) =>
                         rule && rule.enabled &&
                         (rule.type || 'mock') === 'redirect' &&
-                        window.TurboMockMatcher.matchUrl(requestUrl, rule.match && rule.match.url) &&
+                        window.SpliceTapMatcher.matchUrl(requestUrl, rule.match && rule.match.url) &&
                         (((rule.match && rule.match.method) || '*').toUpperCase() === '*' ||
                             ((rule.match && rule.match.method) || '').toUpperCase() === requestMethod)
                     );
@@ -790,7 +790,7 @@
                             ? (typeof body.get('operations') === 'string' ? body.get('operations') : null)
                             : null;
 
-                const rule = window.TurboMockMatcher.findMatchingRule(tmState.rules, {
+                const rule = window.SpliceTapMatcher.findMatchingRule(tmState.rules, {
                     url: requestUrl,
                     method: requestMethod,
                     headers: requestHeaders,
@@ -825,7 +825,7 @@
 
                     if (effectiveType === 'mock' && ((rule.response && rule.response.mode) || 'static') === 'static') {
                         const cfg = getResponseConfig(rule);
-                        const bodyContent = window.TurboMockPlaceholders.processDynamicResponse(cfg.body, { url: requestUrl, method: requestMethod });
+                        const bodyContent = window.SpliceTapPlaceholders.processDynamicResponse(cfg.body, { url: requestUrl, method: requestMethod });
                         const responseText = typeof bodyContent === 'string' ? bodyContent : JSON.stringify(bodyContent);
                         isMocked = true;
                         logInterception(rule, requestUrl, requestMethod, cfg.statusCode);
@@ -894,14 +894,14 @@
                                 if (isAborted) return;
 
                                 const data = await real.clone().json();
-                                const patchPayload = window.TurboMockPlaceholders.processDynamicResponse(cfg.patch, { url: requestUrl, method: requestMethod });
-                                const merged = window.TurboMockPatch.jsonMergePatch(data, patchPayload);
+                                const patchPayload = window.SpliceTapPlaceholders.processDynamicResponse(cfg.patch, { url: requestUrl, method: requestMethod });
+                                const merged = window.SpliceTapPatch.jsonMergePatch(data, patchPayload);
                                 const mergedText = JSON.stringify(merged);
 
                                 const mergedHeaders = {};
                                 real.headers.forEach((value, key) => { mergedHeaders[key] = value; });
-                                mergedHeaders['x-turbomock'] = 'true';
-                                mergedHeaders['x-turbomock-rule'] = rule.name;
+                                mergedHeaders['x-splicetap'] = 'true';
+                                mergedHeaders['x-splicetap-rule'] = rule.name;
 
                                 log(`Patched XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
                                 logInterception(rule, requestUrl, requestMethod, real.status);
@@ -990,6 +990,6 @@
         }
     });
 
-    log(turboMockGlobalsReady ? 'Interceptor injected and active' : 'Interceptor injected but INACTIVE (missing shared modules)');
+    log(spliceTapGlobalsReady ? 'Interceptor injected and active' : 'Interceptor injected but INACTIVE (missing shared modules)');
 
 })();

@@ -1,20 +1,20 @@
 /**
- * TurboMock Storage Manager
+ * SpliceTap Storage Manager
  * Handles all data persistence with Chrome storage APIs
  * Now with quota management and backup cleanup
  */
 
-export class TurboMockStorage {
+export class SpliceTapStorage {
     constructor() {
         this.storageKeys = {
-            rules: 'turboMockRules',
-            active: 'turboMockActive',
-            stats: 'turboMockStats',
-            settings: 'turboMockSettings',
-            metrics: 'turboMockMetrics',
-            chaos: 'turboMockChaos',
-            backupPrefix: 'turboMockBackup_', // Changed to prefix for multiple backups
-            dnrCounter: 'turboMockDnrCounter' // integer counter, allocates chrome.declarativeNetRequest rule ids
+            rules: 'spliceTapRules',
+            active: 'spliceTapActive',
+            stats: 'spliceTapStats',
+            settings: 'spliceTapSettings',
+            metrics: 'spliceTapMetrics',
+            chaos: 'spliceTapChaos',
+            backupPrefix: 'spliceTapBackup_', // Changed to prefix for multiple backups
+            dnrCounter: 'spliceTapDnrCounter' // integer counter, allocates chrome.declarativeNetRequest rule ids
         };
 
         this.defaultSettings = {
@@ -534,5 +534,5 @@ export class TurboMockStorage {
 
 // Also expose as global for non-module contexts (popup, options page)
 if (typeof window !== 'undefined') {
-    window.TurboMockStorage = TurboMockStorage;
+    window.SpliceTapStorage = SpliceTapStorage;
 }

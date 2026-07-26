@@ -1,5 +1,5 @@
 /**
- * TurboMock DNR (declarativeNetRequest) sync.
+ * SpliceTap DNR (declarativeNetRequest) sync.
  * Maps v2 'headers' / 'queryparams' rules to chrome.declarativeNetRequest
  * dynamic rules and keeps the DNR ruleset in sync with stored rules. See
  * TODO.md §G4.1.
@@ -9,9 +9,9 @@
  * workaround for the same constraint on utils.js/storage.js in G1) -- a
  * top-level `export function` here would make `require()` throw under Jest.
  * service_worker/background.js (an ES module) consumes this file via a
- * side-effect `import './dnr.js'` and then reads `globalThis.TurboMockDnr`,
+ * side-effect `import './dnr.js'` and then reads `globalThis.SpliceTapDnr`,
  * exactly like the G1 shared modules are consumed from the MAIN-world
- * content script via `window.TurboMockMatcher` etc.
+ * content script via `window.SpliceTapMatcher` etc.
  */
 (function (global) {
     'use strict';
@@ -262,5 +262,5 @@
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
     }
-    global.TurboMockDnr = api;
+    global.SpliceTapDnr = api;
 })(typeof window !== 'undefined' ? window : globalThis);

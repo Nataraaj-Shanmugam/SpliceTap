@@ -1,0 +1,1642 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="SpliceTap - Mock, block, delay, redirect and rewrite any API call directly in your browser. A Manifest V3 Chrome extension for frontend development and testing. No proxy, no backend changes, no build step.">
+    <meta name="keywords"
+        content="API mocking, Chrome extension, request interception, frontend development, testing, Manifest V3, GraphQL mocking, JSON merge patch, developer tools">
+    <meta name="author" content="Nataraaj Shanmugam">
+    <meta property="og:title" content="SpliceTap - Mock Any API, Right in Your Browser">
+    <meta property="og:description"
+        content="Tap into your app's network traffic and reroute it. Six rule types, GraphQL-aware matching, and a live DevTools log — all local, all private.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://nataraaj-shanmugam.github.io/SpliceTap/">
+    <title>SpliceTap - Mock Any API, Right in Your Browser</title>
+
+    <!-- Set before first paint so scroll-reveal starts hidden without a flash.
+         If scripting is off this never runs and .reveal simply stays visible. -->
+    <script>document.documentElement.className += ' js';</script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #1e63f5;
+            --primary-dark: #1554d6;
+            --primary-light: #2f7dfa;
+            /* Small brand-blue text sits on a tinted pill, not pure white, which
+               drops #1e63f5 to 4.14:1. One shade darker restores 5.26:1. */
+            --primary-text: #1554d6;
+            --accent: #0bbcd4;
+            --accent-deep: #0e7490;
+            --success: #10b981;
+            --bg-light: #f6f8fb;
+            --bg-white: #ffffff;
+            --bg-dark: #0b1220;
+            --text-dark: #0f172a;
+            --text-muted: #55637a;
+            --border: #e2e8f0;
+            --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+            --shadow-xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+            /* Ends on cyan-700 rather than the brand's bright #0bbcd4: white text
+               needs >=4.5:1 across the whole ramp, and the bright cyan is ~2.2:1. */
+            --gradient-primary: linear-gradient(135deg, #1e63f5 0%, #1257c9 45%, #0e7490 100%);
+            --gradient-accent: linear-gradient(135deg, #1e63f5 0%, #0bbcd4 100%);
+            --gradient-tint: linear-gradient(135deg, rgba(30, 99, 245, 0.10), rgba(11, 188, 212, 0.10));
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: var(--text-dark);
+            background: var(--bg-light);
+            overflow-x: hidden;
+        }
+
+        /* Header */
+        header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem 0;
+            position: fixed;
+            width: 100%;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s;
+        }
+
+        header.scrolled {
+            background: rgba(255, 255, 255, 0.98);
+            box-shadow: var(--shadow);
+        }
+
+        nav {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            text-decoration: none;
+            letter-spacing: -0.02em;
+        }
+
+        .logo svg {
+            width: 36px;
+            height: 36px;
+            border-radius: 9px;
+            display: block;
+            flex-shrink: 0;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+            align-items: center;
+        }
+
+        .nav-links a {
+            color: var(--text-dark);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.95rem;
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover {
+            color: var(--primary);
+        }
+
+        .nav-cta {
+            background: var(--gradient-primary);
+            color: white !important;
+            padding: 0.5rem 1.25rem;
+            border-radius: 8px;
+            font-weight: 600 !important;
+            transition: transform 0.2s, box-shadow 0.2s !important;
+        }
+
+        .nav-cta:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(30, 99, 245, 0.4);
+        }
+
+        /* Hero */
+        .hero {
+            background: var(--gradient-primary);
+            color: white;
+            padding: 10rem 2rem 6rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+            opacity: 0.5;
+        }
+
+        .hero-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4rem;
+            align-items: center;
+        }
+
+        .hero-text h1 {
+            font-size: 3.5rem;
+            font-weight: 800;
+            margin-bottom: 1.5rem;
+            line-height: 1.1;
+            letter-spacing: -0.02em;
+        }
+
+        .hero-text h1 span {
+            background: linear-gradient(135deg, #ffffff 0%, #a5f3fc 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        .hero-text p {
+            font-size: 1.25rem;
+            margin-bottom: 2rem;
+            opacity: 0.95;
+            line-height: 1.7;
+        }
+
+        .hero-badges {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+        }
+
+        /* Dark tint, not the usual white one: the gradient's lightest stop only
+           gives white text 5.05:1, so any lightening drops it under 4.5:1
+           (a white 0.16 overlay measures 3.85:1). Darkening lands at 6.62:1. */
+        .badge {
+            background: rgba(0, 0, 0, 0.16);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            backdrop-filter: blur(10px);
+            padding: 0.45rem 1rem;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .badge::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #a5f3fc;
+            flex-shrink: 0;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 1rem 2rem;
+            border-radius: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+
+        .btn svg {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+        }
+
+        .star-emoji {
+            font-size: 1.1rem;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+
+        .btn-primary {
+            background: white;
+            color: var(--primary-dark);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Same reasoning as .badge — a white overlay here measures 3.92:1. */
+        .btn-secondary {
+            background: rgba(0, 0, 0, 0.18);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.35);
+            backdrop-filter: blur(10px);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(0, 0, 0, 0.28);
+            border-color: rgba(255, 255, 255, 0.55);
+        }
+
+        .hero-visual {
+            position: relative;
+        }
+
+        .hero-mockup {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 16px;
+            padding: 2rem;
+            box-shadow: var(--shadow-xl);
+        }
+
+        .mockup-header {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 1.5rem;
+        }
+
+        .mockup-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .mockup-dot.red { background: #ef4444; }
+        .mockup-dot.yellow { background: #f59e0b; }
+        .mockup-dot.green { background: #10b981; }
+
+        .mockup-content {
+            background: rgba(255, 255, 255, 0.96);
+            border-radius: 8px;
+            padding: 1.25rem;
+            color: var(--text-dark);
+        }
+
+        .mockup-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.7rem 0.85rem;
+            background: var(--bg-light);
+            border-radius: 8px;
+            margin-bottom: 0.6rem;
+            font-size: 0.82rem;
+        }
+
+        .mockup-row:last-child { margin-bottom: 0; }
+
+        .mockup-path {
+            font-family: 'SF Mono', 'Consolas', 'Courier New', monospace;
+            color: var(--text-dark);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .mockup-method {
+            font-weight: 700;
+            color: var(--text-muted);
+            margin-right: 0.5rem;
+        }
+
+        .pill {
+            font-size: 0.68rem;
+            font-weight: 700;
+            padding: 0.2rem 0.55rem;
+            border-radius: 999px;
+            letter-spacing: 0.03em;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .pill.mock { background: #dbeafe; color: #1e40af; }
+        .pill.patch { background: #cffafe; color: #155e75; }
+        .pill.delay { background: #fef3c7; color: #92400e; }
+        .pill.block { background: #fee2e2; color: #991b1b; }
+
+        /* Stats */
+        .stats {
+            background: var(--bg-white);
+            padding: 3rem 2rem;
+            margin-top: -3rem;
+            position: relative;
+            z-index: 10;
+        }
+
+        .stats-container {
+            max-width: 1000px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 2rem;
+            background: white;
+            padding: 2.5rem;
+            border-radius: 16px;
+            box-shadow: var(--shadow-lg);
+        }
+
+        .stat-item { text-align: center; }
+
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--primary);
+            line-height: 1;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        section { padding: 6rem 0; }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+
+        .section-label {
+            display: inline-block;
+            background: var(--gradient-tint);
+            color: var(--primary-text);
+            padding: 0.5rem 1rem;
+            border-radius: 999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .section-header h2 {
+            font-size: 2.75rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+            color: var(--text-dark);
+            letter-spacing: -0.02em;
+        }
+
+        .section-header p {
+            font-size: 1.125rem;
+            color: var(--text-muted);
+            max-width: 640px;
+            margin: 0 auto;
+        }
+
+        /* Features */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 2rem;
+        }
+
+        .feature-card {
+            background: var(--bg-white);
+            padding: 2rem;
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+            transition: all 0.3s ease;
+            border: 1px solid transparent;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--gradient-accent);
+            transform: scaleX(0);
+            transition: transform 0.3s;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-8px);
+            box-shadow: var(--shadow-xl);
+            border-color: rgba(30, 99, 245, 0.12);
+        }
+
+        .feature-card:hover::before { transform: scaleX(1); }
+
+        .feature-icon {
+            width: 52px;
+            height: 52px;
+            background: var(--gradient-tint);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1.5rem;
+            color: var(--primary);
+        }
+
+        .feature-icon svg {
+            width: 25px;
+            height: 25px;
+        }
+
+        .feature-card h3 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+            color: var(--text-dark);
+        }
+
+        .feature-card p {
+            color: var(--text-muted);
+            line-height: 1.7;
+            margin-bottom: 1rem;
+        }
+
+        .feature-card ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .feature-card li {
+            color: var(--text-muted);
+            padding: 0.375rem 0;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .feature-card li::before {
+            content: '✓';
+            color: var(--success);
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        /* Workflow */
+        .workflow { background: var(--bg-white); }
+
+        .workflow-steps {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 2rem;
+            position: relative;
+        }
+
+        .workflow-steps::before {
+            content: '';
+            position: absolute;
+            top: 40px;
+            left: 60px;
+            right: 60px;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary), var(--accent));
+            z-index: 0;
+        }
+
+        .workflow-step {
+            text-align: center;
+            position: relative;
+            z-index: 1;
+        }
+
+        .step-number {
+            width: 80px;
+            height: 80px;
+            background: var(--gradient-primary);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.75rem;
+            font-weight: 800;
+            margin: 0 auto 1.5rem;
+            box-shadow: 0 10px 30px rgba(30, 99, 245, 0.3);
+        }
+
+        .workflow-step h3 {
+            font-size: 1.125rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            color: var(--text-dark);
+        }
+
+        .workflow-step p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        /* Rule types */
+        .types-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+        }
+
+        .type-card {
+            background: var(--bg-white);
+            padding: 2rem;
+            border-radius: 12px;
+            border: 2px solid var(--border);
+            transition: all 0.3s;
+        }
+
+        .type-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .type-name {
+            display: inline-block;
+            font-family: 'SF Mono', 'Consolas', 'Courier New', monospace;
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--primary-text);
+            background: var(--gradient-tint);
+            padding: 0.25rem 0.7rem;
+            border-radius: 6px;
+            margin-bottom: 0.9rem;
+        }
+
+        .type-card h4 {
+            font-weight: 700;
+            font-size: 1.05rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-dark);
+        }
+
+        .type-card p {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            line-height: 1.65;
+        }
+
+        .type-engine {
+            display: inline-block;
+            margin-top: 0.9rem;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            background: var(--bg-light);
+            border: 1px solid var(--border);
+            padding: 0.2rem 0.55rem;
+            border-radius: 999px;
+        }
+
+        /* Tech stack */
+        .tech-section {
+            background: var(--bg-dark);
+            color: white;
+        }
+
+        .tech-section .section-header h2 { color: white; }
+        .tech-section .section-header p { color: rgba(255, 255, 255, 0.72); }
+
+        /* Brand blue on the near-black tech panel is only 3.2:1 — needs a light
+           tone from the same family instead (9.68:1). */
+        .tech-section .section-label { color: #7dd3fc; }
+
+        .tech-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+        }
+
+        .tech-item {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 1.35rem 1.35rem 1.35rem 1.6rem;
+            border-radius: 12px;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .tech-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 1.35rem;
+            bottom: 1.35rem;
+            width: 3px;
+            border-radius: 0 3px 3px 0;
+            background: var(--gradient-accent);
+        }
+
+        .tech-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateY(-4px);
+        }
+
+        .tech-item h4 {
+            font-weight: 600;
+            font-size: 1rem;
+            margin-bottom: 0.3rem;
+            letter-spacing: -0.01em;
+        }
+
+        .tech-item p {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.65);
+            line-height: 1.5;
+        }
+
+        /* Install */
+        .install-card {
+            background: var(--bg-white);
+            border-radius: 16px;
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
+            display: grid;
+            grid-template-columns: 1fr 1px 1fr;
+            align-items: stretch;
+        }
+
+        .install-main { padding: 3rem; }
+
+        .install-main h3 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            color: var(--primary);
+        }
+
+        .install-main ol { padding-left: 1.5rem; }
+
+        .install-main li {
+            margin-bottom: 1rem;
+            font-size: 1rem;
+            color: var(--text-dark);
+        }
+
+        .install-main code {
+            background: var(--bg-light);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Consolas', 'Courier New', monospace;
+            color: var(--primary);
+            font-size: 0.875rem;
+            word-break: break-all;
+        }
+
+        .install-divider {
+            width: 1px;
+            background: var(--border);
+            margin: 2rem 0;
+            height: auto;
+        }
+
+        .install-note {
+            margin-top: 1.25rem;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        /* About */
+        .about-section {
+            background: linear-gradient(135deg, var(--bg-light) 0%, white 100%);
+        }
+
+        .about-card {
+            background: var(--bg-white);
+            border-radius: 16px;
+            box-shadow: var(--shadow-lg);
+            padding: 3rem;
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 3rem;
+            align-items: center;
+        }
+
+        .about-avatar {
+            width: 130px;
+            height: 130px;
+            background: var(--gradient-primary);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.6rem;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            color: white;
+            box-shadow: 0 10px 40px rgba(30, 99, 245, 0.3);
+        }
+
+        .about-content h3 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .about-title {
+            color: var(--primary);
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .about-content p {
+            color: var(--text-muted);
+            line-height: 1.8;
+            margin-bottom: 1.5rem;
+        }
+
+        .about-links {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .about-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .about-link.primary {
+            background: var(--gradient-primary);
+            color: white;
+        }
+
+        .about-link.secondary {
+            background: var(--bg-light);
+            color: var(--text-dark);
+            border: 1px solid var(--border);
+        }
+
+        .about-link:hover { transform: translateY(-2px); }
+
+        .about-link svg {
+            width: 17px;
+            height: 17px;
+            flex-shrink: 0;
+        }
+
+        /* CTA */
+        .cta-section {
+            background: var(--gradient-primary);
+            color: white;
+            text-align: center;
+            padding: 5rem 2rem;
+        }
+
+        .cta-section h2 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+        }
+
+        .cta-section p {
+            font-size: 1.25rem;
+            opacity: 0.92;
+            margin: 0 auto 2rem;
+            max-width: 620px;
+        }
+
+        /* Footer */
+        footer {
+            background: var(--bg-dark);
+            color: white;
+            padding: 4rem 0 2rem;
+        }
+
+        .footer-content {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            gap: 3rem;
+            margin-bottom: 3rem;
+        }
+
+        .footer-brand .logo { color: white; }
+
+        .footer-brand p {
+            color: rgba(255, 255, 255, 0.72);
+            margin-top: 1rem;
+            line-height: 1.7;
+        }
+
+        .footer-section h4 {
+            margin-bottom: 1.5rem;
+            font-size: 1rem;
+            font-weight: 700;
+        }
+
+        .footer-section ul { list-style: none; }
+
+        .footer-section a {
+            color: rgba(255, 255, 255, 0.72);
+            text-decoration: none;
+            display: block;
+            padding: 0.375rem 0;
+            transition: color 0.2s;
+            font-size: 0.95rem;
+        }
+
+        .footer-section a:hover { color: white; }
+
+        .footer-bottom {
+            text-align: center;
+            padding-top: 2rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.55);
+            font-size: 0.875rem;
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .hero-content {
+                grid-template-columns: 1fr;
+                text-align: center;
+            }
+
+            .hero-visual { display: none; }
+
+            .features-grid,
+            .workflow-steps,
+            .types-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .stats-container { grid-template-columns: repeat(2, 1fr); }
+            .tech-grid { grid-template-columns: repeat(3, 1fr); }
+            .install-card { grid-template-columns: 1fr; }
+
+            .install-divider {
+                width: 100%;
+                height: 1px;
+                margin: 0;
+            }
+
+            .footer-content { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        @media (max-width: 768px) {
+            .nav-links { display: none; }
+
+            .hero-text h1 { font-size: 2.5rem; }
+
+            .features-grid,
+            .workflow-steps,
+            .types-grid,
+            .tech-grid,
+            .stats-container {
+                grid-template-columns: 1fr;
+            }
+
+            .workflow-steps::before { display: none; }
+
+            .about-card {
+                grid-template-columns: 1fr;
+                text-align: center;
+                justify-items: center;
+            }
+
+            .about-links { justify-content: center; }
+            .footer-content { grid-template-columns: 1fr; }
+            .install-main { padding: 2rem; }
+        }
+
+        /* Animations */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate-in { animation: fadeInUp 0.6s ease-out forwards; }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .float-animation { animation: float 3s ease-in-out infinite; }
+
+        /* Scoped to .js so the content is visible by default. If the script
+           never runs, `.js` is never set and nothing is left stuck at
+           opacity 0 — otherwise the whole page below the hero disappears. */
+        .js .reveal {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .float-animation,
+            .animate-in { animation: none; }
+
+            .js .reveal {
+                opacity: 1;
+                transform: none;
+                transition: none;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Header -->
+    <header id="header">
+        <nav>
+            <a href="#" class="logo" aria-label="SpliceTap home">
+                <svg viewBox="0 0 128 128" aria-hidden="true" focusable="false">
+                    <defs>
+                        <linearGradient id="stLogoNav" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#1e63f5" />
+                            <stop offset="100%" stop-color="#0bbcd4" />
+                        </linearGradient>
+                    </defs>
+                    <rect x="0" y="0" width="128" height="128" rx="30" fill="url(#stLogoNav)" />
+                    <circle cx="28" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <circle cx="52" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <circle cx="76" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <path d="M88 32 L100 44 L88 56" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round"
+                        stroke-linejoin="round" opacity="0.5" />
+                    <path d="M100 86 L44 86" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" />
+                    <path d="M42 72 L28 86 L42 100" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round"
+                        stroke-linejoin="round" />
+                </svg>
+                SpliceTap
+            </a>
+            <ul class="nav-links">
+                <li><a href="#features">Features</a></li>
+                <li><a href="#rule-types">Rule Types</a></li>
+                <li><a href="#how-it-works">How It Works</a></li>
+                <li><a href="#about">About</a></li>
+                <li><a href="https://github.com/Nataraaj-Shanmugam/SpliceTap" target="_blank"
+                        rel="noopener">GitHub</a></li>
+                <li><a href="#installation" class="nav-cta">Install Free</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <!-- Hero -->
+    <section class="hero">
+        <div class="hero-content">
+            <div class="hero-text animate-in">
+                <div class="hero-badges">
+                    <span class="badge">Chrome Extension</span>
+                    <span class="badge">Open Source</span>
+                    <span class="badge">100% Local</span>
+                </div>
+                <h1>Mock Any API, <span>Right in Your Browser</span></h1>
+                <p>SpliceTap taps into your app's network traffic and reroutes it. Mock, block, delay, redirect,
+                    or rewrite any request — no proxy, no backend changes, no build step.</p>
+                <div class="cta-buttons">
+                    <a href="#installation" class="btn btn-primary">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                        Install SpliceTap
+                    </a>
+                    <a href="https://github.com/Nataraaj-Shanmugam/SpliceTap" class="btn btn-secondary" target="_blank"
+                        rel="noopener">
+                        <!-- The literal U+2B50 star, same as the reference page.
+                             An SVG approximation never quite matches the OS
+                             emoji it is sitting next to in users' minds. -->
+                        <span class="star-emoji" aria-hidden="true">⭐</span>
+                        Star on GitHub
+                    </a>
+                </div>
+            </div>
+            <div class="hero-visual float-animation">
+                <div class="hero-mockup">
+                    <div class="mockup-header">
+                        <span class="mockup-dot red"></span>
+                        <span class="mockup-dot yellow"></span>
+                        <span class="mockup-dot green"></span>
+                    </div>
+                    <div class="mockup-content">
+                        <div class="mockup-row">
+                            <span class="mockup-path"><span class="mockup-method">GET</span>/api/users/42</span>
+                            <span class="pill mock">MOCKED</span>
+                        </div>
+                        <div class="mockup-row">
+                            <span class="mockup-path"><span class="mockup-method">POST</span>/graphql</span>
+                            <span class="pill patch">PATCHED</span>
+                        </div>
+                        <div class="mockup-row">
+                            <span class="mockup-path"><span class="mockup-method">GET</span>/api/orders</span>
+                            <span class="pill delay">DELAYED 2s</span>
+                        </div>
+                        <div class="mockup-row">
+                            <span class="mockup-path"><span class="mockup-method">GET</span>/api/legacy</span>
+                            <span class="pill block">BLOCKED</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Stats -->
+    <section class="stats">
+        <div class="stats-container">
+            <div class="stat-item">
+                <div class="stat-number">6</div>
+                <div class="stat-label">Rule Types</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">14</div>
+                <div class="stat-label">Dynamic Placeholders</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">8.5K</div>
+                <div class="stat-label">Lines of Code</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">0</div>
+                <div class="stat-label">Bytes Sent Anywhere</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features">
+        <div class="container">
+            <div class="section-header reveal">
+                <span class="section-label">Features</span>
+                <h2>Everything You Need to Fake a Backend</h2>
+                <p>Built for the moment the API isn't ready, the error case won't reproduce, or the network is
+                    too fast to see your loading state</p>
+            </div>
+
+            <div class="features-grid">
+                <div class="feature-card reveal">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                            <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                            <polyline points="2 17 12 22 22 17" />
+                            <polyline points="2 12 12 17 22 12" />
+                        </svg>
+                    </div>
+                    <h3>Static &amp; Patch Mocking</h3>
+                    <p>Return a fully synthetic response, or let the real one through and surgically change a few
+                        fields.</p>
+                    <ul>
+                        <li>Full control of status, headers, body</li>
+                        <li>RFC 7386 JSON Merge Patch</li>
+                        <li>Patch keeps the real response intact</li>
+                        <li><code>null</code> deletes a key</li>
+                    </ul>
+                </div>
+
+                <div class="feature-card reveal">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                            <circle cx="12" cy="12" r="9" />
+                            <circle cx="12" cy="12" r="3.5" />
+                            <line x1="12" y1="3" x2="12" y2="6" />
+                            <line x1="12" y1="18" x2="12" y2="21" />
+                            <line x1="3" y1="12" x2="6" y2="12" />
+                            <line x1="18" y1="12" x2="21" y2="12" />
+                        </svg>
+                    </div>
+                    <h3>Precise Matching</h3>
+                    <p>Target exactly the request you mean — and nothing else — with layered match conditions.</p>
+                    <ul>
+                        <li>Wildcard, regex, or substring URLs</li>
+                        <li>Method filtering</li>
+                        <li>Request-header conditions</li>
+                        <li>First match wins, in your order</li>
+                    </ul>
+                </div>
+
+                <div class="feature-card reveal">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                            <circle cx="18" cy="5" r="2.6" />
+                            <circle cx="6" cy="12" r="2.6" />
+                            <circle cx="18" cy="19" r="2.6" />
+                            <line x1="8.4" y1="13.4" x2="15.6" y2="17.6" />
+                            <line x1="15.6" y1="6.4" x2="8.4" y2="10.6" />
+                        </svg>
+                    </div>
+                    <h3>GraphQL Aware</h3>
+                    <p>Mock a single query or mutation on a shared endpoint without touching the rest.</p>
+                    <ul>
+                        <li>Matches on <code>operationName</code></li>
+                        <li>Works on one shared <code>/graphql</code></li>
+                        <li>Leaves sibling operations alone</li>
+                        <li>Combines with header matching</li>
+                    </ul>
+                </div>
+
+                <div class="feature-card reveal">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                            <path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1" />
+                            <path d="M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1" />
+                        </svg>
+                    </div>
+                    <h3>Dynamic Placeholders</h3>
+                    <p>Responses that change per request, so your UI never renders the same stale fixture twice.</p>
+                    <ul>
+                        <li>Timestamps, dates, GUIDs</li>
+                        <li>Random ints, floats, strings, emails</li>
+                        <li>Echo the request URL and method</li>
+                        <li>14 placeholders, expanded per call</li>
+                    </ul>
+                </div>
+
+                <div class="feature-card reveal">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                            <rect x="2.5" y="4" width="19" height="16" rx="2.5" />
+                            <line x1="2.5" y1="9" x2="21.5" y2="9" />
+                            <polyline points="7 13 9.5 15.5 7 18" />
+                            <line x1="12.5" y1="18" x2="17" y2="18" />
+                        </svg>
+                    </div>
+                    <h3>Live DevTools Panel</h3>
+                    <p>Mocked requests never hit the network, so the Network tab can't show them. SpliceTap has its
+                        own panel that does.</p>
+                    <ul>
+                        <li>Every applied rule, newest first</li>
+                        <li>Method, URL, rule name and type</li>
+                        <li>Survives service-worker restarts</li>
+                        <li>Sensitive query params redacted</li>
+                    </ul>
+                </div>
+
+                <div class="feature-card reveal">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                            <path d="M12 21.5s7.5-3.8 7.5-9.5V5.2L12 2.5 4.5 5.2V12c0 5.7 7.5 9.5 7.5 9.5z" />
+                            <polyline points="9 12 11 14 15 10" />
+                        </svg>
+                    </div>
+                    <h3>Privacy First</h3>
+                    <p>No account, no backend, no telemetry. There is no server to send anything to.</p>
+                    <ul>
+                        <li>Everything in <code>chrome.storage</code></li>
+                        <li>Zero analytics or tracking</li>
+                        <li>Response bodies never stored</li>
+                        <li>Import/export stays on your disk</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How it works -->
+    <section id="how-it-works" class="workflow">
+        <div class="container">
+            <div class="section-header reveal">
+                <span class="section-label">How It Works</span>
+                <h2>Four Steps, About Thirty Seconds</h2>
+                <p>No config files, no restart, no rebuilding your app</p>
+            </div>
+
+            <div class="workflow-steps">
+                <div class="workflow-step reveal">
+                    <div class="step-number">1</div>
+                    <h3>Open the Editor</h3>
+                    <p>Click the toolbar icon, hit <code>Alt+Shift+N</code>, or right-click the page — the editor
+                        opens with the current host prefilled.</p>
+                </div>
+                <div class="workflow-step reveal">
+                    <div class="step-number">2</div>
+                    <h3>Pick a Rule Type</h3>
+                    <p>Mock, block, delay, redirect, rewrite headers, or change query params. Templates cover the
+                        common cases.</p>
+                </div>
+                <div class="workflow-step reveal">
+                    <div class="step-number">3</div>
+                    <h3>Match the Request</h3>
+                    <p>Give it a URL pattern and a method. Add header or GraphQL conditions when you need to be
+                        more surgical.</p>
+                </div>
+                <div class="workflow-step reveal">
+                    <div class="step-number">4</div>
+                    <h3>Save &amp; Reload</h3>
+                    <p>The rule takes effect immediately on matching requests. Watch it fire in the DevTools panel.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Rule types -->
+    <section id="rule-types">
+        <div class="container">
+            <div class="section-header reveal">
+                <span class="section-label">Rule Types</span>
+                <h2>Six Ways to Bend a Request</h2>
+                <p>Four are handled in-page by intercepting <code>fetch</code> and <code>XMLHttpRequest</code>; two
+                    are real network-layer edits made by the browser itself</p>
+            </div>
+
+            <div class="types-grid">
+                <div class="type-card reveal">
+                    <span class="type-name">mock</span>
+                    <h4>Return a fake response</h4>
+                    <p>Serve a synthetic body, status and headers — or patch just a few fields of the real one.
+                        Placeholders expand per request.</p>
+                    <span class="type-engine">In-page interceptor</span>
+                </div>
+
+                <div class="type-card reveal">
+                    <span class="type-name">block</span>
+                    <h4>Fail the request</h4>
+                    <p><code>fetch</code> rejects and XHR fires <code>error</code> with status 0 — exactly what a
+                        real network failure looks like to your code.</p>
+                    <span class="type-engine">In-page interceptor</span>
+                </div>
+
+                <div class="type-card reveal">
+                    <span class="type-name">delay</span>
+                    <h4>Slow it down</h4>
+                    <p>Wait a set number of milliseconds, then let the request through untouched. The honest way to
+                        find your missing spinner.</p>
+                    <span class="type-engine">In-page interceptor</span>
+                </div>
+
+                <div class="type-card reveal">
+                    <span class="type-name">redirect</span>
+                    <h4>Send it elsewhere</h4>
+                    <p>Rewrite the URL before it leaves. Regex patterns support <code>$1</code>–<code>$9</code>
+                        captures, so prod can point at localhost.</p>
+                    <span class="type-engine">In-page interceptor</span>
+                </div>
+
+                <div class="type-card reveal">
+                    <span class="type-name">headers</span>
+                    <h4>Add or strip headers</h4>
+                    <p>Set and remove request or response headers at the network layer. Unblock CORS or override
+                        <code>User-Agent</code> in one rule.</p>
+                    <span class="type-engine">declarativeNetRequest</span>
+                </div>
+
+                <div class="type-card reveal">
+                    <span class="type-name">queryparams</span>
+                    <h4>Rewrite the query string</h4>
+                    <p>Append or remove URL parameters on the way out — handy for forcing feature flags or debug
+                        modes you can't set in the UI.</p>
+                    <span class="type-engine">declarativeNetRequest</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tech stack -->
+    <section id="tech-stack" class="tech-section">
+        <div class="container">
+            <div class="section-header reveal">
+                <span class="section-label">Under the Hood</span>
+                <h2>Built on the Modern Extension Platform</h2>
+                <p>Vanilla JavaScript, no framework, no build step — the source you read is the code that runs</p>
+            </div>
+
+            <div class="tech-grid">
+                <div class="tech-item reveal">
+                    <h4>Manifest V3</h4>
+                    <p>Current extension platform</p>
+                </div>
+                <div class="tech-item reveal">
+                    <h4>Service Worker</h4>
+                    <p>Rule state and sync</p>
+                </div>
+                <div class="tech-item reveal">
+                    <h4>MAIN-world Scripts</h4>
+                    <p>Patches fetch and XHR</p>
+                </div>
+                <div class="tech-item reveal">
+                    <h4>declarativeNetRequest</h4>
+                    <p>Real network-layer edits</p>
+                </div>
+                <div class="tech-item reveal">
+                    <h4>Shadow DOM</h4>
+                    <p>Overlay that pages can't style</p>
+                </div>
+                <div class="tech-item reveal">
+                    <h4>chrome.storage</h4>
+                    <p>Local and session persistence</p>
+                </div>
+                <div class="tech-item reveal">
+                    <h4>Jest</h4>
+                    <p>59 unit tests</p>
+                </div>
+                <div class="tech-item reveal">
+                    <h4>RFC 7386</h4>
+                    <p>JSON Merge Patch</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Installation -->
+    <section id="installation">
+        <div class="container">
+            <div class="section-header reveal">
+                <span class="section-label">Installation</span>
+                <h2>Get Started</h2>
+                <p>SpliceTap is pending review on the Chrome Web Store — until it lands, install it from source in
+                    under a minute</p>
+            </div>
+
+            <div class="install-card reveal">
+                <div class="install-main">
+                    <h3>Install from Source</h3>
+                    <ol>
+                        <li>Clone or download the repository:<br>
+                            <code>git clone https://github.com/Nataraaj-Shanmugam/SpliceTap.git</code>
+                        </li>
+                        <li>Open <code>chrome://extensions/</code> in Chrome or Edge</li>
+                        <li>Turn on <strong>Developer mode</strong> (top right)</li>
+                        <li>Click <strong>Load unpacked</strong> and select the project folder</li>
+                        <li>Pin the SpliceTap icon to your toolbar</li>
+                    </ol>
+                    <p class="install-note">Requires Chrome or Edge 120+.</p>
+                </div>
+
+                <div class="install-divider"></div>
+
+                <div class="install-main">
+                    <h3>Chrome Web Store</h3>
+                    <ol>
+                        <li>Listing is <strong>coming soon</strong> — the extension is being prepared for review</li>
+                        <li>Watch the repository to hear when it's live</li>
+                        <li>Install with one click, no developer mode needed</li>
+                        <li>Updates arrive automatically</li>
+                    </ol>
+                    <p class="install-note">
+                        Want it sooner? <a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/issues"
+                            target="_blank" rel="noopener">Open an issue</a> — it helps prioritise.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- About -->
+    <section id="about" class="about-section">
+        <div class="container">
+            <div class="section-header reveal">
+                <span class="section-label">About</span>
+                <h2>Why SpliceTap Exists</h2>
+            </div>
+
+            <div class="about-card reveal">
+                <div class="about-avatar" aria-hidden="true">NS</div>
+                <div class="about-content">
+                    <h3>Nataraaj Shanmugam</h3>
+                    <div class="about-title">Software Engineer &amp; QA Automation Specialist</div>
+                    <p>
+                        Frontend work stalls in predictable ways: the endpoint isn't built yet, the error path only
+                        happens in production, or the response comes back too fast to catch the loading state.
+                        The usual fixes — a local proxy, a throwaway mock server, commented-out code — all cost more
+                        than the problem is worth.
+                    </p>
+                    <p>
+                        SpliceTap puts that control in the browser itself. Write a rule, and the next matching
+                        request answers however you need it to. Nothing leaves your machine, and nothing about your
+                        app has to change.
+                    </p>
+                    <div class="about-links">
+                        <a href="https://github.com/Nataraaj-Shanmugam" target="_blank" rel="noopener"
+                            class="about-link primary">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                                <path
+                                    d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+                            </svg>
+                            GitHub Profile
+                        </a>
+                        <a href="https://github.com/Nataraaj-Shanmugam/SpliceTap" target="_blank" rel="noopener"
+                            class="about-link secondary">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                                <polyline points="16 18 22 12 16 6" />
+                                <polyline points="8 6 2 12 8 18" />
+                            </svg>
+                            View Source Code
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta-section">
+        <div class="container">
+            <h2>Stop Waiting on the Backend</h2>
+            <p>Install SpliceTap and mock your first endpoint in about thirty seconds.</p>
+            <div class="cta-buttons" style="justify-content: center;">
+                <a href="https://github.com/Nataraaj-Shanmugam/SpliceTap" class="btn btn-primary" target="_blank"
+                    rel="noopener">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" aria-hidden="true" focusable="false">
+                        <path
+                            d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+                    </svg>
+                    Get SpliceTap on GitHub
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <a href="#" class="logo" aria-label="SpliceTap home">
+                        <svg viewBox="0 0 128 128" aria-hidden="true" focusable="false">
+                            <defs>
+                                <linearGradient id="stLogoFoot" x1="0" y1="0" x2="1" y2="1">
+                                    <stop offset="0%" stop-color="#1e63f5" />
+                                    <stop offset="100%" stop-color="#0bbcd4" />
+                                </linearGradient>
+                            </defs>
+                            <rect x="0" y="0" width="128" height="128" rx="30" fill="url(#stLogoFoot)" />
+                            <circle cx="28" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                            <circle cx="52" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                            <circle cx="76" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                            <path d="M88 32 L100 44 L88 56" fill="none" stroke="#fff" stroke-width="11"
+                                stroke-linecap="round" stroke-linejoin="round" opacity="0.5" />
+                            <path d="M100 86 L44 86" fill="none" stroke="#fff" stroke-width="14"
+                                stroke-linecap="round" />
+                            <path d="M42 72 L28 86 L42 100" fill="none" stroke="#fff" stroke-width="14"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                        SpliceTap
+                    </a>
+                    <p>Mock, block, delay, redirect and rewrite any API call directly in your browser. Open source,
+                        privacy focused, and built on the modern extension platform.</p>
+                </div>
+
+                <div class="footer-section">
+                    <h4>Documentation</h4>
+                    <ul>
+                        <li><a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/blob/master/README.md"
+                                target="_blank" rel="noopener">README</a></li>
+                        <li><a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/blob/master/README.md#-rule-types"
+                                target="_blank" rel="noopener">Rule Types</a></li>
+                        <li><a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/blob/master/README.md#-dynamic-placeholders"
+                                target="_blank" rel="noopener">Placeholders</a></li>
+                        <li><a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/blob/master/CONTRIBUTING.md"
+                                target="_blank" rel="noopener">Contributing</a></li>
+                    </ul>
+                </div>
+
+                <div class="footer-section">
+                    <h4>Resources</h4>
+                    <ul>
+                        <li><a href="https://github.com/Nataraaj-Shanmugam/SpliceTap" target="_blank"
+                                rel="noopener">GitHub Repository</a></li>
+                        <li><a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/issues" target="_blank"
+                                rel="noopener">Report Issues</a></li>
+                        <li><a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/releases" target="_blank"
+                                rel="noopener">Releases</a></li>
+                        <li><a href="privacy.html">Privacy Policy</a></li>
+                    </ul>
+                </div>
+
+                <div class="footer-section">
+                    <h4>Connect</h4>
+                    <ul>
+                        <li><a href="https://github.com/Nataraaj-Shanmugam" target="_blank" rel="noopener">GitHub
+                                Profile</a></li>
+                        <li><a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/discussions" target="_blank"
+                                rel="noopener">Discussions</a></li>
+                        <li><a href="https://github.com/Nataraaj-Shanmugam/SpliceTap/blob/master/LICENSE"
+                                target="_blank" rel="noopener">MIT License</a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="footer-bottom">
+                <p>&copy; 2026 SpliceTap by Nataraaj Shanmugam. Open Source under the MIT License.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        (function () {
+            'use strict';
+
+            var header = document.getElementById('header');
+            window.addEventListener('scroll', function () {
+                header.classList.toggle('scrolled', window.scrollY > 50);
+            }, { passive: true });
+
+            document.querySelectorAll('a[href^="#"]').forEach(function (anchor) {
+                anchor.addEventListener('click', function (e) {
+                    var href = this.getAttribute('href');
+                    if (href === '#') return;
+                    var target = document.querySelector(href);
+                    if (!target) return;
+                    e.preventDefault();
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                });
+            });
+
+            var revealables = document.querySelectorAll('.reveal');
+
+            function show(el) {
+                el.style.opacity = '1';
+                el.style.transform = 'none';
+            }
+
+            // Without IntersectionObserver the reveal class would leave every
+            // section permanently at opacity 0, so show them unconditionally.
+            if (!('IntersectionObserver' in window)) {
+                revealables.forEach(show);
+                return;
+            }
+
+            var revealed = 0;
+            var observer = new IntersectionObserver(function (entries) {
+                entries.forEach(function (entry) {
+                    if (!entry.isIntersecting) return;
+                    show(entry.target);
+                    revealed++;
+                    observer.unobserve(entry.target);
+                });
+            }, { threshold: 0.1, rootMargin: '0px 0px -80px 0px' });
+
+            revealables.forEach(function (el) { observer.observe(el); });
+
+            // Some renderers never fire observer callbacks (e.g. a page that is
+            // never composited), which would leave the entire page below the
+            // hero invisible. If nothing at all has been revealed by now,
+            // assume the observer is inert and show everything. Deliberately
+            // not tied to the load event, which may already have fired.
+            setTimeout(function () {
+                if (revealed === 0) revealables.forEach(show);
+            }, 1200);
+        })();
+    </script>
+</body>
+
+</html>

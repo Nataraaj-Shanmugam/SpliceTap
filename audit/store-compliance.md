@@ -1,4 +1,4 @@
-# Chrome Web Store & MV3 Compliance Audit — TurboMock
+# Chrome Web Store & MV3 Compliance Audit — SpliceTap
 _Reviewer lens: store review + MV3 platform correctness._
 
 _Scope: branch `V1`, working tree as of this audit (includes uncommitted changes to
@@ -38,7 +38,7 @@ Highest-impact first:
    `fs.existsSync` check — it never opens the files.
 2. **The packaging script cannot run on the development machine** (`zip` is not on PATH under
    Windows/Git Bash — **verified**), and when it does run it sweeps in `.claude/settings.local.json`,
-   `TODO.md`, `changes.txt`, `TurboMock.txt`, `CONTRIBUTING.md`, `demo.html`, `scripts/`,
+   `TODO.md`, `changes.txt`, `SpliceTap.txt`, `CONTRIBUTING.md`, `demo.html`, `scripts/`,
    `index.js`, and `audit/`.
 3. **Zero store-listing artifacts exist**: no privacy policy, no justification strings, no
    screenshots, no promo assets, no LICENSE, and `package.json` points at a placeholder GitHub org.
@@ -168,8 +168,8 @@ Highest-impact first:
 ### [High] C-5: The interceptor accepts state and log entries from any page script
 
 - **Where:** `content/injected.js:593-615` (accepts any message where
-  `event.data.source === 'turbomock-extension'`); `content/content.js:112-130` (accepts any
-  message where `event.data.source === 'turbomock-injected'` and relays it to the background).
+  `event.data.source === 'splicetap-extension'`); `content/content.js:112-130` (accepts any
+  message where `event.data.source === 'splicetap-injected'` and relays it to the background).
   Neither listener checks `event.source === window` or `event.origin`.
 - **What:** Any script on the page — including a cross-origin child iframe posting to its
   parent — can (a) inject an arbitrary rule set into the interceptor for that page, e.g. a
@@ -182,7 +182,7 @@ Highest-impact first:
   it is the standard MAIN-world trust boundary: a `world: "MAIN"` content script shares the
   page's global object and cannot hold secrets from it.
 - **Impact:** Rule-injection and log-poisoning on any page. Attack requires the victim to
-  have TurboMock installed, so blast radius is limited, but the redirect vector is genuinely
+  have SpliceTap installed, so blast radius is limited, but the redirect vector is genuinely
   dangerous.
 - **Recommended fix:** At minimum add `if (event.source !== window) return;` to both listeners
   and generate a per-page-load nonce in `content.js` that the MAIN world must echo. Full
@@ -199,7 +199,7 @@ Highest-impact first:
   grep for `onCommand` / `chrome.commands` returns **zero** matches in any extension source
   file (`service_worker/`, `popup/`, `options/`, `content/`, `devtools/`).
 - **What:** Both shortcuts are inert. `options/options.js:1009-1013` renders shortcut *labels*
-  from a `turboMockShortcuts` storage key, and `options/options.js:1437-1455` binds
+  from a `spliceTapShortcuts` storage key, and `options/options.js:1437-1455` binds
   Ctrl/Cmd+S and Escape on the options *document* — none of that is connected to the manifest
   `commands` API. `src/storage.js:25-28` stores a decorative `shortcuts` object with the same
   key strings, reinforcing the illusion.
@@ -235,7 +235,7 @@ Highest-impact first:
   its hydration. Related: `setTimeout` in a service worker is not durable — the worker can be
   torn down before the callback fires, which also affects the retry chain at `:399-401`
   (1s/2s/3s backoff).
-- **Impact:** Intermittent "TurboMock stopped mocking after I left the tab alone" — one of
+- **Impact:** Intermittent "SpliceTap stopped mocking after I left the tab alone" — one of
   the hardest classes of bug for a user to report, and a plausible source of one-star reviews.
 - **Recommended fix:** `await this.ready` at the top of the `onUpdated` handler (and read
   the state *after* the await, not before). Replace the `setTimeout` retry chain with
@@ -269,7 +269,7 @@ Highest-impact first:
 ### [Medium] C-9: `activeTab` is declared but never used, and is redundant given `<all_urls>`
 
 - **Where:** `manifest.json:8`. A repo-wide grep for `activeTab` finds it only in
-  `manifest.json:8`, `README.md:181`, and the spec dump `TurboMock.txt:498` — no code path
+  `manifest.json:8`, `README.md:181`, and the spec dump `SpliceTap.txt:498` — no code path
   depends on it.
 - **What:** `README.md:181` claims it is used to "read the active tab's host for the
   context-menu prefill", but that code path (`popup/popup.js:415-425`,
@@ -358,14 +358,14 @@ Highest-impact first:
 ### [Medium] C-12: `npm run package` cannot run here, and ships internal files when it does
 
 - **Where:** `package.json:9`:
-  `zip -r turbomock-extension.zip . -x '*.git*' 'node_modules/*' '*.DS_Store' 'package*.json' 'README.md' 'tests/*'`
+  `zip -r splicetap-extension.zip . -x '*.git*' 'node_modules/*' '*.DS_Store' 'package*.json' 'README.md' 'tests/*'`
 - **What:**
   1. **`zip` is not available** on the development machine (`which zip` → not found, Windows
      + Git Bash — **verified by execution**). `npm run build` (`package.json:7`) therefore
      fails at the packaging step even when tests pass.
   2. **Wrongly included** (none of these are in the exclude list): `.claude/settings.local.json`
      (local agent configuration — should never leave the machine), `TODO.md` (29 KB internal
-     plan), `changes.txt` (22 KB internal issue list), `TurboMock.txt` (25 KB PRD),
+     plan), `changes.txt` (22 KB internal issue list), `SpliceTap.txt` (25 KB PRD),
      `CONTRIBUTING.md`, `demo.html` (contains an inline `<script>` at `demo.html:188` that the
      extension-pages CSP will block anyway), `scripts/validate-manifest.js`, `index.js` and
      `src/index.js` (CommonJS test glue — `index.js:1` `require`s `./popup/popup.js`, which
@@ -384,7 +384,7 @@ Highest-impact first:
   `content/`, `service_worker/`, `popup/`, `options/`, `devtools/` into a `dist/` directory,
   then archive `dist/`. Use a cross-platform archiver (Node's `archiver`, or
   `Compress-Archive` on Windows) so `npm run build` works everywhere. Add
-  `.claude/`, `audit/`, `TODO.md`, `changes.txt`, `TurboMock.txt` to `.gitignore` or at least
+  `.claude/`, `audit/`, `TODO.md`, `changes.txt`, `SpliceTap.txt` to `.gitignore` or at least
   to the exclude list.
 - **Confidence:** High (zip absence and file set both verified).
 
@@ -502,7 +502,7 @@ Highest-impact first:
   are expected to degrade gracefully.
 - **Impact:** Confusing silent degradation; likely support burden and negative reviews.
 - **Recommended fix:** Check `chrome.permissions.contains({ origins: [tabOrigin] })` in the
-  popup and show an explicit "TurboMock doesn't have access to this site — grant access?"
+  popup and show an explicit "SpliceTap doesn't have access to this site — grant access?"
   state with a `chrome.permissions.request()` button. This is also the natural on-ramp for
   the C-3 optional-permissions migration.
 - **Confidence:** High.
@@ -568,8 +568,8 @@ Highest-impact first:
 
 ### [Nit] C-21: Placeholder project metadata and missing LICENSE
 
-- **Where:** `package.json:26-35` — `author: "TurboMock Extension Team"`, `homepage` and
-  `repository` both pointing at `https://github.com/turbomock/browser-extension`;
+- **Where:** `package.json:26-35` — `author: "SpliceTap Extension Team"`, `homepage` and
+  `repository` both pointing at `https://github.com/splicetap/browser-extension`;
   `package.json:27` declares `"license": "MIT"` but there is no `LICENSE` file in the repo
   (verified — `git ls-files` shows none).
 - **What:** The store listing requires a real publisher identity, a working homepage/support
@@ -611,7 +611,7 @@ Highest-impact first:
 - [ ] Produce listing assets: at least one 1280×800 (or 640×400) screenshot, a 128×128 store
       icon, and a detailed description. None exist in the repo.
 - [ ] Make `npm run package` runnable cross-platform and switch it to an allowlist build so
-      `.claude/settings.local.json`, `TODO.md`, `changes.txt`, `TurboMock.txt`, `demo.html`,
+      `.claude/settings.local.json`, `TODO.md`, `changes.txt`, `SpliceTap.txt`, `demo.html`,
       `scripts/`, `index.js`, and `audit/` stay out of the zip (C-12).
 - [ ] Reconcile `manifest.json` and `package.json` versions; establish a monotonic bump
       process (C-13).

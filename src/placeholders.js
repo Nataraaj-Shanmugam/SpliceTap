@@ -1,5 +1,5 @@
 /**
- * TurboMock Placeholders
+ * SpliceTap Placeholders
  * Canonical dynamic-response placeholder engine (UMD).
  * Loads as: (a) a plain MAIN-world script, (b) a CommonJS module under Jest,
  * (c) via ESM side-effect import. See TODO.md §1.3.
@@ -114,5 +114,5 @@
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
     }
-    global.TurboMockPlaceholders = api;
+    global.SpliceTapPlaceholders = api;
 })(typeof window !== 'undefined' ? window : globalThis);

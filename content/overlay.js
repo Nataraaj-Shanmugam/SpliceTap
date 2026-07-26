@@ -1,5 +1,5 @@
 /**
- * TurboMock in-page rule editor overlay.
+ * SpliceTap in-page rule editor overlay.
  *
  * Runs in the ISOLATED content-script world (needs chrome.runtime to talk to
  * the background) and renders the full rule editor inside a Shadow DOM so the
@@ -15,10 +15,10 @@
 (function () {
     'use strict';
 
-    if (window.__TURBOMOCK_OVERLAY_INITIALIZED__) return;
-    window.__TURBOMOCK_OVERLAY_INITIALIZED__ = true;
+    if (window.__SPLICETAP_OVERLAY_INITIALIZED__) return;
+    window.__SPLICETAP_OVERLAY_INITIALIZED__ = true;
 
-    const HOST_ID = 'turbomock-rule-overlay-host';
+    const HOST_ID = 'splicetap-rule-overlay-host';
 
     let hostEl = null;
     let shadow = null;
@@ -432,7 +432,7 @@
             </div>
 
             <div class="tm-hintbar" id="tmHintBar" hidden>
-              <span class="tm-hintbar-text">TurboMock opens this editor over your current page. Press Esc or click outside to close it.</span>
+              <span class="tm-hintbar-text">SpliceTap opens this editor over your current page. Press Esc or click outside to close it.</span>
               <button type="button" class="tm-hintbar-x" id="tmHintClose" aria-label="Dismiss tip">&times;</button>
             </div>
 
@@ -973,7 +973,7 @@
                 open(request);
                 sendResponse({ success: true });
             } catch (e) {
-                console.error('TurboMock: failed to open rule overlay', e);
+                console.error('SpliceTap: failed to open rule overlay', e);
                 sendResponse({ success: false, error: e.message });
             }
             return true;

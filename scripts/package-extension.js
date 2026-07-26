@@ -5,7 +5,7 @@
  * out to the system `zip` binary, which is not installed on the stated dev
  * platform (win32 + Git Bash) — `npm run build` failed at this step even when
  * tests passed. It also used a denylist of `-x` excludes that missed several
- * internal-only files (`.claude/`, `TODO.md`, `changes.txt`, `TurboMock.txt`,
+ * internal-only files (`.claude/`, `TODO.md`, `changes.txt`, `SpliceTap.txt`,
  * `CONTRIBUTING.md`, `demo.html`, `scripts/`, `index.js`, `audit/`), so a
  * successful run would still have shipped them.
  *
@@ -19,7 +19,7 @@
  * `import` graph), every content script, and every HTML page manifest.json
  * points at (popup, options, devtools panel) plus each page's own
  * <script src> / <link href> assets. Anything manifest.json does not
- * actually need — audit/, TODO.md, changes.txt, TurboMock.txt,
+ * actually need — audit/, TODO.md, changes.txt, SpliceTap.txt,
  * CONTRIBUTING.md, demo.html, tests/, scripts/, node_modules/, package*.json,
  * README.md, .claude/, .git — is excluded by construction, not by an
  * ever-growing denylist that has to be kept in sync by hand.
@@ -32,7 +32,7 @@ const path = require('path');
 const zlib = require('zlib');
 
 const ROOT = path.join(__dirname, '..');
-const OUTPUT_ZIP = path.join(ROOT, 'turbomock-extension.zip');
+const OUTPUT_DIR = path.join(ROOT, 'dist');
 
 // ---------------------------------------------------------------------------
 // CRC32 (PNG/ZIP share the same algorithm — PNG spec Annex D "Sample CRC code")
@@ -157,7 +157,7 @@ function addFile(set, relPath) {
 /**
  * Resolve a reference path against the directory of the file that referenced
  * it. A leading "/" is a package-root-relative path (how Chrome resolves
- * extension URLs like devtools.js's `chrome.devtools.panels.create('TurboMock',
+ * extension URLs like devtools.js's `chrome.devtools.panels.create('SpliceTap',
  * '/assets/icons/icon-16.png', '/devtools/panel.html', ...)`), so it must
  * resolve against ROOT, not get joined onto fromRelDir — otherwise
  * `path.join('devtools', '/devtools/panel.html')` silently produces the
@@ -291,9 +291,14 @@ function main() {
     for (const e of entries) console.log('  ' + e.name);
     console.log(`\n${entries.length} files, ${entries.reduce((n, e) => n + e.data.length, 0)} bytes uncompressed.`);
 
+    // Name the artifact after the manifest version so an upload can never be
+    // confused with a previous build sitting in the same folder.
+    const outputZip = path.join(OUTPUT_DIR, `splicetap-v${manifest.version}.zip`);
+    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+
     const zipBuffer = buildZip(entries);
-    fs.writeFileSync(OUTPUT_ZIP, zipBuffer);
-    console.log(`\nWrote ${OUTPUT_ZIP} (${zipBuffer.length} bytes).`);
+    fs.writeFileSync(outputZip, zipBuffer);
+    console.log(`\nWrote ${outputZip} (${zipBuffer.length} bytes).`);
 }
 
 main();

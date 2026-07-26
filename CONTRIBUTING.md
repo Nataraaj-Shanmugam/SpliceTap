@@ -1,6 +1,6 @@
-# Contributing to TurboMock
+# Contributing to SpliceTap
 
-Thank you for your interest in contributing to TurboMock! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to SpliceTap! This document provides guidelines and information for contributors.
 
 ## 🚀 Getting Started
 
@@ -12,8 +12,8 @@ Thank you for your interest in contributing to TurboMock! This document provides
 
 ### Development Setup
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/turbomock-extension.git`
-3. Navigate to the project: `cd turbomock-extension`
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/splicetap-extension.git`
+3. Navigate to the project: `cd splicetap-extension`
 4. Load the extension in Chrome:
    - Open `chrome://extensions/`
    - Enable "Developer mode"
@@ -187,7 +187,7 @@ Any other context, mockups, or examples.
 - Report security issues privately
 
 ### Reporting Security Issues
-Email security@turbomock.com with:
+Email security@splicetap.com with:
 - Description of the vulnerability
 - Steps to reproduce
 - Potential impact
@@ -195,7 +195,7 @@ Email security@turbomock.com with:
 
 ## 📄 License
 
-By contributing to TurboMock, you agree that your contributions will be licensed under the MIT License.
+By contributing to SpliceTap, you agree that your contributions will be licensed under the MIT License.
 
 ## 🤝 Code of Conduct
 
@@ -212,7 +212,7 @@ By contributing to TurboMock, you agree that your contributions will be licensed
 - Publishing private information
 
 ### Enforcement
-Report violations to conduct@turbomock.com. All reports will be reviewed and investigated.
+Report violations to conduct@splicetap.com. All reports will be reviewed and investigated.
 
 ## 🙋 Getting Help
 
@@ -224,7 +224,7 @@ Report violations to conduct@turbomock.com. All reports will be reviewed and inv
 ### Community
 - GitHub Discussions for questions and ideas
 - GitHub Issues for bugs and feature requests
-- Email support@turbomock.com for general inquiries
+- Email support@splicetap.com for general inquiries
 
 ## 🎉 Recognition
 
@@ -233,4 +233,4 @@ Contributors are recognized in:
 - Release notes for significant contributions
 - Extension credits in the options page
 
-Thank you for contributing to TurboMock! 🎭
+Thank you for contributing to SpliceTap! 🎭

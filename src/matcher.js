@@ -1,5 +1,5 @@
 /**
- * TurboMock Matcher
+ * SpliceTap Matcher
  * Shared URL / header / GraphQL / rule matching logic (UMD).
  * Loads as: (a) a plain MAIN-world script, (b) a CommonJS module under Jest,
  * (c) via ESM side-effect import. See TODO.md §1.3.
@@ -51,7 +51,7 @@
                     // Q-10: '/' or '//' must not become an empty regex that matches everything.
                     compiled = { kind: 'never' };
                 } else if (NESTED_QUANTIFIER_RE.test(regexBody)) {
-                    console.error('TurboMock: refusing potentially catastrophic regex pattern:', pattern);
+                    console.error('SpliceTap: refusing potentially catastrophic regex pattern:', pattern);
                     compiled = { kind: 'never' };
                 } else {
                     compiled = { kind: 'regex', regex: new RegExp(regexBody, 'i') };
@@ -179,5 +179,5 @@
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
     }
-    global.TurboMockMatcher = api;
+    global.SpliceTapMatcher = api;
 })(typeof window !== 'undefined' ? window : globalThis);

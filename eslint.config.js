@@ -9,7 +9,7 @@
 
 module.exports = [
     {
-        ignores: ['node_modules/**', 'audit/**', 'tests/*.html', 'turbomock-extension.zip']
+        ignores: ['node_modules/**', 'audit/**', 'tests/*.html', 'dist/**', 'docs/**']
     },
     {
         files: ['**/*.js'],

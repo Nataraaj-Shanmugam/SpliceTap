@@ -1,4 +1,4 @@
-# Accessibility & UX Audit — TurboMock
+# Accessibility & UX Audit — SpliceTap
 
 _Reviewer lens: WCAG 2.1 AA + product usability. Method: static review of 12 files
 (`popup/popup.{html,css,js}`, `options/options.{html,css,js}`, `devtools/panel.{html,js}`,
@@ -19,7 +19,7 @@ Highest-impact first:
 1. **The extension's master on/off control cannot be operated by keyboard** (A-1). It is a `div`
    with `role="button" tabindex="0"` and a `click`-only listener; `Enter`/`Space` do nothing on a
    non-native button. Combined with U-6 (the declared `Ctrl+Shift+M` command has no handler at all),
-   a keyboard-only user has **no way to disable TurboMock**.
+   a keyboard-only user has **no way to disable SpliceTap**.
 2. **Most settings controls have no accessible name** (A-2). The three toggle switches on the General
    tab, plus *Default Headers* and *Request Timeout*, use `<label>` elements with no `for` attribute
    and no wrapped control. A screen reader announces "checkbox, not checked" with no indication of
@@ -49,8 +49,8 @@ Counts: **20 accessibility findings** (1 Critical, 5 High, 7 Medium, 7 Low/Nit) 
 ## Accessibility findings
 
 ### [Critical] A-1: Global status toggle is focusable but not keyboard-operable
-- **Where:** `D:\Professional\AI_Generated\TurboMock\popup\popup.html:22`;
-  `D:\Professional\AI_Generated\TurboMock\popup\popup.js:103`
+- **Where:** `D:\Professional\AI_Generated\SpliceTap\popup\popup.html:22`;
+  `D:\Professional\AI_Generated\SpliceTap\popup\popup.js:103`
 - **WCAG:** 2.1.1 Keyboard — Level A; 4.1.2 Name, Role, Value — Level A
 - **What:** The control is `<div class="status-badge" id="statusToggle" role="button" tabindex="0">`
   and the only listener attached is
@@ -67,7 +67,7 @@ Counts: **20 accessibility findings** (1 Critical, 5 High, 7 Medium, 7 Low/Nit) 
   *not* a fallback: see U-6.
 - **Recommended fix:** make it a real
   `<button type="button" id="statusToggle" aria-pressed="false">` with a visually persistent label
-  ("TurboMock enabled"), update `aria-pressed` in `updateStatus()`, and keep the status text as
+  ("SpliceTap enabled"), update `aria-pressed` in `updateStatus()`, and keep the status text as
   visible content. A native button gets Enter/Space for free.
 - **Confidence:** High
 
@@ -152,7 +152,7 @@ Counts: **20 accessibility findings** (1 Critical, 5 High, 7 Medium, 7 Low/Nit) 
     `document.activeElement` collapses to `<body>` — a keyboard user must Tab from the top of the
     host page again;
   - the host page is not `inert` and not `aria-hidden`;
-  - `aria-label="TurboMock rule editor"` is static while the visible title toggles between "New
+  - `aria-label="SpliceTap rule editor"` is static while the visible title toggles between "New
     Rule" and "Edit Rule" (`overlay.js:391`) — prefer `aria-labelledby="tmTitle"`;
   - `#tmTitle` is a `<div>`, so the dialog contributes no heading to the page outline.
 - **Who it affects:** keyboard-only and screen-reader users, on every site the overlay is opened over.
@@ -597,7 +597,7 @@ components and state indicators (1.4.11).
   overlay checks the *collected* rule).
 - **Recommendation:** pick one editor. The cleanest path is to keep the overlay (it is the better
   flow — no context switch) and have the options page host the *same* component, or at minimum reach
-  feature parity and tell the user which one they're getting ("Opening in a new tab — TurboMock can't
+  feature parity and tell the user which one they're getting ("Opening in a new tab — SpliceTap can't
   draw over this page").
 
 ### [High] U-4: Closing the rule editor discards unsaved work with no confirmation

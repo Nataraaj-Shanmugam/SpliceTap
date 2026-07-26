@@ -1,5 +1,5 @@
 /**
- * TurboMock Utility Functions
+ * SpliceTap Utility Functions
  * Shared utilities for request matching, validation, and data handling
  * Enhanced with better validation and more dynamic placeholders
  */
@@ -11,7 +11,7 @@
 import './matcher.js';
 import './placeholders.js';
 
-export class TurboMockUtils {
+export class SpliceTapUtils {
     static generateId(prefix = 'rule') {
         return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     }
@@ -59,13 +59,13 @@ export class TurboMockUtils {
         }
     }
 
-    // Delegates to TurboMockMatcher (src/matcher.js) — see TODO.md §1.3.
+    // Delegates to SpliceTapMatcher (src/matcher.js) — see TODO.md §1.3.
     // Kept here as a thin wrapper for backward compatibility with existing
-    // callers of TurboMockUtils.matchUrl. Uses globalThis (not window) so this
+    // callers of SpliceTapUtils.matchUrl. Uses globalThis (not window) so this
     // does not throw a ReferenceError when called from the MV3 service worker,
     // which has no `window` global (CQ-Q6).
     static matchUrl(url, pattern) {
-        return globalThis.TurboMockMatcher.matchUrl(url, pattern);
+        return globalThis.SpliceTapMatcher.matchUrl(url, pattern);
     }
 
     static validateJSON(jsonString) {
@@ -135,13 +135,13 @@ export class TurboMockUtils {
     static deepClone(obj) {
         if (obj === null || typeof obj !== 'object') return obj;
         if (obj instanceof Date) return new Date(obj.getTime());
-        if (obj instanceof Array) return obj.map(item => TurboMockUtils.deepClone(item));
+        if (obj instanceof Array) return obj.map(item => SpliceTapUtils.deepClone(item));
         
         if (typeof obj === 'object') {
             const cloned = {};
             for (const key in obj) {
                 if (obj.hasOwnProperty(key)) {
-                    cloned[key] = TurboMockUtils.deepClone(obj[key]);
+                    cloned[key] = SpliceTapUtils.deepClone(obj[key]);
                 }
             }
             return cloned;
@@ -226,7 +226,7 @@ export class TurboMockUtils {
         return typeof headers === 'object' ? headers : {};
     }
 
-    static exportRules(rules, filename = 'turbomock-rules.json') {
+    static exportRules(rules, filename = 'splicetap-rules.json') {
         try {
             const dataStr = JSON.stringify({
                 version: '1.0.0',
@@ -367,14 +367,14 @@ export class TurboMockUtils {
 
     /**
      * Process dynamic response with enhanced placeholders.
-     * Delegates to TurboMockPlaceholders (src/placeholders.js) — see TODO.md §1.3.
+     * Delegates to SpliceTapPlaceholders (src/placeholders.js) — see TODO.md §1.3.
      * Kept here as a thin wrapper for backward compatibility with existing
-     * callers of TurboMockUtils.processDynamicResponse. Uses globalThis (not
+     * callers of SpliceTapUtils.processDynamicResponse. Uses globalThis (not
      * window) so this does not throw a ReferenceError in the MV3 service
      * worker, which has no `window` global (CQ-Q6).
      */
     static processDynamicResponse(body, requestDetails = {}) {
-        return globalThis.TurboMockPlaceholders.processDynamicResponse(body, requestDetails);
+        return globalThis.SpliceTapPlaceholders.processDynamicResponse(body, requestDetails);
     }
 
     /**
@@ -435,5 +435,5 @@ export class TurboMockUtils {
 
 // Also expose as global for non-module contexts
 if (typeof window !== 'undefined') {
-    window.TurboMockUtils = TurboMockUtils;
+    window.SpliceTapUtils = SpliceTapUtils;
 }

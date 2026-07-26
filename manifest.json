@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "TurboMock - API Mocker",
-  "version": "1.1.0",
+  "name": "SpliceTap - API Mocker",
+  "version": "0.0.1",
   "description": "Mock any API in 30 seconds, directly in your browser. Perfect for frontend development and testing.",
   "permissions": [
     "storage",
@@ -38,7 +38,7 @@
   ],
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "TurboMock - API Mocker",
+    "default_title": "SpliceTap - API Mocker",
     "default_icon": {
       "16": "assets/icons/icon-16.png",
       "32": "assets/icons/icon-32.png",
@@ -63,7 +63,7 @@
         "default": "Alt+Shift+M",
         "mac": "Alt+Shift+M"
       },
-      "description": "Toggle TurboMock on/off"
+      "description": "Toggle SpliceTap on/off"
     },
     "new-rule": {
       "suggested_key": {

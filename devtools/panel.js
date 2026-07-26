@@ -1,5 +1,5 @@
 /**
- * TurboMock DevTools Panel
+ * SpliceTap DevTools Panel
  *
  * Plain script (no import/export) — MV3 devtools panel pages load scripts
  * via a plain <script src> tag, not modules, and the default extension-page
@@ -154,14 +154,14 @@
             try {
                 chrome.runtime.sendMessage(message, (response) => {
                     if (chrome.runtime.lastError) {
-                        console.error('TurboMock panel: sendMessage failed for', message.type, chrome.runtime.lastError.message);
+                        console.error('SpliceTap panel: sendMessage failed for', message.type, chrome.runtime.lastError.message);
                         resolve(null);
                         return;
                     }
                     resolve(response);
                 });
             } catch (error) {
-                console.error('TurboMock panel: sendMessage threw for', message.type, error);
+                console.error('SpliceTap panel: sendMessage threw for', message.type, error);
                 resolve(null);
             }
         });
@@ -205,7 +205,7 @@
                 announceNewEntries(newlyLogged);
             }
         } else if (response === null) {
-            showError('Could not reach the TurboMock background service worker.');
+            showError('Could not reach the SpliceTap background service worker.');
         }
         renderEntries();
         updateBufferStats();
@@ -611,13 +611,13 @@
     // Visibility API (below) does not fire when the user merely switches to
     // a different DevTools panel (Elements/Console/Network/...) without
     // touching the DevTools window itself.
-    window.__turboMockPanelShown = function () {
+    window.__spliceTapPanelShown = function () {
         panelHidden = false;
         updatePollingState();
         if (!userPaused) refresh();
     };
 
-    window.__turboMockPanelHidden = function () {
+    window.__spliceTapPanelHidden = function () {
         panelHidden = true;
         updatePollingState();
     };
@@ -633,7 +633,7 @@
             refresh();
             updatePollingState();
         } catch (error) {
-            console.error('TurboMock panel: init failed', error);
+            console.error('SpliceTap panel: init failed', error);
             showError('Failed to initialize panel: ' + error.message);
         }
     }

@@ -1,5 +1,5 @@
 /**
- * TurboMock Content Script Relay
+ * SpliceTap Content Script Relay
  *
  * This script runs in the isolated content script context.
  * The MAIN-world interceptor (content/injected.js) is now loaded declaratively
@@ -27,8 +27,8 @@
 (function() {
     'use strict';
 
-    const SYNC_STATE_EVENT = '__turbomock_sync_state__';
-    const LOG_INTERCEPTION_EVENT = '__turbomock_log__';
+    const SYNC_STATE_EVENT = '__splicetap_sync_state__';
+    const LOG_INTERCEPTION_EVENT = '__splicetap_log__';
 
     // Rule types the interceptor (content/injected.js) actually consults.
     // Must mirror src/matcher.js's INTERCEPTOR_TYPES. 'headers'/'queryparams'
@@ -78,7 +78,7 @@
         stateRequestAttempts++;
         if (stateRequestAttempts > MAX_STATE_REQUEST_ATTEMPTS) {
             console.error(
-                `TurboMock: failed to reach the background script after ${MAX_STATE_REQUEST_ATTEMPTS} attempts; ` +
+                `SpliceTap: failed to reach the background script after ${MAX_STATE_REQUEST_ATTEMPTS} attempts; ` +
                 'giving up for this page load. Mocking stays inactive here unless a later syncState push arrives.'
             );
             return;

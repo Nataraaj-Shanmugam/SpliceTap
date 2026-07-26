@@ -1,7 +1,7 @@
-# Product & Competitive Audit — TurboMock
+# Product & Competitive Audit — SpliceTap
 _Reviewer lens: developer-tools product strategy. Method: code verification + competitive analysis._
 
-_Scope: branch `V1`, working tree as of this review. Every TurboMock claim below is cited to
+_Scope: branch `V1`, working tree as of this review. Every SpliceTap claim below is cited to
 `file:line` in the source. `README.md`, `TODO.md` and `changes.txt` were treated as claims and
 verified independently — several README claims did not survive verification (see G-13)._
 
@@ -13,7 +13,7 @@ rows where I am not are marked **[verify]**. No pricing is asserted anywhere in 
 
 ## Positioning today
 
-TurboMock is a solid, no-build, zero-infrastructure **request interceptor for a single developer
+SpliceTap is a solid, no-build, zero-infrastructure **request interceptor for a single developer
 on a single machine**. It genuinely does six rule types across two interception mechanisms —
 `mock`/`block`/`delay`/`redirect` via a MAIN-world fetch/XHR monkey-patch
 (`content/injected.js:119`, `content/injected.js:253`) and `headers`/`queryparams` via
@@ -36,12 +36,12 @@ Honest one-line positioning: **a capable interception engine, a demo-grade produ
 
 ## Competitive matrix vs Requestly
 
-Severity = severity of the gap for TurboMock's stated goal of Requestly parity.
+Severity = severity of the gap for SpliceTap's stated goal of Requestly parity.
 
-| Capability | Requestly | TurboMock | Evidence (file:line) | Gap severity |
+| Capability | Requestly | SpliceTap | Evidence (file:line) | Gap severity |
 |---|---|---|---|---|
 | Mock/modify response body | Yes | Yes (static) | `content/injected.js:226-247` | — |
-| Modify response by merge-patch into the **real** response | Partial (full-body replace or JS function) **[verify]** | **Yes, declaratively** | `content/injected.js:194-224`, `src/patch.js:17` | **TurboMock ahead** |
+| Modify response by merge-patch into the **real** response | Partial (full-body replace or JS function) **[verify]** | **Yes, declaratively** | `content/injected.js:194-224`, `src/patch.js:17` | **SpliceTap ahead** |
 | GraphQL operation-level targeting | Yes, in Modify Response **[verify]** | Yes, as a first-class match condition | `src/matcher.js:73-85` | **Parity/ahead** |
 | Block / cancel request | Yes | Yes | `content/injected.js:170-174`, `:498-513` | — |
 | Delay request | Yes | Yes | `content/injected.js:176-181`, `:515-527` | — |
@@ -68,7 +68,7 @@ Severity = severity of the gap for TurboMock's stated goal of Requestly parity.
 | **Environment variables / user-defined vars** | **[verify]** | **Absent** — only 14 fixed placeholders | `src/placeholders.js:15-85` | Medium |
 | **Per-rule source filters** (page URL, resource type, tab scope) | Yes | **Absent** — every rule is global to every tab | `src/matcher.js:92-114` (only url/method/headers/graphql) | **High** |
 | Rule templates gallery | Yes | 6 templates, options-modal only; a second unused set is dead code | `options/options.js:658-702`; dead: `src/utils.js:277-351` | Medium |
-| Chaos / random failure injection | No | **Yes — but no UI to turn it on** | `content/injected.js:127-132`; grepped all HTML → no control | **TurboMock ahead, unshipped** |
+| Chaos / random failure injection | No | **Yes — but no UI to turn it on** | `content/injected.js:127-132`; grepped all HTML → no control | **SpliceTap ahead, unshipped** |
 | Desktop app / system-wide proxy | Yes | No | — | Low (deliberate non-goal) |
 | Firefox / Safari | Yes **[verify]** | No | `manifest.json` `minimum_chrome_version: 120` | Low |
 
@@ -78,7 +78,7 @@ Severity = severity of the gap for TurboMock's stated goal of Requestly parity.
 
 **Do not try to out-feature Requestly.** Requestly has years of surface area, a desktop proxy, a
 hosted backend, and a team plan. A solo-maintained extension that chases that list ships a worse
-version of every item. TurboMock has two assets that are *architecturally* differentiated, and it
+version of every item. SpliceTap has two assets that are *architecturally* differentiated, and it
 should spend the next two quarters compounding on them.
 
 ### The wedge: surgical mutation of a *live* backend
@@ -87,7 +87,7 @@ Every other tool in this space assumes you are **replacing** the API. MSW replac
 code. Mockoon and Postman run a mock server. Requestly's Modify Response, in its declarative form,
 replaces the body. Charles/Fiddler map to a local file.
 
-TurboMock's `patch` mode does something categorically different: it lets the **real request go to
+SpliceTap's `patch` mode does something categorically different: it lets the **real request go to
 the real backend**, then merges a small declarative patch into the response
 (`content/injected.js:194-224`). Your auth still works. Your pagination still works. Your 40 other
 endpoints still work. You change `subscription.status` to `"expired"` and the app flips into the
@@ -119,7 +119,7 @@ and it turns a low-level rule editor into something a PM or designer could also 
 ### The second asset: GraphQL operation targeting
 
 On a single-endpoint GraphQL API, URL matching is worthless — every request is `POST /graphql`.
-TurboMock already matches on `operationName` (`src/matcher.js:73-85`), which makes it one of the
+SpliceTap already matches on `operationName` (`src/matcher.js:73-85`), which makes it one of the
 few browser tools that can mock *one query* on a GraphQL app. Combined with patch mode
 ("return the real `viewer`, but set `viewer.permissions.canEdit` to false") this is a strong,
 defensible, easy-to-demo story for the large and growing population of GraphQL frontends.
@@ -146,7 +146,7 @@ Traced from code, step by step.
 2. **The user lands on the wrong page.** `options_ui.open_in_tab` is true (`manifest.json`), and
    the options page opens on the **General** tab — Theme, Notifications, Auto Backup, Debug Mode
    (`options/options.html:21-25`, `:57-143`). There is no welcome text, no explanation of what
-   TurboMock does, and no call to action. The first thing a new user sees is a theme picker.
+   SpliceTap does, and no call to action. The first thing a new user sees is a theme picker.
 3. **The obvious next click is a dead end.** Clicking "Rules" in the sidebar shows two cards:
    *Import Rules* and *Export Rules* (`options/options.html:147-185`). There is no "New Rule"
    button. Verified: `openRuleEditor()` has exactly three call sites, all triggered by a URL
@@ -169,8 +169,8 @@ Traced from code, step by step.
 7. **Save, then guess whether it worked.** The rule broadcasts to open tabs
    (`service_worker/background.js:363-380`) but requests fired before the first sync pass through
    unmocked, so the page must be reloaded. Verification means either looking for the
-   `x-turbomock: true` response header (`content/injected.js:237-238`) or opening the DevTools
-   TurboMock panel, which polls every 2 seconds (`devtools/panel.js:18`).
+   `x-splicetap: true` response header (`content/injected.js:237-238`) or opening the DevTools
+   SpliceTap panel, which polls every 2 seconds (`devtools/panel.js:18`).
 
 **Realistic time-to-first-value:** ~90 seconds *if the user already knows the exact endpoint URL
 and finds the popup.* Unbounded if they don't — there is no path in the product from "a request
@@ -337,7 +337,7 @@ happened" to "a rule exists".
   shape (`chaosMode: <boolean>`, `chaosRate`) than the code reads
   (`settings.chaosMode.enabled`, `.failureRate`).
 - **User impact / who cares:** Resilience testing is a real, differentiated use case ("does my app
-  survive 10% failures?") that TurboMock has already paid the engineering cost for and ships to
+  survive 10% failures?") that SpliceTap has already paid the engineering cost for and ships to
   nobody. Free feature, zero distribution.
 - **Evidence:** `content/injected.js:127-132`, `:461-476`; `src/storage.js:29-32`;
   grep of all `*.html` for "chaos" → only `tests/simulation.html`.
@@ -457,7 +457,7 @@ happened" to "a rule exists".
   L for anything hosted.
 - **Recommendation:** Do the cheap 80%: `chrome.storage.sync` for cross-machine sync, and make
   import **idempotent** by preserving rule ids and offering update-vs-duplicate. Then treat a
-  committed `turbomock.json` in the repo as the team-sharing story. Do **not** build a backend.
+  committed `splicetap.json` in the repo as the team-sharing story. Do **not** build a backend.
 
 ### [Low] G-15: Matching cannot express common real-world conditions
 
@@ -560,7 +560,7 @@ than a patch. None of this is differentiation — it is the price of being allow
 ### Later — distribution and depth
 
 12. **G-14 · `chrome.storage.sync` + idempotent import.** Cross-machine sync and a committed
-    `turbomock.json` as the team story. _(S–M, no backend.)_
+    `splicetap.json` as the team story. _(S–M, no backend.)_
 13. **HAR import → generate rules.** Drop a HAR from a bug report, get a Scenario that reproduces
     it. _(L — natural extension of capture, and a strong QA-handoff story.)_
 14. **G-11 · Real backups + restore UI.** The storage layer already exists; it needs invocation and
@@ -572,13 +572,13 @@ than a patch. None of this is differentiation — it is the price of being allow
 
 - **A hosted mock server / cloud backend / hosted file server.** This converts a zero-infrastructure
   local tool into a SaaS with accounts, billing, abuse handling, and a privacy review, and it puts
-  TurboMock into direct competition with Mockoon, Postman and Requestly on their strongest ground.
+  SpliceTap into direct competition with Mockoon, Postman and Requestly on their strongest ground.
   The entire reason to use a browser extension is that there is nothing to run. Ship a JSON file
   and `storage.sync` instead.
 - **Session recording with video/console replay.** Requestly's SessionBook is a bug-reporting
   product wearing an interceptor's clothes. It is enormous scope, it records everything the user
   sees (a serious privacy and Web Store surface), and it serves QA-to-dev handoff rather than the
-  dev inner loop TurboMock is good at. HAR import (Later #13) captures most of the value at a
+  dev inner loop SpliceTap is good at. HAR import (Later #13) captures most of the value at a
   fraction of the cost and risk.
 - **A desktop app or system-wide proxy.** That is Charles, Proxyman and Requestly Desktop. It also
   contradicts the positioning: "no proxy, no certificates, no setup" is the reason someone picks

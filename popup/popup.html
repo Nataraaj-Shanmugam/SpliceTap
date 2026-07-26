@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TurboMock</title>
+  <title>SpliceTap</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 
@@ -32,14 +32,14 @@
           </svg>
         </div>
         <div class="title-group">
-          <h1>TurboMock</h1>
+          <h1>SpliceTap</h1>
           <!-- Populated by popup.js if present; static fallback keeps the row height stable. -->
           <div class="host-label" id="hostLabel">this tab</div>
         </div>
       </div>
 
       <div class="top-actions">
-        <button type="button" class="status-badge" id="statusToggle" aria-pressed="true" aria-label="Toggle TurboMock">
+        <button type="button" class="status-badge" id="statusToggle" aria-pressed="true" aria-label="Toggle SpliceTap">
           <span class="status-dot" id="statusDot" aria-hidden="true"></span>
           <span id="statusText">Active</span>
         </button>
@@ -48,7 +48,7 @@
 
     <!-- Tab strip: Rules / Settings. Settings moved here from the options
          page so everyday toggles no longer require opening a new tab. -->
-    <div class="tabs" role="tablist" aria-label="TurboMock sections">
+    <div class="tabs" role="tablist" aria-label="SpliceTap sections">
       <button type="button" class="tab" id="tabRules" role="tab" aria-selected="true" aria-controls="paneRules">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">
           <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
@@ -94,7 +94,7 @@
           </svg>
         </div>
         <h2>No rules yet</h2>
-        <p>Point a URL pattern at a canned response and TurboMock answers it before the network does.</p>
+        <p>Point a URL pattern at a canned response and SpliceTap answers it before the network does.</p>
         <div class="empty-hint">Alt + Shift + M toggles mocking</div>
       </div>
       </main>
@@ -159,7 +159,7 @@
         <div class="set-row">
           <label class="set-info" for="debugMode">
             <span class="set-title">Debug mode</span>
-            <span class="set-desc">Verbose TurboMock logging in the page console</span>
+            <span class="set-desc">Verbose SpliceTap logging in the page console</span>
           </label>
           <label class="switch">
             <input type="checkbox" id="debugMode">

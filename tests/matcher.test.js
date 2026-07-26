@@ -1,8 +1,8 @@
 
-const { TurboMockMatcher } = require('../src/index');
-const { matchUrl, matchHeaders, matchGraphQL, findMatchingRule } = TurboMockMatcher;
+const { SpliceTapMatcher } = require('../src/index');
+const { matchUrl, matchHeaders, matchGraphQL, findMatchingRule } = SpliceTapMatcher;
 
-describe('TurboMockMatcher', () => {
+describe('SpliceTapMatcher', () => {
     describe('matchUrl', () => {
         test('wildcard pattern matches full URL', () => {
             expect(matchUrl('https://example.com/api/users/123', '*/api/users/*')).toBe(true);
