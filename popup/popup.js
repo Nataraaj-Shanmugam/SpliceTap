@@ -64,6 +64,8 @@ class TurboMockPopup {
             this.renderCurrentView();
             this.updateStatus();
             this.updateStats();
+            this.updateTabCount();
+            this.renderSettings();
             this.addShortcutHints();
 
             // Animate popup entrance
@@ -220,8 +222,43 @@ class TurboMockPopup {
      * Setup all event listeners
      */
     setupEventListeners() {
+        // Tabs
+        this.addListener('tabRules', 'click', () => this.switchTab('rules'));
+        this.addListener('tabSettings', 'click', () => this.switchTab('settings'));
+
+        // Settings pane — each control persists immediately (there is no
+        // Save button in the popup), then notifies the background so the
+        // interceptor picks the change up on its next syncState.
+        this.addListeners('input[name="theme"]', 'change', (e) => {
+            if (!e.target.checked) return;
+            this.settings.theme = e.target.value;
+            this.applyTheme();
+            this.saveSettings();
+        });
+        this.addListener('debugMode', 'change', (e) => {
+            this.settings.debugMode = e.target.checked;
+            this.saveSettings();
+        });
+        this.addListener('chaosModeEnabled', 'change', (e) => {
+            if (!this.settings.chaosMode) this.settings.chaosMode = {};
+            this.settings.chaosMode.enabled = e.target.checked;
+            this.updateChaosRateState();
+            this.saveSettings();
+        });
+        this.addListener('chaosFailureRate', 'change', (e) => {
+            const percent = parseFloat(e.target.value);
+            if (isNaN(percent) || percent < 1 || percent > 100) {
+                // Snap back to the stored value rather than persisting junk.
+                e.target.value = Math.round(((this.settings.chaosMode || {}).failureRate || 0.1) * 100);
+                return;
+            }
+            if (!this.settings.chaosMode) this.settings.chaosMode = {};
+            this.settings.chaosMode.failureRate = percent / 100;
+            this.saveSettings();
+        });
+        this.addListener('openOptionsBtn', 'click', () => this.openSettings());
+
         // Header actions
-        this.addListener('settingsBtn', 'click', () => this.openSettings());
         this.addListener('refreshBtn', 'click', () => this.refreshData());
         
         // Search
@@ -248,6 +285,15 @@ class TurboMockPopup {
         } else {
             console.warn(`Element ${elementId} not found`);
         }
+    }
+
+    /**
+     * Attach the same handler to every match of a selector (e.g. a radio
+     * group). Silent when nothing matches — callers treat that as "this
+     * control isn't on this surface".
+     */
+    addListeners(selector, event, handler) {
+        document.querySelectorAll(selector).forEach(el => el.addEventListener(event, handler));
     }
 
     /**
@@ -1036,6 +1082,97 @@ class TurboMockPopup {
     openSettings() {
         chrome.runtime.openOptionsPage();
         window.close();
+    }
+
+    /**
+     * Switch between the Rules and Settings panes.
+     * The footer (New rule / Test all / Refresh) is Rules-only, so it is
+     * hidden rather than shown disabled on Settings.
+     */
+    switchTab(name) {
+        const isRules = name !== 'settings';
+
+        const tabRules = document.getElementById('tabRules');
+        const tabSettings = document.getElementById('tabSettings');
+        const paneRules = document.getElementById('paneRules');
+        const paneSettings = document.getElementById('paneSettings');
+        const footer = document.getElementById('rulesFooter');
+
+        if (tabRules) tabRules.setAttribute('aria-selected', String(isRules));
+        if (tabSettings) tabSettings.setAttribute('aria-selected', String(!isRules));
+        if (paneRules) paneRules.hidden = !isRules;
+        if (paneSettings) paneSettings.hidden = isRules;
+        if (footer) footer.hidden = !isRules;
+
+        if (!isRules) this.renderSettings();
+    }
+
+    /**
+     * Populate the Settings controls from this.settings. Called after
+     * loadData() and whenever the Settings tab is opened, so the controls
+     * always reflect what the background actually holds.
+     */
+    renderSettings() {
+        const s = this.settings || {};
+
+        const theme = s.theme || 'auto';
+        const themeRadio = document.querySelector(`input[name="theme"][value="${theme}"]`);
+        if (themeRadio) themeRadio.checked = true;
+
+        const debugEl = document.getElementById('debugMode');
+        if (debugEl) debugEl.checked = !!s.debugMode;
+
+        const chaos = s.chaosMode || {};
+        const chaosEl = document.getElementById('chaosModeEnabled');
+        if (chaosEl) chaosEl.checked = !!chaos.enabled;
+
+        const rateEl = document.getElementById('chaosFailureRate');
+        if (rateEl) {
+            const pct = Math.round((typeof chaos.failureRate === 'number' ? chaos.failureRate : 0.1) * 100);
+            rateEl.value = String(Math.min(100, Math.max(1, pct)));
+        }
+
+        this.updateChaosRateState();
+    }
+
+    /**
+     * The failure-rate row is meaningless while chaos mode is off — dim and
+     * disable it rather than letting the user tune an inert value.
+     */
+    updateChaosRateState() {
+        const enabled = !!(this.settings && this.settings.chaosMode && this.settings.chaosMode.enabled);
+        const rateEl = document.getElementById('chaosFailureRate');
+        const row = document.getElementById('chaosRateRow');
+        if (rateEl) rateEl.disabled = !enabled;
+        if (row) row.classList.toggle('is-disabled', !enabled);
+    }
+
+    /**
+     * Persist settings through the background so it updates its in-memory
+     * copy and re-broadcasts syncState to every tab (the interceptor reads
+     * debugMode and chaosMode from that broadcast).
+     */
+    async saveSettings() {
+        try {
+            const response = await this.sendMessage({
+                type: 'settingsUpdated',
+                settings: this.settings
+            });
+            if (!response || !response.success) {
+                this.showError('Could not save settings');
+            }
+        } catch (error) {
+            console.error('Failed to save settings:', error);
+            this.showError('Could not save settings');
+        }
+    }
+
+    /**
+     * Keep the Rules tab's count badge in step with the rule list.
+     */
+    updateTabCount() {
+        const el = document.getElementById('tabRuleCount');
+        if (el) el.textContent = String((this.rules || []).length);
     }
 
     /**

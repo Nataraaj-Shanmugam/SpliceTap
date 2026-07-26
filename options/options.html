@@ -34,12 +34,7 @@
             </div>
 
             <nav class="nav-menu">
-                <button class="nav-item active" data-tab="general" aria-current="page">
-                    <span class="nav-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
-                    </span> General
-                </button>
-                <button class="nav-item" data-tab="rules">
+                <button class="nav-item active" data-tab="rules" aria-current="page">
                     <span class="nav-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
                     </span> Rules
@@ -59,7 +54,7 @@
         <!-- Main Content Area -->
         <main class="main-content">
             <header class="top-bar">
-                <h2 id="pageTitle">General Settings</h2>
+                <h2 id="pageTitle">Rules Management</h2>
                 <div class="header-actions">
                     <button class="btn-ghost" id="exportBtn">Export</button>
                     <button class="btn-ghost" id="importBtn">Import</button>
@@ -71,114 +66,8 @@
                 <!-- A-6: persistent live region so validation errors/success toasts are
                      announced - must exist before text is inserted to fire reliably. -->
                 <div class="message-container" id="messageContainer" role="status" aria-live="polite" aria-atomic="true"></div>
-                <!-- General Settings Tab -->
-                <div class="tab-content active" data-tab="general">
-                    <div class="settings-section">
-                        <h2>Appearance</h2>
-                        <p class="section-description">Customize the look and feel of TurboMock</p>
-
-                        <div class="setting-group">
-                            <div class="setting-item">
-                                <div class="setting-info">
-                                    <!-- A-2: this label has no single control to associate via
-                                         `for` (it names a group of three radios, each of which
-                                         already has its own for-associated label below) -
-                                         connect it as the radiogroup's accessible name instead. -->
-                                    <label id="themeGroupLabel">Theme</label>
-                                    <p class="setting-description">Choose your preferred color scheme</p>
-                                </div>
-                                <div class="setting-control">
-                                    <div class="theme-selector" role="radiogroup" aria-labelledby="themeGroupLabel">
-                                        <div class="theme-option">
-                                            <input type="radio" name="theme" value="light" id="theme-light">
-                                            <label for="theme-light">
-                                                <div class="theme-preview light"></div>
-                                                <span>Light</span>
-                                            </label>
-                                        </div>
-                                        <div class="theme-option">
-                                            <input type="radio" name="theme" value="dark" id="theme-dark">
-                                            <label for="theme-dark">
-                                                <div class="theme-preview dark"></div>
-                                                <span>Dark</span>
-                                            </label>
-                                        </div>
-                                        <div class="theme-option">
-                                            <input type="radio" name="theme" value="auto" id="theme-auto" checked>
-                                            <label for="theme-auto">
-                                                <div class="theme-preview auto"></div>
-                                                <span>Auto</span>
-                                            </label>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="settings-section">
-                        <h2>Debugging</h2>
-                        <p class="section-description">Troubleshooting options</p>
-
-                        <div class="setting-group">
-                            <!-- A-2: "Show Notifications" and "Auto Backup" removed - neither
-                                 was ever read by any runtime code (no notification is ever
-                                 raised, nothing creates a backup) and the `notifications`
-                                 permission isn't even in the manifest. See G-11. -->
-                            <div class="setting-item">
-                                <div class="setting-info">
-                                    <label for="debugMode">Debug Mode</label>
-                                    <p class="setting-description">Enable detailed console logging for troubleshooting
-                                    </p>
-                                </div>
-                                <div class="setting-control">
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="debugMode">
-                                        <span class="slider"></span>
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- G-8: Chaos Mode is fully implemented in content/injected.js (random
-                         request-failure injection, both fetch and XHR) but previously had no
-                         control anywhere in the product. -->
-                    <div class="settings-section">
-                        <h2>Chaos Mode</h2>
-                        <p class="section-description">Randomly fail requests to test how your app handles real-world
-                            network failures</p>
-
-                        <div class="setting-group">
-                            <div class="setting-item">
-                                <div class="setting-info">
-                                    <label for="chaosModeEnabled">Enable Chaos Mode</label>
-                                    <p class="setting-description">Injects random request failures at the rate below
-                                    </p>
-                                </div>
-                                <div class="setting-control">
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="chaosModeEnabled">
-                                        <span class="slider"></span>
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div class="setting-item">
-                                <div class="setting-info">
-                                    <label for="chaosFailureRate">Failure Rate (%)</label>
-                                    <p class="setting-description">Percentage of requests to randomly fail (0-100)</p>
-                                </div>
-                                <div class="setting-control">
-                                    <input type="number" id="chaosFailureRate" value="10" min="0" max="100" step="1">
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Rules Management Tab -->
-                <div class="tab-content" data-tab="rules">
+                <div class="tab-content active" data-tab="rules">
                     <div class="settings-section">
                         <h2>Rules Management</h2>
                         <p class="section-description">Manage your mock rules and templates</p>

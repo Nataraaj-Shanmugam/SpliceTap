@@ -263,6 +263,362 @@ body.is-active .status-dot {
   height: 17px;
 }
 
+/* ── Tab strip ──────────────────────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tab {
+  appearance: none;
+  background: none;
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 8px 12px 9px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  position: relative;
+  transition: color 0.15s var(--ease);
+}
+
+.tab:hover {
+  color: var(--text-main);
+}
+
+.tab svg {
+  width: 14px;
+  height: 14px;
+}
+
+.tab[aria-selected="true"] {
+  color: var(--text-main);
+  font-weight: 600;
+}
+
+/* Active indicator carries the brand gradient, same motif as the top
+   hairline and the options page's nav rail. */
+.tab[aria-selected="true"]::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--brand-gradient);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+.tab-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg-chip);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+/* ── Panes ──────────────────────────────────────────────── */
+.pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane[hidden] {
+  display: none;
+}
+
+/* The `hidden` attribute only sets `display:none` through the UA stylesheet,
+   so any author rule with an explicit `display` (e.g. `.footer{display:flex}`)
+   silently beats it and the element stays visible. Make `hidden` authoritative
+   for the elements we toggle. */
+.footer[hidden] {
+  display: none;
+}
+
+.pane-settings {
+  display: block;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.pane-settings::-webkit-scrollbar {
+  width: 4px;
+}
+
+.pane-settings::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 4px;
+}
+
+/* ── Settings rows ──────────────────────────────────────── */
+.set-group {
+  padding: 14px 16px 2px;
+}
+
+.set-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.set-row:last-child {
+  border-bottom: none;
+}
+
+/* Failure rate is inert while chaos mode is off. Dimmed via colour rather
+   than `opacity`, so the text keeps a real, measurable contrast ratio
+   instead of an unpredictable composited one (A-12). */
+.set-row.is-disabled .set-title,
+.set-row.is-disabled .set-desc {
+  color: var(--text-dim);
+}
+
+.set-row.is-disabled .num-field input {
+  color: var(--text-dim);
+  cursor: not-allowed;
+}
+
+.set-info {
+  min-width: 0;
+  display: block;
+}
+
+label.set-info {
+  cursor: pointer;
+}
+
+.set-title {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-main);
+}
+
+.set-desc {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+/* Theme picker */
+.theme-picker {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.theme-opt {
+  width: 40px;
+  text-align: center;
+  cursor: pointer;
+}
+
+/* Visually hidden but focusable — the swatch is the visible control, and
+   :focus-visible on the input drives the ring below (A-3). */
+.theme-opt input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+}
+
+.swatch {
+  display: block;
+  height: 26px;
+  border-radius: 6px;
+  border: 2px solid var(--border-strong);
+  transition: border-color 0.15s;
+}
+
+.swatch-light { background: #ffffff; }
+.swatch-dark { background: #0b1018; }
+.swatch-auto { background: linear-gradient(135deg, #0b1018 50%, #ffffff 50%); }
+
+.theme-opt input:checked ~ .swatch {
+  border-color: var(--accent-bright);
+}
+
+.theme-opt input:focus-visible ~ .swatch {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+}
+
+.theme-name {
+  display: block;
+  font-size: 9.5px;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+.theme-opt input:checked ~ .theme-name {
+  color: var(--text-main);
+}
+
+/* Toggle switch */
+.switch {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  /* A-20: 24px minimum hit target even though the track is 15px tall. */
+  align-items: center;
+  min-height: 24px;
+  cursor: pointer;
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+}
+
+.switch-track {
+  width: 30px;
+  height: 17px;
+  border-radius: 999px;
+  background: var(--bg-chip);
+  border: 1px solid var(--border);
+  position: relative;
+  transition: background-color 0.18s var(--ease), border-color 0.18s;
+}
+
+.switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform 0.18s var(--ease), background-color 0.18s;
+}
+
+.switch input:checked ~ .switch-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch input:checked ~ .switch-track::after {
+  transform: translateX(13px);
+  background: #fff;
+}
+
+.switch input:focus-visible ~ .switch-track {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+}
+
+/* Number field */
+.num-field {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.num-field input {
+  width: 62px;
+  height: 28px;
+  padding: 0 20px 0 8px;
+  border-radius: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+  outline: none;
+}
+
+.num-field input:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px rgba(47, 125, 250, 0.18);
+}
+
+.num-suffix {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+/* Row that navigates away (opens the options page) */
+.link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  margin: 4px 0 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.link-row:hover {
+  background: var(--bg-card-hover);
+}
+
+.link-row:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+}
+
+.link-text small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.link-row svg {
+  width: 15px;
+  height: 15px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
 /* ── Search ─────────────────────────────────────────────── */
 .search-wrapper {
   padding: 12px 16px 8px;

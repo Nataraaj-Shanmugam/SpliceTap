@@ -28,8 +28,9 @@ const RULE_TYPE_LABELS = {
 };
 
 // Tab -> page title map (U-7: the top-bar heading never updated on tab switch).
+// 'general' was retired when theme / debug / chaos moved into the popup's
+// Settings tab; Rules is now the default landing tab.
 const TAB_TITLES = {
-    general: 'General Settings',
     rules: 'Rules Management',
     advanced: 'Advanced Configuration'
 };
@@ -1194,7 +1195,7 @@ class OptionsManager {
         // U-7: the top-bar heading is the largest text on screen and used to
         // always read "General Settings", even on the Rules/Advanced tabs.
         const pageTitle = document.getElementById('pageTitle');
-        const title = TAB_TITLES[tabName] || TAB_TITLES.general;
+        const title = TAB_TITLES[tabName] || TAB_TITLES.rules;
         if (pageTitle) pageTitle.textContent = title;
         document.title = `TurboMock - ${title}`;
     }

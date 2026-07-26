@@ -43,29 +43,43 @@
           <span class="status-dot" id="statusDot" aria-hidden="true"></span>
           <span id="statusText">Active</span>
         </button>
-        <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-            <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-            <path
-              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-          </svg>
-        </button>
       </div>
     </header>
 
-    <!-- Search -->
-    <div class="search-wrapper">
-      <div class="search-bar">
-        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">
-          <circle cx="11" cy="11" r="8" />
-          <path d="m21 21-4.3-4.3" />
+    <!-- Tab strip: Rules / Settings. Settings moved here from the options
+         page so everyday toggles no longer require opening a new tab. -->
+    <div class="tabs" role="tablist" aria-label="TurboMock sections">
+      <button type="button" class="tab" id="tabRules" role="tab" aria-selected="true" aria-controls="paneRules">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">
+          <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
         </svg>
-        <input type="text" id="searchInput" placeholder="Search rules" />
-      </div>
+        Rules
+        <span class="tab-count" id="tabRuleCount" aria-hidden="true">0</span>
+      </button>
+      <button type="button" class="tab" id="tabSettings" role="tab" aria-selected="false" aria-controls="paneSettings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+        </svg>
+        Settings
+      </button>
     </div>
 
-    <!-- Rules List -->
-    <main class="rules-list" id="rulesContainer" role="list">
+    <!-- ── Rules pane ─────────────────────────────────────────────── -->
+    <div class="pane" id="paneRules" role="tabpanel" aria-labelledby="tabRules">
+      <!-- Search -->
+      <div class="search-wrapper">
+        <div class="search-bar">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+          <input type="text" id="searchInput" placeholder="Search rules" />
+        </div>
+      </div>
+
+      <!-- Rules List -->
+      <main class="rules-list" id="rulesContainer" role="list">
       <!-- Empty State (Default) -->
       <div class="empty-state">
         <div class="empty-icon">
@@ -83,10 +97,96 @@
         <p>Point a URL pattern at a canned response and TurboMock answers it before the network does.</p>
         <div class="empty-hint">Alt + Shift + M toggles mocking</div>
       </div>
-    </main>
+      </main>
+    </div>
 
-    <!-- Footer Actions -->
-    <footer class="footer">
+    <!-- ── Settings pane (moved out of the options page) ───────────── -->
+    <div class="pane pane-settings" id="paneSettings" role="tabpanel" aria-labelledby="tabSettings" hidden>
+
+      <section class="set-group" aria-labelledby="setAppearance">
+        <h2 class="set-label" id="setAppearance">Appearance</h2>
+        <div class="set-row">
+          <div class="set-info">
+            <div class="set-title" id="themeLabel">Theme</div>
+            <p class="set-desc">Follows your system when set to Auto</p>
+          </div>
+          <div class="theme-picker" role="radiogroup" aria-labelledby="themeLabel">
+            <label class="theme-opt">
+              <input type="radio" name="theme" value="light" id="themeLight">
+              <span class="swatch swatch-light" aria-hidden="true"></span>
+              <span class="theme-name">Light</span>
+            </label>
+            <label class="theme-opt">
+              <input type="radio" name="theme" value="dark" id="themeDark">
+              <span class="swatch swatch-dark" aria-hidden="true"></span>
+              <span class="theme-name">Dark</span>
+            </label>
+            <label class="theme-opt">
+              <input type="radio" name="theme" value="auto" id="themeAuto" checked>
+              <span class="swatch swatch-auto" aria-hidden="true"></span>
+              <span class="theme-name">Auto</span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section class="set-group" aria-labelledby="setChaos">
+        <h2 class="set-label" id="setChaos">Chaos mode</h2>
+        <div class="set-row">
+          <label class="set-info" for="chaosModeEnabled">
+            <span class="set-title">Randomly fail requests</span>
+            <span class="set-desc">Test how your app handles network failures</span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="chaosModeEnabled">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="set-row" id="chaosRateRow">
+          <label class="set-info" for="chaosFailureRate">
+            <span class="set-title">Failure rate</span>
+            <span class="set-desc">Percent of requests that fail</span>
+          </label>
+          <div class="num-field">
+            <input type="number" id="chaosFailureRate" min="1" max="100" step="1" value="10" aria-label="Chaos failure rate, percent">
+            <span class="num-suffix" aria-hidden="true">%</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="set-group" aria-labelledby="setDebug">
+        <h2 class="set-label" id="setDebug">Troubleshooting</h2>
+        <div class="set-row">
+          <label class="set-info" for="debugMode">
+            <span class="set-title">Debug mode</span>
+            <span class="set-desc">Verbose TurboMock logging in the page console</span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="debugMode">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+      </section>
+
+      <section class="set-group" aria-labelledby="setMore">
+        <h2 class="set-label" id="setMore">More</h2>
+        <!-- Import/export must stay on the options page: opening an OS file
+             picker blurs the popup, which closes it mid-flow. -->
+        <button type="button" class="link-row" id="openOptionsBtn">
+          <span class="link-text">
+            Import, export &amp; stored data
+            <small>Opens the full settings page</small>
+          </span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            <path d="M15 3h6v6M10 14 21 3" />
+          </svg>
+        </button>
+      </section>
+    </div>
+
+    <!-- Footer Actions — Rules tab only (these actions don't apply to Settings) -->
+    <footer class="footer" id="rulesFooter">
       <div class="footer-stats" id="statsContainer">
         <span id="statsText">0 intercepts</span>
       </div>
