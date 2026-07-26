@@ -63,6 +63,14 @@
         </svg>
         Settings
       </button>
+      <button type="button" class="tab" id="tabData" role="tab" aria-selected="false" aria-controls="paneData">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <ellipse cx="12" cy="5.5" rx="8" ry="3" />
+          <path d="M4 5.5v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
+          <path d="M4 11.5v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
+        </svg>
+        Data
+      </button>
     </div>
 
     <!-- ── Rules pane ─────────────────────────────────────────────── -->
@@ -168,8 +176,13 @@
         </div>
       </section>
 
-      <section class="set-group" aria-labelledby="setData">
-        <h2 class="set-label" id="setData">Data</h2>
+    </div>
+
+    <!-- ── Data pane: backup, restore and stored-data management ───── -->
+    <div class="pane pane-settings" id="paneData" role="tabpanel" aria-labelledby="tabData" hidden>
+
+      <section class="set-group" aria-labelledby="setBackup">
+        <h2 class="set-label" id="setBackup">Backup</h2>
 
         <div class="set-row">
           <div class="set-info">

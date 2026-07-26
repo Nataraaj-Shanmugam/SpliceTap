@@ -225,6 +225,7 @@ class SpliceTapPopup {
         // Tabs
         this.addListener('tabRules', 'click', () => this.switchTab('rules'));
         this.addListener('tabSettings', 'click', () => this.switchTab('settings'));
+        this.addListener('tabData', 'click', () => this.switchTab('data'));
 
         // Settings pane — each control persists immediately (there is no
         // Save button in the popup), then notifies the background so the
@@ -1089,24 +1090,28 @@ class SpliceTapPopup {
      * hidden rather than shown disabled on Settings.
      */
     switchTab(name) {
-        const isRules = name !== 'settings';
+        const TABS = {
+            rules: ['tabRules', 'paneRules'],
+            settings: ['tabSettings', 'paneSettings'],
+            data: ['tabData', 'paneData']
+        };
+        const active = TABS[name] ? name : 'rules';
 
-        const tabRules = document.getElementById('tabRules');
-        const tabSettings = document.getElementById('tabSettings');
-        const paneRules = document.getElementById('paneRules');
-        const paneSettings = document.getElementById('paneSettings');
-        const footer = document.getElementById('rulesFooter');
-
-        if (tabRules) tabRules.setAttribute('aria-selected', String(isRules));
-        if (tabSettings) tabSettings.setAttribute('aria-selected', String(!isRules));
-        if (paneRules) paneRules.hidden = !isRules;
-        if (paneSettings) paneSettings.hidden = isRules;
-        if (footer) footer.hidden = !isRules;
-
-        if (!isRules) {
-            this.renderSettings();
-            this.renderDataSection();
+        for (const [key, [tabId, paneId]] of Object.entries(TABS)) {
+            const tab = document.getElementById(tabId);
+            const pane = document.getElementById(paneId);
+            const on = key === active;
+            if (tab) tab.setAttribute('aria-selected', String(on));
+            if (pane) pane.hidden = !on;
         }
+
+        const footer = document.getElementById('rulesFooter');
+        if (footer) footer.hidden = active !== 'rules';
+
+        // Re-read on open so each pane reflects what the background actually
+        // holds, rather than whatever was true when the popup first loaded.
+        if (active === 'settings') this.renderSettings();
+        if (active === 'data') this.renderDataSection();
     }
 
     /**
