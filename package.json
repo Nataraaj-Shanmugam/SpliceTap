@@ -1,7 +1,7 @@
 {
   "name": "splicetap-browser-extension",
   "version": "0.0.1",
-  "description": "Mock any API in 30 seconds, directly in your browser. Perfect for frontend development and testing.",
+  "description": "Mock, block, delay, redirect and rewrite API requests directly in your browser. Six rule types, GraphQL matching, no proxy needed.",
   "main": "manifest.json",
   "scripts": {
     "build": "npm run validate && npm run test && npm run package",

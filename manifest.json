@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "SpliceTap - API Mocker",
+  "name": "SpliceTap",
   "version": "0.0.1",
-  "description": "Mock any API in 30 seconds, directly in your browser. Perfect for frontend development and testing.",
+  "description": "Mock, block, delay, redirect and rewrite API requests directly in your browser. Six rule types, GraphQL matching, no proxy needed.",
   "permissions": [
     "storage",
     "contextMenus",
@@ -38,7 +38,7 @@
   ],
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "SpliceTap - API Mocker",
+    "default_title": "SpliceTap",
     "default_icon": {
       "16": "assets/icons/icon-16.png",
       "32": "assets/icons/icon-32.png",
