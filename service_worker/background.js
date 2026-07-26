@@ -28,7 +28,7 @@ class SpliceTapBackground {
         this.broadcastRetryCount = new Map(); // Track retry attempts per tab
         this.MAX_BROADCAST_RETRIES = 3;
 
-        // Ring buffer of applied-rule log entries (TODO.md §1.5 / §G4.4).
+        // Ring buffer of applied-rule log entries.
         // Backed by chrome.storage.session so it survives service-worker
         // suspensions within a browser session (the SW is ephemeral in MV3).
         this.interceptionLog = [];
@@ -320,7 +320,7 @@ class SpliceTapBackground {
      * Apply a stats increment, honoring the daily-reset rule: if a day or
      * more has passed since `this.stats.lastReset`, stats restart at
      * `incrementBy` (default 1) instead of accumulating. Called by the
-     * 'logInterception' handler (TODO.md §G4.4).
+     * 'logInterception' handler.
      */
     _applyStatsIncrement(incrementBy) {
         const amount = incrementBy || 1;
@@ -481,7 +481,7 @@ class SpliceTapBackground {
             errors.push(`Unknown rule type: ${type}`);
         }
 
-        // §1.7: headers/queryparams rules are DNR-backed and cannot express
+        // headers/queryparams rules are DNR-backed and cannot express
         // header or GraphQL match conditions.
         if ((type === 'headers' || type === 'queryparams') && rule.match && (rule.match.headers || rule.match.graphql)) {
             errors.push('Header/GraphQL match conditions are not supported for this rule type');

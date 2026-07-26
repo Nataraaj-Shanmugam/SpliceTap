@@ -59,7 +59,7 @@ export class SpliceTapUtils {
         }
     }
 
-    // Delegates to SpliceTapMatcher (src/matcher.js) — see TODO.md §1.3.
+    // Delegates to SpliceTapMatcher (src/matcher.js).
     // Kept here as a thin wrapper for backward compatibility with existing
     // callers of SpliceTapUtils.matchUrl. Uses globalThis (not window) so this
     // does not throw a ReferenceError when called from the MV3 service worker,
@@ -367,7 +367,7 @@ export class SpliceTapUtils {
 
     /**
      * Process dynamic response with enhanced placeholders.
-     * Delegates to SpliceTapPlaceholders (src/placeholders.js) — see TODO.md §1.3.
+     * Delegates to SpliceTapPlaceholders (src/placeholders.js).
      * Kept here as a thin wrapper for backward compatibility with existing
      * callers of SpliceTapUtils.processDynamicResponse. Uses globalThis (not
      * window) so this does not throw a ReferenceError in the MV3 service

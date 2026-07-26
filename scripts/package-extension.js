@@ -5,8 +5,8 @@
  * out to the system `zip` binary, which is not installed on the stated dev
  * platform (win32 + Git Bash) — `npm run build` failed at this step even when
  * tests passed. It also used a denylist of `-x` excludes that missed several
- * internal-only files (`.claude/`, `TODO.md`, `changes.txt`, `SpliceTap.txt`,
- * `CONTRIBUTING.md`, `demo.html`, `scripts/`, `index.js`, `audit/`), so a
+ * internal-only files (`.claude/`, `CONTRIBUTING.md`, `scripts/`,
+ * `index.js`), so a
  * successful run would still have shipped them.
  *
  * This script has no dependency on any external tool or npm package — it
@@ -19,9 +19,8 @@
  * `import` graph), every content script, and every HTML page manifest.json
  * points at (popup, options, devtools panel) plus each page's own
  * <script src> / <link href> assets. Anything manifest.json does not
- * actually need — audit/, TODO.md, changes.txt, SpliceTap.txt,
- * CONTRIBUTING.md, demo.html, tests/, scripts/, node_modules/, package*.json,
- * README.md, .claude/, .git — is excluded by construction, not by an
+ * actually need — docs/, CONTRIBUTING.md, tests/, scripts/,
+ * node_modules/, package*.json, README.md, .claude/, .git — is excluded by construction, not by an
  * ever-growing denylist that has to be kept in sync by hand.
  */
 

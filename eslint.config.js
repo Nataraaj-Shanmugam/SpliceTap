@@ -9,7 +9,7 @@
 
 module.exports = [
     {
-        ignores: ['node_modules/**', 'audit/**', 'tests/*.html', 'dist/**', 'docs/**']
+        ignores: ['node_modules/**', 'dist/**', 'docs/**']
     },
     {
         files: ['**/*.js'],

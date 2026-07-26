@@ -60,7 +60,7 @@
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
-        /* Design tokens (audit/DESIGN-SPEC.md §1) are inlined as literal
+        /* Design tokens are inlined as literal
            hex/rgba values rather than declared as custom properties. This
            sheet lives in a shadow root grafted onto arbitrary third-party
            pages, and for normal declarations the *outer* tree wins on the
@@ -717,7 +717,7 @@
     }
 
     /**
-     * Build a v2 rule (TODO.md §1.1) from the form. Throws on validation
+     * Build a v2 rule from the form. Throws on validation
      * failure with a user-facing message.
      */
     function collect() {
@@ -744,7 +744,7 @@
             rule.dnrRuleId = editingRule.dnrRuleId;
         }
 
-        // DNR-backed types can't express header/GraphQL match conditions (§1.7).
+        // DNR-backed types can't express header/GraphQL match conditions.
         const dnrBacked = type === 'headers' || type === 'queryparams';
 
         if (type === 'mock') {

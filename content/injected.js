@@ -166,7 +166,7 @@
     // Helper: resolve rule.response with defaults so a legacy/hand-written
     // rule missing the `response` object entirely (or missing individual
     // fields) never throws (Q-5). Does not change the documented schema
-    // (TODO.md 1.1) — only fills in what a well-formed rule would have had.
+    // Only fills in what a well-formed rule would have had.
     function getResponseConfig(rule) {
         const r = rule.response || {};
         return {

@@ -2,7 +2,7 @@
  * SpliceTap Matcher
  * Shared URL / header / GraphQL / rule matching logic (UMD).
  * Loads as: (a) a plain MAIN-world script, (b) a CommonJS module under Jest,
- * (c) via ESM side-effect import. See TODO.md §1.3.
+ * (c) via ESM side-effect import.
  */
 (function (global) {
     'use strict';

@@ -181,7 +181,7 @@ class OptionsManager {
 
     /**
      * FIXED: Validate rule data before populating
-     * G5.2: also populates the type-specific field groups per the v2 rule schema (§1.1)
+     * G5.2: also populates the type-specific field groups per the v2 rule schema
      * and preserves dnrRuleId across edits.
      */
     openRuleEditor(rule = null) {
@@ -213,7 +213,7 @@ class OptionsManager {
         document.getElementById('queryParamsAdd').value = '';
         document.getElementById('queryParamsRemove').value = '';
 
-        // Track the rule being edited (used by save-time validation, e.g. §1.7 combos)
+        // Track the rule being edited (used by save-time validation, e.g. DNR-backed match combos)
         this.currentEditingRule = rule || null;
 
         if (rule) {
@@ -344,9 +344,9 @@ class OptionsManager {
     }
 
     /**
-     * G5.2/G5.3: Comprehensive input validation and v2 schema construction (§1.1).
+     * G5.2/G5.3: Comprehensive input validation and v2 schema construction.
      * Builds the appropriate rule shape per rule.type from only the visible fields,
-     * and enforces the type-specific restrictions from §1.7 / G5.3.
+     * and enforces the type-specific restrictions for DNR-backed rule types.
      */
     async saveRuleFromEditor() {
         const id = document.getElementById('ruleId').value;
@@ -398,7 +398,7 @@ class OptionsManager {
         const match = { method, url };
         const extra = {};
 
-        // §1.7 / G5.3: redirect/headers/queryparams (DNR-backed) rules cannot express
+        // redirect/headers/queryparams (DNR-backed) rules cannot express
         // match.headers or match.graphql. The form never lets a user set those fields
         // for these types, but a rule loaded for editing may already carry them (e.g.
         // it was a 'mock' rule before the type was switched, or it was imported) -

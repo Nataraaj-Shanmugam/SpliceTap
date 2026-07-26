@@ -6,7 +6,7 @@
  * CSP forbids inline scripts, hence this separate file.
  *
  * Mocked/blocked/delayed/redirected requests never touch the real network
- * stack, so chrome.devtools.network can never see them (TODO.md §1.5). This
+ * stack, so chrome.devtools.network can never see them. This
  * panel instead polls the background service worker's in-memory
  * interception log (populated by content/injected.js -> content/content.js
  * -> service_worker/background.js) via chrome.runtime.sendMessage and

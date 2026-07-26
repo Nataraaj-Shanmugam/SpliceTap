@@ -1,8 +1,7 @@
 /**
  * SpliceTap DNR (declarativeNetRequest) sync.
  * Maps v2 'headers' / 'queryparams' rules to chrome.declarativeNetRequest
- * dynamic rules and keeps the DNR ruleset in sync with stored rules. See
- * TODO.md §G4.1.
+ * dynamic rules and keeps the DNR ruleset in sync with stored rules.
  *
  * Module-loading note: written UMD-only (no top-level ESM `export`) because
  * this repo's Jest has no ESM transform (see src/index.js's require-based

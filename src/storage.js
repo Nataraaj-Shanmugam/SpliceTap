@@ -110,7 +110,7 @@ export class SpliceTapStorage {
     }
 
     /**
-     * Migrate a stored rule to schema v2 shape (TODO.md §1.1 / §G4.2):
+     * Migrate a stored rule to schema v2 shape:
      * defaults `type` to 'mock' and, for mock rules, `response.mode` to
      * 'static' when absent. Non-destructive: returns a new object.
      */

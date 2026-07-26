@@ -5,7 +5,7 @@
  * Note: this file intentionally does NOT listen for
  * chrome.devtools.network.onRequestFinished. Mocked/blocked/delayed/redirected
  * requests never touch the real network stack, so that API can never see
- * them (see TODO.md §1.5). The interception log is populated out-of-band by
+ * them. The interception log is populated out-of-band by
  * content/injected.js -> content/content.js -> service_worker/background.js
  * and polled by devtools/panel.js instead.
  *

@@ -20,7 +20,7 @@
  * reach listeners on that same document, never a parent/sibling frame's.
  * A same-frame page script that knows the event names can still dispatch
  * them (an inherent limit of MAIN-world content scripts sharing the page's
- * realm — see TODO.md 1.7), so payload shape validation below is kept as
+ * realm), so payload shape validation below is kept as
  * defense in depth.
  */
 
