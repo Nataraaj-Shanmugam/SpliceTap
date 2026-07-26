@@ -47,4 +47,6 @@ locally and validated before being applied; it is never uploaded anywhere.
 
 ## Questions
 
-Open an issue at the project's GitHub repository.
+Open an issue at
+[github.com/Nataraaj-Shanmugam/SpliceTap/issues](https://github.com/Nataraaj-Shanmugam/SpliceTap/issues),
+or email nataraajshanmugam08@gmail.com if it concerns your own data.

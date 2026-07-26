@@ -187,7 +187,16 @@ Any other context, mockups, or examples.
 - Report security issues privately
 
 ### Reporting Security Issues
-Email security@splicetap.com with:
+Please **don't** open a public issue for a vulnerability — it's visible to
+everyone before there's a fix.
+
+Preferred: [open a private security advisory](https://github.com/Nataraaj-Shanmugam/SpliceTap/security/advisories/new).
+It stays between you and the maintainer until a patch ships, and GitHub
+handles disclosure once it does.
+
+If you'd rather not use GitHub, email nataraajshanmugam08@gmail.com.
+
+Either way, please include:
 - Description of the vulnerability
 - Steps to reproduce
 - Potential impact
@@ -212,7 +221,8 @@ By contributing to SpliceTap, you agree that your contributions will be licensed
 - Publishing private information
 
 ### Enforcement
-Report violations to conduct@splicetap.com. All reports will be reviewed and investigated.
+Report violations privately to nataraajshanmugam08@gmail.com. All reports
+will be reviewed and investigated.
 
 ## 🙋 Getting Help
 
@@ -222,14 +232,16 @@ Report violations to conduct@splicetap.com. All reports will be reviewed and inv
 - [WebExtensions API](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API)
 
 ### Community
-- GitHub Discussions for questions and ideas
-- GitHub Issues for bugs and feature requests
-- Email support@splicetap.com for general inquiries
+- [GitHub Discussions](https://github.com/Nataraaj-Shanmugam/SpliceTap/discussions) — questions, ideas and general inquiries
+- [GitHub Issues](https://github.com/Nataraaj-Shanmugam/SpliceTap/issues) — bugs and feature requests
+
+Public threads are preferable to email for anything non-sensitive: the
+answer stays searchable for the next person who hits the same thing.
 
 ## 🎉 Recognition
 
 Contributors are recognized in:
-- CONTRIBUTORS.md file
+- The repository's [contributors list](https://github.com/Nataraaj-Shanmugam/SpliceTap/graphs/contributors)
 - Release notes for significant contributions
 - Extension credits in the options page
 
