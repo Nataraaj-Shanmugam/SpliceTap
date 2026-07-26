@@ -267,23 +267,28 @@ body.is-active .status-dot {
 .tabs {
   display: flex;
   gap: 0;
-  padding: 0 10px;
+  padding: 0;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
+/* Each tab takes an equal third of the strip so the row reads as one
+   segmented control rather than three labels bunched to the left. */
 .tab {
   appearance: none;
   background: none;
   border: none;
   font-family: inherit;
   cursor: pointer;
-  padding: 8px 9px 9px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 4px 9px;
   font-size: 12.5px;
   font-weight: 500;
   color: var(--text-muted);
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   position: relative;
   transition: color 0.15s var(--ease);

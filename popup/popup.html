@@ -46,8 +46,8 @@
       </div>
     </header>
 
-    <!-- Tab strip: Rules / Settings. Settings moved here from the options
-         page so everyday toggles no longer require opening a new tab. -->
+    <!-- Tab strip: Rules / Data / Settings. All three moved here from the
+         options page so everyday work never requires opening a new tab. -->
     <div class="tabs" role="tablist" aria-label="SpliceTap sections">
       <button type="button" class="tab" id="tabRules" role="tab" aria-selected="true" aria-controls="paneRules">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">
@@ -56,13 +56,6 @@
         Rules
         <span class="tab-count" id="tabRuleCount" aria-hidden="true">0</span>
       </button>
-      <button type="button" class="tab" id="tabSettings" role="tab" aria-selected="false" aria-controls="paneSettings">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-        </svg>
-        Settings
-      </button>
       <button type="button" class="tab" id="tabData" role="tab" aria-selected="false" aria-controls="paneData">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
           <ellipse cx="12" cy="5.5" rx="8" ry="3" />
@@ -70,6 +63,13 @@
           <path d="M4 11.5v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
         </svg>
         Data
+      </button>
+      <button type="button" class="tab" id="tabSettings" role="tab" aria-selected="false" aria-controls="paneSettings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+        </svg>
+        Settings
       </button>
     </div>
 
@@ -106,6 +106,72 @@
         <div class="empty-hint">Alt + Shift + M toggles mocking</div>
       </div>
       </main>
+    </div>
+
+    <!-- ── Data pane: backup, restore and stored-data management ───── -->
+    <div class="pane pane-settings" id="paneData" role="tabpanel" aria-labelledby="tabData" hidden>
+
+      <section class="set-group" aria-labelledby="setBackup">
+        <h2 class="set-label" id="setBackup">Backup</h2>
+
+        <div class="set-row">
+          <div class="set-info">
+            <div class="set-title">Export rules</div>
+            <p class="set-desc"><span id="exportCount">0</span> rules &middot; downloads a JSON file</p>
+          </div>
+          <button type="button" class="mini-btn" id="exportRulesBtn">Export</button>
+        </div>
+
+        <!-- Import is paste-based, not a file picker: opening an OS file dialog
+             blurs the popup, which closes it and destroys the document before
+             the input's change event can ever fire. -->
+        <div class="set-row">
+          <div class="set-info">
+            <div class="set-title">Import rules</div>
+            <p class="set-desc">Paste previously exported JSON</p>
+          </div>
+          <button type="button" class="mini-btn" id="importToggleBtn" aria-expanded="false" aria-controls="importPanel">Import</button>
+        </div>
+
+        <div class="sub-panel" id="importPanel" hidden>
+          <textarea id="importJson" rows="4" spellcheck="false" aria-label="Rules JSON to import" placeholder='{ "rules": [ ... ] }'></textarea>
+          <label class="check-row">
+            <input type="checkbox" id="importMerge" checked>
+            <span>Keep existing rules</span>
+          </label>
+          <div class="sub-actions">
+            <button type="button" class="mini-btn" id="importCancelBtn">Cancel</button>
+            <button type="button" class="mini-btn is-primary" id="importConfirmBtn">Import</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="set-group" aria-labelledby="setStorage">
+        <h2 class="set-label" id="setStorage">Stored data</h2>
+
+        <div class="set-row">
+          <div class="set-info">
+            <div class="set-title">On this device</div>
+            <p class="set-desc" id="storageInfo">Calculating&hellip;</p>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div class="set-info">
+            <div class="set-title">Delete everything</div>
+            <p class="set-desc">Removes every rule, setting and statistic</p>
+          </div>
+          <button type="button" class="mini-btn is-danger" id="resetAllBtn" aria-expanded="false" aria-controls="resetPanel">Reset</button>
+        </div>
+
+        <div class="sub-panel" id="resetPanel" hidden>
+          <p class="sub-warn">This cannot be undone. Export first if you want a copy.</p>
+          <div class="sub-actions">
+            <button type="button" class="mini-btn" id="resetCancelBtn">Cancel</button>
+            <button type="button" class="mini-btn is-danger" id="resetConfirmBtn">Delete everything</button>
+          </div>
+        </div>
+      </section>
     </div>
 
     <!-- ── Settings pane (moved out of the options page) ───────────── -->
@@ -176,72 +242,6 @@
         </div>
       </section>
 
-    </div>
-
-    <!-- ── Data pane: backup, restore and stored-data management ───── -->
-    <div class="pane pane-settings" id="paneData" role="tabpanel" aria-labelledby="tabData" hidden>
-
-      <section class="set-group" aria-labelledby="setBackup">
-        <h2 class="set-label" id="setBackup">Backup</h2>
-
-        <div class="set-row">
-          <div class="set-info">
-            <div class="set-title">Export rules</div>
-            <p class="set-desc"><span id="exportCount">0</span> rules &middot; downloads a JSON file</p>
-          </div>
-          <button type="button" class="mini-btn" id="exportRulesBtn">Export</button>
-        </div>
-
-        <!-- Import is paste-based, not a file picker: opening an OS file dialog
-             blurs the popup, which closes it and destroys the document before
-             the input's change event can ever fire. -->
-        <div class="set-row">
-          <div class="set-info">
-            <div class="set-title">Import rules</div>
-            <p class="set-desc">Paste previously exported JSON</p>
-          </div>
-          <button type="button" class="mini-btn" id="importToggleBtn" aria-expanded="false" aria-controls="importPanel">Import</button>
-        </div>
-
-        <div class="sub-panel" id="importPanel" hidden>
-          <textarea id="importJson" rows="4" spellcheck="false" aria-label="Rules JSON to import" placeholder='{ "rules": [ ... ] }'></textarea>
-          <label class="check-row">
-            <input type="checkbox" id="importMerge" checked>
-            <span>Keep existing rules</span>
-          </label>
-          <div class="sub-actions">
-            <button type="button" class="mini-btn" id="importCancelBtn">Cancel</button>
-            <button type="button" class="mini-btn is-primary" id="importConfirmBtn">Import</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="set-group" aria-labelledby="setStorage">
-        <h2 class="set-label" id="setStorage">Stored data</h2>
-
-        <div class="set-row">
-          <div class="set-info">
-            <div class="set-title">On this device</div>
-            <p class="set-desc" id="storageInfo">Calculating&hellip;</p>
-          </div>
-        </div>
-
-        <div class="set-row">
-          <div class="set-info">
-            <div class="set-title">Delete everything</div>
-            <p class="set-desc">Removes every rule, setting and statistic</p>
-          </div>
-          <button type="button" class="mini-btn is-danger" id="resetAllBtn" aria-expanded="false" aria-controls="resetPanel">Reset</button>
-        </div>
-
-        <div class="sub-panel" id="resetPanel" hidden>
-          <p class="sub-warn">This cannot be undone. Export first if you want a copy.</p>
-          <div class="sub-actions">
-            <button type="button" class="mini-btn" id="resetCancelBtn">Cancel</button>
-            <button type="button" class="mini-btn is-danger" id="resetConfirmBtn">Delete everything</button>
-          </div>
-        </div>
-      </section>
     </div>
 
     <!-- Footer Actions — Rules tab only (these actions don't apply to Settings) -->
