@@ -168,20 +168,66 @@
         </div>
       </section>
 
-      <section class="set-group" aria-labelledby="setMore">
-        <h2 class="set-label" id="setMore">More</h2>
-        <!-- Import/export must stay on the options page: opening an OS file
-             picker blurs the popup, which closes it mid-flow. -->
-        <button type="button" class="link-row" id="openOptionsBtn">
-          <span class="link-text">
-            Import, export &amp; stored data
-            <small>Opens the full settings page</small>
-          </span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-            <path d="M15 3h6v6M10 14 21 3" />
-          </svg>
-        </button>
+      <section class="set-group" aria-labelledby="setData">
+        <h2 class="set-label" id="setData">Data</h2>
+
+        <div class="set-row">
+          <div class="set-info">
+            <div class="set-title">Export rules</div>
+            <p class="set-desc"><span id="exportCount">0</span> rules &middot; downloads a JSON file</p>
+          </div>
+          <button type="button" class="mini-btn" id="exportRulesBtn">Export</button>
+        </div>
+
+        <!-- Import is paste-based, not a file picker: opening an OS file dialog
+             blurs the popup, which closes it and destroys the document before
+             the input's change event can ever fire. -->
+        <div class="set-row">
+          <div class="set-info">
+            <div class="set-title">Import rules</div>
+            <p class="set-desc">Paste previously exported JSON</p>
+          </div>
+          <button type="button" class="mini-btn" id="importToggleBtn" aria-expanded="false" aria-controls="importPanel">Import</button>
+        </div>
+
+        <div class="sub-panel" id="importPanel" hidden>
+          <textarea id="importJson" rows="4" spellcheck="false" aria-label="Rules JSON to import" placeholder='{ "rules": [ ... ] }'></textarea>
+          <label class="check-row">
+            <input type="checkbox" id="importMerge" checked>
+            <span>Keep existing rules</span>
+          </label>
+          <div class="sub-actions">
+            <button type="button" class="mini-btn" id="importCancelBtn">Cancel</button>
+            <button type="button" class="mini-btn is-primary" id="importConfirmBtn">Import</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="set-group" aria-labelledby="setStorage">
+        <h2 class="set-label" id="setStorage">Stored data</h2>
+
+        <div class="set-row">
+          <div class="set-info">
+            <div class="set-title">On this device</div>
+            <p class="set-desc" id="storageInfo">Calculating&hellip;</p>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div class="set-info">
+            <div class="set-title">Delete everything</div>
+            <p class="set-desc">Removes every rule, setting and statistic</p>
+          </div>
+          <button type="button" class="mini-btn is-danger" id="resetAllBtn" aria-expanded="false" aria-controls="resetPanel">Reset</button>
+        </div>
+
+        <div class="sub-panel" id="resetPanel" hidden>
+          <p class="sub-warn">This cannot be undone. Export first if you want a copy.</p>
+          <div class="sub-actions">
+            <button type="button" class="mini-btn" id="resetCancelBtn">Cancel</button>
+            <button type="button" class="mini-btn is-danger" id="resetConfirmBtn">Delete everything</button>
+          </div>
+        </div>
       </section>
     </div>
 

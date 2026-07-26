@@ -33,18 +33,6 @@
                 <h1>SpliceTap</h1>
             </div>
 
-            <nav class="nav-menu">
-                <button class="nav-item active" data-tab="rules" aria-current="page">
-                    <span class="nav-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
-                    </span> Rules
-                </button>
-                <button class="nav-item" data-tab="advanced">
-                    <span class="nav-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>
-                    </span> Advanced
-                </button>
-            </nav>
 
             <div class="sidebar-footer">
                 <div class="version">v0.0.1</div>
@@ -56,9 +44,7 @@
             <header class="top-bar">
                 <h2 id="pageTitle">Rules Management</h2>
                 <div class="header-actions">
-                    <button class="btn-ghost" id="exportBtn">Export</button>
-                    <button class="btn-ghost" id="importBtn">Import</button>
-                    <button class="btn-primary" id="saveBtn">Save Changes</button>
+                    <button class="btn-primary" id="newRuleBtn">New rule</button>
                 </div>
             </header>
 
@@ -66,79 +52,18 @@
                 <!-- A-6: persistent live region so validation errors/success toasts are
                      announced - must exist before text is inserted to fire reliably. -->
                 <div class="message-container" id="messageContainer" role="status" aria-live="polite" aria-atomic="true"></div>
-                <!-- Rules Management Tab -->
-                <div class="tab-content active" data-tab="rules">
-                    <div class="settings-section">
-                        <h2>Rules Management</h2>
-                        <p class="section-description">Manage your mock rules and templates</p>
-
-                        <div class="import-export-grid">
-                            <div class="action-card">
-                                <div class="card-icon">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
-                                </div>
-                                <h3>Import Rules</h3>
-                                <p>Import mock rules from a JSON file</p>
-                                <div class="card-actions">
-                                    <button class="btn-primary" id="importRulesBtn">Choose File</button>
-                                </div>
-                                <div class="import-options">
-                                    <label>
-                                        <input type="checkbox" id="mergeImport" checked>
-                                        Merge with existing rules
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div class="action-card">
-                                <div class="card-icon">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 9l5-5 5 5"/><path d="M12 4v12"/></svg>
-                                </div>
-                                <h3>Export Rules</h3>
-                                <p>Export all your mock rules to a JSON file</p>
-                                <div class="card-actions">
-                                    <button class="btn-primary" id="exportRulesBtn">Download JSON</button>
-                                </div>
-                                <div class="card-stats">
-                                    <span id="rulesCount">0</span> rules ready for export
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Advanced Settings Tab -->
-                <div class="tab-content" data-tab="advanced">
-                    <!-- G-11: "Default Headers" and "Request Timeout" removed - neither was
-                         ever read by the interceptor or any other runtime code, so both were
-                         inert switches that misled users into thinking they did something.
-                         Wiring `defaultHeaders` into content/injected.js is out of scope for
-                         this file (F4 owns options/* only). -->
-                    <div class="settings-section">
-                        <h2>Stored Data</h2>
-                        <p class="section-description">Inspect everything SpliceTap has saved locally</p>
-                        <div class="reset-options">
-                            <div class="reset-card">
-                                <h4>View Stored Data</h4>
-                                <button class="btn-secondary" data-action="open-data-viewer">View</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="settings-section">
-                        <h2>Reset Options</h2>
-                        <div class="reset-options">
-                            <div class="reset-card">
-                                <h4>Reset Settings</h4>
-                                <button class="btn-secondary" data-action="reset-settings">Reset</button>
-                            </div>
-
-                            <div class="reset-card">
-                                <h4>Factory Reset</h4>
-                                <button class="btn-danger" data-action="factory-reset">Reset All</button>
-                            </div>
-                        </div>
-                    </div>
+                <div class="settings-section">
+                    <h2>Rule editor</h2>
+                    <p class="section-description">
+                        This page hosts the full rule editor. It opens automatically when you edit a
+                        rule, or when the in-page editor cannot run &mdash; on <code>chrome://</code>
+                        pages and the Web Store, for example.
+                    </p>
+                    <p class="section-description">
+                        Everything else &mdash; your rule list, theme, chaos mode, debug logging,
+                        import, export and stored data &mdash; now lives in the toolbar popup, so
+                        there is only one place to look for it.
+                    </p>
                 </div>
             </div>
         </main>
@@ -146,34 +71,7 @@
     </div>
 
     <!-- Data Viewer Modal -->
-    <!-- A-4: role="dialog"/aria-modal/aria-labelledby give screen readers a signal that a
-         dialog opened and what its accessible name is; focus move/trap/restore is handled
-         in options.js (openModal()/closeModalElement()). -->
-    <div class="modal" id="dataModal" role="dialog" aria-modal="true" aria-labelledby="dataModalTitle">
-        <div class="modal-content large" tabindex="-1">
-            <div class="modal-header">
-                <h3 id="dataModalTitle">All Stored Data</h3>
-                <button class="modal-close" data-action="close-modal" data-modal="dataModal" aria-label="Close dialog"><span aria-hidden="true">×</span></button>
-            </div>
-            <div class="modal-body">
-                <div class="data-viewer">
-                    <!-- A-11: minimal ARIA tabs pattern - previously four identical,
-                         unlabelled buttons with no role/aria-selected at all. -->
-                    <div class="data-tabs" role="tablist" aria-label="Stored data view">
-                        <button class="data-tab active" role="tab" aria-selected="true" aria-controls="dataDisplay" data-action="switch-data-tab" data-tab-name="rules">Rules</button>
-                        <button class="data-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="dataDisplay" data-action="switch-data-tab" data-tab-name="settings">Settings</button>
-                        <button class="data-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="dataDisplay" data-action="switch-data-tab" data-tab-name="stats">Statistics</button>
-                        <button class="data-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="dataDisplay" data-action="switch-data-tab" data-tab-name="raw">Raw Data</button>
-                    </div>
-                    <div class="data-content">
-                        <textarea id="dataDisplay" role="tabpanel" readonly></textarea>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Confirmation Modal -->
+        <!-- Confirmation Modal -->
     <div class="modal" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
         <div class="modal-content" tabindex="-1">
             <div class="modal-header">

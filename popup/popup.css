@@ -577,46 +577,111 @@ label.set-info {
 }
 
 /* Row that navigates away (opens the options page) */
-.link-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  width: 100%;
-  margin: 4px 0 14px;
-  padding: 10px 12px;
-  border-radius: 8px;
+/* Compact action buttons used by the Settings pane */
+.mini-btn {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 6px;
   background: var(--bg-card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   color: var(--text-main);
   font-family: inherit;
-  font-size: 12.5px;
-  text-align: left;
+  font-size: 11.5px;
+  font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s;
 }
 
-.link-row:hover {
+.mini-btn:hover {
   background: var(--bg-card-hover);
 }
 
-.link-row:focus-visible {
+.mini-btn:focus-visible {
   outline: 2px solid var(--accent-bright);
   outline-offset: 2px;
 }
 
-.link-text small {
-  display: block;
-  color: var(--text-muted);
-  font-size: 11px;
-  margin-top: 2px;
+.mini-btn.is-primary {
+  background: var(--accent-gradient);
+  border-color: transparent;
+  color: #fff;
 }
 
-.link-row svg {
-  width: 15px;
-  height: 15px;
-  color: var(--text-dim);
-  flex-shrink: 0;
+.mini-btn.is-primary:hover {
+  background: var(--accent-gradient-hover);
+}
+
+.mini-btn.is-danger {
+  color: var(--danger, #dc2626);
+  border-color: rgba(220, 38, 38, 0.45);
+}
+
+.mini-btn.is-danger:hover {
+  background: rgba(220, 38, 38, 0.10);
+}
+
+/* Inline disclosure panel (import form, reset confirm) */
+.sub-panel {
+  margin: 2px 0 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+
+/* The hidden attribute only sets display:none through the UA stylesheet,
+   so an author rule with an explicit display would silently outrank it. */
+.sub-panel[hidden] {
+  display: none;
+}
+
+.sub-panel textarea {
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+
+.sub-panel textarea:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px rgba(47, 125, 250, 0.18);
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.check-row input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.sub-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.sub-warn {
+  margin: 0 0 2px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
 }
 
 /* ── Search ─────────────────────────────────────────────── */

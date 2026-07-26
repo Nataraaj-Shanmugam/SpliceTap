@@ -958,13 +958,9 @@ class OptionsManager {
         });
 
         // Header actions
-        this.addListener('saveBtn', 'click', () => this.saveSettings());
-        this.addListener('exportBtn', 'click', () => this.exportSettings());
-        this.addListener('importBtn', 'click', () => this.importSettings());
+        this.addListener('newRuleBtn', 'click', () => this.openRuleEditor());
 
         // Rules management
-        this.addListener('importRulesBtn', 'click', () => this.importRules());
-        this.addListener('exportRulesBtn', 'click', () => this.exportRules());
 
         // Rule editor: type-specific field visibility (G5.2)
         this.addListener('ruleType', 'change', (e) => this.updateRuleTypeVisibility(e.target.value));
@@ -1036,18 +1032,6 @@ class OptionsManager {
                 break;
             case 'save-rule':
                 this.saveRuleFromEditor();
-                break;
-            case 'reset-settings':
-                this.resetSettingsOnly();
-                break;
-            case 'factory-reset':
-                this.factoryReset();
-                break;
-            case 'open-data-viewer':
-                this.openDataViewer();
-                break;
-            case 'switch-data-tab':
-                this.switchDataTab(el.dataset.tabName);
                 break;
             case 'format-json':
                 this.formatJSON(el.dataset.target);
@@ -1262,176 +1246,10 @@ class OptionsManager {
             }
         }
     }
-
-    async exportSettings() {
-        const exportData = {
-            version: '1.0.0',
-            exported: new Date().toISOString(),
-            settings: this.settings,
-            shortcuts: this.shortcuts
-        };
-
-        this.downloadJSON(exportData, `splicetap-settings-${new Date().toISOString().split('T')[0]}.json`);
-        this.showMessage('Settings exported successfully!', 'success');
-    }
-
-    async importSettings() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-
-        input.onchange = async (e) => {
-            try {
-                const file = e.target.files[0];
-                if (!file) return;
-
-                const text = await file.text();
-                const data = JSON.parse(text);
-
-                if (data.settings) {
-                    this.settings = { ...this.getDefaultSettings(), ...data.settings };
-                }
-
-                if (data.shortcuts) {
-                    this.shortcuts = { ...this.getDefaultShortcuts(), ...data.shortcuts };
-                }
-
-                this.updateUI();
-                this.showMessage('Settings imported successfully!', 'success');
-
-            } catch (error) {
-                this.showMessage('Failed to import settings: ' + error.message, 'error');
-            }
-        };
-
-        input.click();
-    }
-
-    async importRules() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-
-        input.onchange = async (e) => {
-            try {
-                const file = e.target.files[0];
-                if (!file) return;
-
-                const text = await file.text();
-                const data = JSON.parse(text);
-
-                let importedRules = [];
-                if (Array.isArray(data)) {
-                    importedRules = data;
-                } else if (data.rules && Array.isArray(data.rules)) {
-                    importedRules = data.rules;
-                } else {
-                    throw new Error('Invalid file format');
-                }
-
-                const mergeImport = document.getElementById('mergeImport')?.checked ?? true;
-
-                // Every rule needs an id before it can be validated/merged -
-                // fresh ids on merge (so they can't collide with existing
-                // rules), fill in a missing id on replace.
-                importedRules.forEach(rule => {
-                    if (mergeImport || !rule.id) {
-                        rule.id = this.generateId();
-                    }
-                    if (mergeImport) {
-                        rule.imported = new Date().toISOString();
-                    }
-                });
-
-                // S-2: imported rules used to be persisted and activated
-                // verbatim - no schema check, no URL-pattern check, so a
-                // hostile or malformed file could install a rule matching
-                // every request on every site. Reuse the exact same checks
-                // as save (validateRuleForEditing + Q-10's
-                // validateUrlPattern) rather than writing new validation
-                // logic, and drop anything that fails rather than accepting
-                // the whole file blind.
-                const SpliceTapUtils = await getSpliceTapUtils();
-                const validRules = [];
-                let rejectedCount = 0;
-                for (const rule of importedRules) {
-                    const structurallyValid = this.validateRuleForEditing(rule);
-                    const urlCheck = structurallyValid
-                        ? SpliceTapUtils.validateUrlPattern(rule.match.url)
-                        : { isValid: false };
-                    if (structurallyValid && urlCheck.isValid) {
-                        validRules.push(rule);
-                    } else {
-                        rejectedCount++;
-                    }
-                }
-
-                if (validRules.length === 0) {
-                    this.showMessage('No valid rules found in the imported file.', 'error');
-                    return;
-                }
-
-                // CQ-Q3 (data loss): re-fetch the authoritative rules right
-                // before merging, instead of trusting `this.rules` (a
-                // snapshot that may predate rules added elsewhere - popup,
-                // overlay, another options tab - while this tab was open).
-                // "Merge with existing rules" explicitly promises not to
-                // lose anything; merging against a stale snapshot breaks
-                // that promise exactly like the bulk-write bug in
-                // saveRuleFromEditor (CQ-Q3).
-                let currentRules = this.rules;
-                if (mergeImport) {
-                    try {
-                        const fresh = await chrome.runtime.sendMessage({ type: 'getRules' });
-                        if (fresh && fresh.success && Array.isArray(fresh.rules)) {
-                            currentRules = fresh.rules;
-                        }
-                    } catch (err) {
-                        // Background unreachable - fall back to the local snapshot.
-                    }
-                }
-
-                this.rules = mergeImport ? [...validRules, ...currentRules] : validRules;
-
-                // Route through the background so imported headers/queryparams
-                // rules get a dnrRuleId and DNR is re-synced (a direct storage
-                // write would leave them non-functional). `setRules` (bulk
-                // replace) is appropriate here - import is exactly the bulk
-                // operation it's reserved for (see CQ-Q3).
-                const response = await chrome.runtime.sendMessage({ type: 'setRules', rules: this.rules });
-                if (!response || !response.success) {
-                    throw new Error((response && response.error) || 'Background did not accept the rules');
-                }
-                if (Array.isArray(response.rules)) {
-                    this.rules = response.rules;
-                }
-                this.loadStatistics();
-
-                const skippedNote = rejectedCount > 0
-                    ? ` (${rejectedCount} rule${rejectedCount === 1 ? '' : 's'} skipped - invalid)`
-                    : '';
-                this.showMessage(`Imported ${validRules.length} rules successfully!${skippedNote}`, 'success');
-
-            } catch (error) {
-                this.showMessage('Failed to import rules: ' + error.message, 'error');
-            }
-        };
-
-        input.click();
-    }
-
-    async exportRules() {
-        const exportData = {
-            version: '1.0.0',
-            exported: new Date().toISOString(),
-            totalRules: this.rules.length,
-            enabledRules: this.rules.filter(r => r.enabled).length,
-            rules: this.rules
-        };
-
-        this.downloadJSON(exportData, `splicetap-rules-${new Date().toISOString().split('T')[0]}.json`);
-        this.showMessage(`Exported ${this.rules.length} rules successfully!`, 'success');
-    }
+
+
+
+
 
     async loadStatistics() {
         const totalRules = this.rules.length;
@@ -1611,91 +1429,10 @@ class OptionsManager {
             this.closeConfirmModal();
         }
     }
-
-    resetSettingsOnly() {
-        this.showConfirmation(
-            'Reset Settings',
-            'Reset all settings to default values? Your rules will be preserved.',
-            async () => {
-                this.settings = this.getDefaultSettings();
-                await this.saveSettings();
-                this.updateUI();
-                this.showMessage('Settings reset successfully!', 'success');
-            }
-        );
-    }
-
-    factoryReset() {
-        this.showConfirmation(
-            'Factory Reset',
-            'Reset everything to default state? This will delete all data and cannot be undone.',
-            async () => {
-                await chrome.storage.local.clear();
-                this.settings = this.getDefaultSettings();
-                this.shortcuts = this.getDefaultShortcuts();
-                this.rules = [];
-
-                // Tell the background its in-memory rules are gone so it also
-                // clears the declarativeNetRequest ruleset and re-broadcasts;
-                // wiping storage alone would leave both stale.
-                try {
-                    await chrome.runtime.sendMessage({ type: 'clearRules' });
-                } catch (e) {
-                    // non-fatal
-                }
-
-                await this.saveSettings();
-                this.updateUI();
-                this.showMessage('Factory reset completed!', 'success');
-            }
-        );
-    }
-
-    async openDataViewer() {
-        const modal = document.getElementById('dataModal');
-        if (!modal) return;
-        await this.switchDataTab('rules');
-        this.openModal(modal);
-    }
-
-    /**
-     * Select a tab in the stored-data viewer and render it. The previous
-     * implementation only toggled the active class by comparing button text
-     * (so "Statistics"/"Raw Data" never matched "stats"/"raw") and never
-     * populated the textarea at all.
-     */
-    async switchDataTab(tabName) {
-        if (!tabName) return;
-        this._dataViewerTab = tabName;
-
-        document.querySelectorAll('.data-tab').forEach(tab => {
-            const isActive = tab.dataset.tabName === tabName;
-            tab.classList.toggle('active', isActive);
-            // A-11: minimal ARIA tabs pattern - these were plain buttons with
-            // no role/aria-selected, so a screen reader heard four
-            // identical, unlabelled buttons.
-            tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
-            tab.setAttribute('tabindex', isActive ? '0' : '-1');
-        });
-
-        const display = document.getElementById('dataDisplay');
-        if (!display) return;
-
-        try {
-            const all = await chrome.storage.local.get(null);
-            let data;
-            switch (tabName) {
-                case 'settings': data = all.spliceTapSettings || {}; break;
-                case 'stats': data = all.spliceTapStats || {}; break;
-                case 'raw': data = all; break;
-                case 'rules':
-                default: data = all.spliceTapRules || []; break;
-            }
-            display.value = JSON.stringify(data, null, 2);
-        } catch (error) {
-            display.value = 'Failed to read stored data: ' + error.message;
-        }
-    }
+
+
+
+
 
     formatJSON(elementId) {
         const el = document.getElementById(elementId);
@@ -1757,8 +1494,8 @@ class OptionsManager {
 
     // U-8/G-11: this used to validate maxResponseSize and cacheSize, neither
     // of which has ever had a corresponding form field - if an imported
-    // settings file (importSettings() merges arbitrary values with no
-    // validation of its own) carried an out-of-range value for either,
+    // settings file carried arbitrary unvalidated values, an
+    // out-of-range value for either meant
     // "Save Changes" would fail forever with an error pointing at a field
     // the user cannot see or edit, and Factory Reset was the only way out.
     // Both settings (plus requestTimeout/defaultHeaders/notifications/

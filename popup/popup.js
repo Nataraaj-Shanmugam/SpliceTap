@@ -256,7 +256,14 @@ class SpliceTapPopup {
             this.settings.chaosMode.failureRate = percent / 100;
             this.saveSettings();
         });
-        this.addListener('openOptionsBtn', 'click', () => this.openSettings());
+        // Data management (moved out of the options page)
+        this.addListener('exportRulesBtn', 'click', () => this.exportRules());
+        this.addListener('importToggleBtn', 'click', () => this.togglePanel('importPanel', 'importToggleBtn'));
+        this.addListener('importCancelBtn', 'click', () => this.togglePanel('importPanel', 'importToggleBtn', false));
+        this.addListener('importConfirmBtn', 'click', () => this.confirmImport());
+        this.addListener('resetAllBtn', 'click', () => this.togglePanel('resetPanel', 'resetAllBtn'));
+        this.addListener('resetCancelBtn', 'click', () => this.togglePanel('resetPanel', 'resetAllBtn', false));
+        this.addListener('resetConfirmBtn', 'click', () => this.confirmReset());
 
         // Header actions
         this.addListener('refreshBtn', 'click', () => this.refreshData());
@@ -1077,14 +1084,6 @@ class SpliceTapPopup {
     }
 
     /**
-     * Open settings
-     */
-    openSettings() {
-        chrome.runtime.openOptionsPage();
-        window.close();
-    }
-
-    /**
      * Switch between the Rules and Settings panes.
      * The footer (New rule / Test all / Refresh) is Rules-only, so it is
      * hidden rather than shown disabled on Settings.
@@ -1104,7 +1103,10 @@ class SpliceTapPopup {
         if (paneSettings) paneSettings.hidden = isRules;
         if (footer) footer.hidden = !isRules;
 
-        if (!isRules) this.renderSettings();
+        if (!isRules) {
+            this.renderSettings();
+            this.renderDataSection();
+        }
     }
 
     /**
@@ -1173,6 +1175,168 @@ class SpliceTapPopup {
     updateTabCount() {
         const el = document.getElementById('tabRuleCount');
         if (el) el.textContent = String((this.rules || []).length);
+    }
+
+    /**
+     * Refresh the Data/Stored-data rows. Storage size is read straight from
+     * chrome.storage rather than measured off `this.rules`, so it reflects
+     * settings, stats and backups too — not just the rule list.
+     */
+    async renderDataSection() {
+        const count = (this.rules || []).length;
+        const countEl = document.getElementById('exportCount');
+        if (countEl) countEl.textContent = String(count);
+
+        const infoEl = document.getElementById('storageInfo');
+        if (!infoEl) return;
+        try {
+            const bytes = await chrome.storage.local.getBytesInUse(null);
+            const kb = bytes / 1024;
+            const size = kb < 1 ? `${bytes} B` : (kb < 1024 ? `${kb.toFixed(1)} KB` : `${(kb / 1024).toFixed(1)} MB`);
+            infoEl.textContent = `${size} · ${count} rule${count === 1 ? '' : 's'}`;
+        } catch (error) {
+            infoEl.textContent = `${count} rule${count === 1 ? '' : 's'}`;
+        }
+    }
+
+    /**
+     * Download the current rules as JSON. A download does not need a file
+     * picker, so unlike import this works from the popup — and because the
+     * browser owns the transfer, it still completes if the popup closes.
+     */
+    exportRules() {
+        const rules = this.rules || [];
+        if (!rules.length) {
+            this.showError('No rules to export');
+            return;
+        }
+        const payload = {
+            exportedAt: new Date().toISOString(),
+            rules
+        };
+        const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `splicetap-rules-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // Revoking immediately can cancel the download in some builds; give
+        // the browser a moment to take ownership of the blob first.
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        this.showNotification(`Exported ${rules.length} rule${rules.length === 1 ? '' : 's'}`);
+    }
+
+    /** Show/hide an inline disclosure panel and sync its trigger's aria-expanded. */
+    togglePanel(panelId, triggerId, show) {
+        const panel = document.getElementById(panelId);
+        const trigger = document.getElementById(triggerId);
+        if (!panel) return;
+        const next = typeof show === 'boolean' ? show : panel.hidden;
+        panel.hidden = !next;
+        if (trigger) trigger.setAttribute('aria-expanded', String(next));
+        if (next && panelId === 'importPanel') {
+            const ta = document.getElementById('importJson');
+            if (ta) ta.focus();
+        }
+    }
+
+    /**
+     * Parse pasted JSON and hand it to the background's bulk `setRules`,
+     * which validates each rule, skips the bad ones and allocates DNR ids —
+     * so this deliberately does not re-implement that validation.
+     */
+    async confirmImport() {
+        const ta = document.getElementById('importJson');
+        const raw = (ta && ta.value || '').trim();
+        if (!raw) {
+            this.showError('Paste some JSON first');
+            return;
+        }
+
+        let incoming;
+        try {
+            const parsed = JSON.parse(raw);
+            incoming = Array.isArray(parsed) ? parsed : parsed && parsed.rules;
+        } catch (error) {
+            this.showError('That is not valid JSON');
+            return;
+        }
+        if (!Array.isArray(incoming) || !incoming.length) {
+            this.showError('No rules found in that JSON');
+            return;
+        }
+
+        const merge = document.getElementById('importMerge');
+        const keepExisting = merge ? merge.checked : true;
+
+        // Fresh ids on merge so imported rules can never collide with, and
+        // therefore overwrite, a rule already stored under the same id.
+        const prepared = incoming.map((rule) => ({
+            ...rule,
+            id: keepExisting || !rule.id ? this.generateId() : rule.id
+        }));
+
+        // Re-fetch before merging: `this.rules` is a snapshot that may predate
+        // rules added from the overlay or another surface while this popup was
+        // open, and "keep existing" promises not to lose those.
+        let existing = [];
+        if (keepExisting) {
+            try {
+                const fresh = await this.sendMessage({ type: 'getRules' });
+                existing = (fresh && fresh.success && Array.isArray(fresh.rules)) ? fresh.rules : (this.rules || []);
+            } catch (error) {
+                existing = this.rules || [];
+            }
+        }
+
+        try {
+            const response = await this.sendMessage({
+                type: 'setRules',
+                rules: [...prepared, ...existing]
+            });
+            if (!response || !response.success) {
+                this.showError('Import failed');
+                return;
+            }
+            this.rules = response.rules || [];
+            const rejected = (response.rejected || []).length;
+            const added = prepared.length - rejected;
+            this.showNotification(
+                rejected
+                    ? `Imported ${added} rule${added === 1 ? '' : 's'}, skipped ${rejected} invalid`
+                    : `Imported ${added} rule${added === 1 ? '' : 's'}`
+            );
+            if (ta) ta.value = '';
+            this.togglePanel('importPanel', 'importToggleBtn', false);
+            this.renderRules();
+            this.updateTabCount();
+            this.renderDataSection();
+        } catch (error) {
+            console.error('Import failed:', error);
+            this.showError('Import failed');
+        }
+    }
+
+    /**
+     * Wipe every SpliceTap key. Rules go through the background so DNR is
+     * re-synced and tabs are told to stop intercepting; the remaining keys are
+     * removed directly since nothing else observes them.
+     */
+    async confirmReset() {
+        try {
+            await this.sendMessage({ type: 'clearRules' });
+            await chrome.storage.local.remove([
+                'spliceTapSettings', 'spliceTapStats', 'spliceTapMetrics',
+                'spliceTapChaos', 'spliceTapDnrCounter'
+            ]);
+            this.togglePanel('resetPanel', 'resetAllBtn', false);
+            this.showNotification('All SpliceTap data deleted');
+            setTimeout(() => window.location.reload(), 600);
+        } catch (error) {
+            console.error('Reset failed:', error);
+            this.showError('Could not delete data');
+        }
     }
 
     /**
