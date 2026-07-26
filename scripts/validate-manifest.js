@@ -59,7 +59,7 @@ function validateManifest() {
     try {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
         
-        console.log('🎭 SpliceTap Manifest Validation');
+        console.log('SpliceTap Manifest Validation');
         console.log('================================');
         
         // Check manifest version

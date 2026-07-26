@@ -233,4 +233,4 @@ Contributors are recognized in:
 - Release notes for significant contributions
 - Extension credits in the options page
 
-Thank you for contributing to SpliceTap! 🎭
+Thank you for contributing to SpliceTap!

@@ -1,8 +1,30 @@
-# 🎭 SpliceTap - API Mocker Browser Extension
+<div align="center">
 
-Mock, block, delay, redirect, and rewrite any API call directly in your browser. Perfect for frontend development, testing, and debugging — no proxy, no backend changes, no build step.
+<img src="assets/icons/icon-128.png" width="88" height="88" alt="">
 
-## ✨ Features
+# SpliceTap
+
+**Mock, block, delay, redirect and rewrite any API call — right in your browser.**
+
+No proxy. No backend changes. No build step.
+
+[![Version](https://img.shields.io/badge/version-0.0.1-1e63f5?style=flat-square)](https://github.com/Nataraaj-Shanmugam/SpliceTap/releases)
+[![Manifest V3](https://img.shields.io/badge/Manifest-V3-0bbcd4?style=flat-square)](https://developer.chrome.com/docs/extensions/mv3/intro/)
+[![Tests](https://img.shields.io/badge/tests-59%20passing-22c55e?style=flat-square)](#contributing)
+[![License](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
+
+[Website](https://nataraaj-shanmugam.github.io/SpliceTap/)&nbsp;·&nbsp;[Privacy Policy](https://nataraaj-shanmugam.github.io/SpliceTap/privacy.html)&nbsp;·&nbsp;[Report a bug](https://github.com/Nataraaj-Shanmugam/SpliceTap/issues)
+
+</div>
+
+---
+
+SpliceTap intercepts your app's HTTP traffic in the browser and answers it however you
+need — a canned response, a surgical edit to the real one, a failure, a delay, or a
+redirect to localhost. Useful when the endpoint isn't built yet, the error path won't
+reproduce, or the network is too fast to catch a loading state.
+
+## Features
 
 - **Six rule types**: Mock, Block, Delay, Redirect, Modify Headers, and Query Params
 - **Static & patch mocking**: Return a full synthetic response, or fetch the real one and surgically patch a few fields (RFC 7386 JSON Merge Patch)
@@ -14,7 +36,7 @@ Mock, block, delay, redirect, and rewrite any API call directly in your browser.
 - **Import/Export**: Backup and share your rules; v1 rule files migrate automatically
 - **Keyboard Shortcuts & Context Menu**: Fast rule creation from anywhere
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -43,9 +65,10 @@ Mock, block, delay, redirect, and rewrite any API call directly in your browser.
 
 3. **Testing Rules**:
    - Use the "Test" button in the popup to validate a rule's structure
-   - Status indicators: ✅ (passed), ❌ (failed), ⚠️ (warning), 🔄 (pending)
+   - Each rule card shows a status icon: a green check (passed), a red cross
+     (failed), an amber triangle (warning), or a grey clock (not yet tested)
 
-## 🧩 Rule Types
+## Rule Types
 
 Every rule has a `type`. Legacy rules exported without a `type` field are automatically migrated to `mock` on load.
 
@@ -75,7 +98,7 @@ Handled by `chrome.declarativeNetRequest` (see Architecture). `headersMod.reques
 ### `queryparams` — Add or remove URL query parameters
 Also handled by declarativeNetRequest. `queryParams.add` is an array of `{ key, value }`; `queryParams.remove` is an array of keys to strip.
 
-## 🎯 Matching & Precedence
+## Matching & Precedence
 
 - **URL pattern semantics** (case-insensitive):
   - Contains `*` → wildcard, anchored full-match (`*` alone matches everything)
@@ -85,7 +108,7 @@ Also handled by declarativeNetRequest. `queryParams.add` is an array of `{ key, 
 - **Precedence**: For interceptor-handled types (`mock`, `block`, `delay`, `redirect`), enabled rules are evaluated in array order and the **first** rule whose URL + method + headers + GraphQL conditions all match wins — only that rule is applied.
 - `headers` / `queryparams` rules are applied independently by the browser's network layer via declarativeNetRequest and are not part of this first-match ordering.
 
-## 📋 URL Pattern Examples
+## URL Pattern Examples
 
 ```
 # Wildcard patterns (anchored full match)
@@ -100,7 +123,7 @@ api.example.com/users  # Matches any URL containing this substring
 /api/(users|accounts)/ # Matches /api/users/ or /api/accounts/
 ```
 
-## 🔤 Dynamic Placeholders
+## Dynamic Placeholders
 
 Placeholders in a mock body (static mode) or patch payload are expanded per request. The full supported set:
 
@@ -121,7 +144,7 @@ Placeholders in a mock body (static mode) or patch payload are expanded per requ
 | `{{request.url}}` | The intercepted request's URL |
 | `{{request.method}}` | The intercepted request's method |
 
-## 🎨 Mock Response Examples
+## Mock Response Examples
 
 ### Success Response (static mode)
 ```json
@@ -139,7 +162,7 @@ Given a real API response of `{ "user": { "name": "Real", "role": "user" }, "cou
 ```
 produces `{ "user": { "name": "Real", "role": "admin" } }` — `role` is overwritten, `count` is deleted, everything else is preserved.
 
-## ⌨️ Keyboard Shortcuts
+## Keyboard Shortcuts
 
 - `Alt+Shift+M`: Toggle extension on/off (global, works on any page)
 - `Alt+Shift+N`: Create new rule — opens the in-page overlay on the active tab, falling back to the options page where the overlay can't run (global, works on any page)
@@ -149,7 +172,7 @@ produces `{ "user": { "name": "Real", "role": "admin" } }` — `role` is overwri
 - `Ctrl+R`: Refresh data (in popup)
 - `Escape`: Close popup
 
-## 🛠️ Advanced Features
+## Advanced Features
 
 ### Rule Templates
 The rule editor's "Quick Template" dropdown includes six ready-to-use presets: GraphQL Mock, Patch Response, Block Request, Redirect to localhost, CORS Unblock (headers), and Custom User-Agent (headers).
@@ -163,7 +186,7 @@ The rule editor's "Quick Template" dropdown includes six ready-to-use presets: G
 ### DevTools Panel
 Open Chrome DevTools and select the **SpliceTap** panel. Because mocked/blocked/delayed/redirected requests never reach the real network stack (and so can't appear in the normal Network tab), the panel instead shows SpliceTap's own interception log: it polls the background service worker every 2 seconds and renders each applied rule (method, URL, rule name, type, status, relative time), newest first. A "Clear" button empties the log.
 
-## 🔧 Technical Details
+## Technical Details
 
 ### Architecture
 SpliceTap intercepts requests through **two independent mechanisms**, depending on rule type:
@@ -201,7 +224,7 @@ SpliceTap's single purpose is local API request mocking and modification for dev
 - `headers` / `queryparams` (declarativeNetRequest) rules **cannot** use `match.headers` or `match.graphql` conditions — the network layer can't express them, so the editor rejects those combinations.
 - **Firefox** support is out of scope for this release.
 
-## 📊 Data Management
+## Data Management
 
 ### Storage Structure
 ```javascript
@@ -240,7 +263,7 @@ SpliceTap's single purpose is local API request mocking and modification for dev
 ```
 Type-specific fields also include `delayMs` (delay), `redirect.destination` (redirect), `headersMod` (headers), `queryParams` (queryparams), and an internal `dnrRuleId` allocated by the background worker for declarativeNetRequest-backed rules.
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
@@ -297,11 +320,11 @@ splicetap-extension/
 └── tests/                     # Jest test suites
 ```
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 📞 Support
+## Support
 
 - **Website**: [nataraaj-shanmugam.github.io/SpliceTap](https://nataraaj-shanmugam.github.io/SpliceTap/)
 - **Privacy Policy**: [PRIVACY.md](PRIVACY.md) · [hosted version](https://nataraaj-shanmugam.github.io/SpliceTap/privacy.html)
@@ -310,4 +333,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-Made with ❤️ by [Nataraaj Shanmugam](https://github.com/Nataraaj-Shanmugam)
+<div align="center">
+
+Built by [Nataraaj Shanmugam](https://github.com/Nataraaj-Shanmugam) · MIT Licensed
+
+</div>
