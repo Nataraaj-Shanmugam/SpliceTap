@@ -128,11 +128,6 @@
         return safeUrl;
     }
 
-    // Helper: sleep
-    function sleep(ms) {
-        return new Promise((resolve) => setTimeout(resolve, ms));
-    }
-
     // Helper: an AbortError matching what native fetch throws (Q-13).
     function abortError() {
         try {

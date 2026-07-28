@@ -6,7 +6,6 @@
  */
 
 // Constants at top of file
-const ANIMATION_DELAY = 150;
 const MODAL_OPEN_DELAY = 200;
 const MAX_NAME_LENGTH = 100;
 const MAX_URL_LENGTH = 500;
@@ -17,15 +16,6 @@ const MAX_DELAY = 30000;
 const MIN_DELAY_MS = 1;
 const MAX_DELAY_MS = 30000;
 const PREFILL_MAX_AGE_MS = 30000;
-
-const RULE_TYPE_LABELS = {
-    mock: 'Mock',
-    block: 'Block',
-    delay: 'Delay',
-    redirect: 'Redirect',
-    headers: 'Headers',
-    queryparams: 'Query Params'
-};
 
 // Tab -> page title map (U-7: the top-bar heading never updated on tab switch).
 // 'general' was retired when theme / debug / chaos moved into the popup's
@@ -57,7 +47,6 @@ class OptionsManager {
         this.settings = {};
         this.shortcuts = {};
         this.rules = [];
-        this.pendingConfirmAction = null;
         this.listeners = []; // Track listeners for cleanup
 
         // U-4: dirty-tracking for the rule editor, the longest form in the
@@ -1006,7 +995,6 @@ class OptionsManager {
         });
 
         // Confirmation modal
-        this.addListener('confirmBtn', 'click', () => this.executeConfirmAction());
 
         // U-4: any genuine user edit inside the rule editor form marks it dirty.
         // Programmatic `.value = ...` writes during populate/reset don't fire
@@ -1026,9 +1014,6 @@ class OptionsManager {
                 // changes (U-4) - accidental closes (backdrop/Escape) are the ones
                 // that get guarded, in requestCloseModal().
                 this.requestCloseModal(document.getElementById(el.dataset.modal), { force: true });
-                break;
-            case 'close-confirm':
-                this.closeConfirmModal();
                 break;
             case 'save-rule':
                 this.saveRuleFromEditor();
@@ -1246,10 +1231,10 @@ class OptionsManager {
             }
         }
     }
-
-
-
-
+
+
+
+
 
     async loadStatistics() {
         const totalRules = this.rules.length;
@@ -1308,24 +1293,7 @@ class OptionsManager {
         // place, so the old `window.scrollTo` call is gone.
     }
 
-    showConfirmation(title, message, onConfirm) {
-        const modal = document.getElementById('confirmModal');
-        const titleEl = document.getElementById('confirmTitle');
-        const messageEl = document.getElementById('confirmMessage');
 
-        if (!modal || !titleEl || !messageEl) return;
-
-        titleEl.textContent = title;
-        messageEl.textContent = message;
-
-        this.pendingConfirmAction = onConfirm;
-        this.openModal(modal);
-    }
-
-    closeConfirmModal() {
-        this.closeModalElement(document.getElementById('confirmModal'));
-        this.pendingConfirmAction = null;
-    }
 
     closeModal(modalId) {
         this.closeModalElement(document.getElementById(modalId));
@@ -1416,23 +1384,13 @@ class OptionsManager {
             this.showMessage('You have unsaved changes in this rule - click Cancel to discard them.', 'info');
             return;
         }
-        if (modal.id === 'confirmModal') {
-            this.closeConfirmModal();
-        } else {
-            this.closeModalElement(modal);
-        }
+        this.closeModalElement(modal);
     }
 
-    executeConfirmAction() {
-        if (this.pendingConfirmAction) {
-            this.pendingConfirmAction();
-            this.closeConfirmModal();
-        }
-    }
-
-
-
-
+
+
+
+
 
     formatJSON(elementId) {
         const el = document.getElementById(elementId);
@@ -1544,20 +1502,6 @@ class OptionsManager {
     generateId() {
         return 'item-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
     }
-}
-
-/**
- * G5.6: rule-type badge markup. Contract shared with popup/* (G6) - a single
- * `.rule-type-badge` class with a `data-type` attribute carrying the raw rule.type
- * value (default 'mock' for legacy rules with no type field).
- */
-function getRuleTypeLabel(type) {
-    return RULE_TYPE_LABELS[type] || RULE_TYPE_LABELS.mock;
-}
-
-function renderRuleTypeBadge(rule) {
-    const type = (rule && rule.type) || 'mock';
-    return `<span class="rule-type-badge" data-type="${type}">${getRuleTypeLabel(type)}</span>`;
 }
 
 // Initialize the options manager when DOM is ready
