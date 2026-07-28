@@ -622,8 +622,18 @@ class SpliceTapBackground {
         // Handle installation
         chrome.runtime.onInstalled.addListener((details) => {
             if (details.reason === 'install') {
-                console.log('SpliceTap installed, opening options page');
-                chrome.runtime.openOptionsPage();
+                // Deliberately does NOT open the options page. Everything a
+                // user needs — rules, data, settings — now lives in the popup;
+                // the options page only hosts the rule editor for cases the
+                // in-page overlay can't reach, so opening it on install landed
+                // people on a near-empty tab that explained nothing.
+                //
+                // A badge points at the toolbar icon instead, which is where
+                // the extension actually is. The popup's empty state carries
+                // the getting-started copy, and popup.js clears this the first
+                // time it opens.
+                chrome.action.setBadgeText({ text: 'NEW' });
+                chrome.action.setBadgeBackgroundColor({ color: '#1e63f5' });
             } else if (details.reason === 'update') {
                 console.log('SpliceTap updated to version', chrome.runtime.getManifest().version);
                 // Could trigger migration here if needed

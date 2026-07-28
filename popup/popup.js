@@ -68,6 +68,15 @@ class SpliceTapPopup {
             this.renderSettings();
             this.addShortcutHints();
 
+            // The install badge has done its job once the popup is open.
+            // Cleared unconditionally — it is a no-op when no badge is set,
+            // and cheaper than tracking a "seen" flag in storage.
+            try {
+                await chrome.action.setBadgeText({ text: '' });
+            } catch (error) {
+                // Non-fatal: the badge is a hint, not a feature.
+            }
+
             // Animate popup entrance
             document.body.classList.add('loaded');
             console.log('SpliceTap popup initialized');
