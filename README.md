@@ -178,13 +178,17 @@ produces `{ "user": { "name": "Real", "role": "admin" } }` — `role` is overwri
 The rule editor's "Quick Template" dropdown includes six ready-to-use presets: GraphQL Mock, Patch Response, Block Request, Redirect to localhost, CORS Unblock (headers), and Custom User-Agent (headers).
 
 ### Import/Export
-- Export your rules as JSON files for backup or sharing
-- Import rules from JSON files (merge or replace)
-- Automatic rule validation during import
+Both live in the popup's **Data** tab.
+- Export downloads your rules as a JSON file, for backup or sharing
+- Import takes JSON pasted into the panel, with a "Keep existing rules" option
+  for merge-versus-replace. There is no file picker: a Chrome popup closes the
+  moment an OS dialog takes focus, which would discard the import mid-flow
+- Every imported rule is validated, and invalid ones are skipped rather than
+  failing the whole batch — the result reports how many were skipped
 - **Migration**: v1 rule files (no `type` field) load transparently — each rule is normalized to `type: 'mock'` with `response.mode: 'static'`
 
 ### DevTools Panel
-Open Chrome DevTools and select the **SpliceTap** panel. Because mocked/blocked/delayed/redirected requests never reach the real network stack (and so can't appear in the normal Network tab), the panel instead shows SpliceTap's own interception log: it polls the background service worker every 2 seconds and renders each applied rule (method, URL, rule name, type, status, relative time), newest first. A "Clear" button empties the log.
+Open Chrome DevTools and select the **SpliceTap** panel. Because mocked/blocked/delayed/redirected requests never reach the real network stack (and so can't appear in the normal Network tab), the panel instead shows SpliceTap's own interception log: it polls the background service worker every 3 seconds and renders each applied rule (method, URL, rule name, type, status, relative time), newest first. A "Clear" button empties the log.
 
 ## Technical Details
 

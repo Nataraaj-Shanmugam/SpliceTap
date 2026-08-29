@@ -869,6 +869,15 @@
             if (!response || !response.success) {
                 throw new Error((response && response.error) || 'Background rejected the rule.');
             }
+            // CQ-3: the rule saved, but declarativeNetRequest refused it — so a
+            // headers/queryparams rule will never actually apply. Keep the
+            // editor open and say so rather than closing on a false success.
+            if (response.dnrWarning) {
+                showError('Rule saved, but it could not be applied to the network layer: ' + response.dnrWarning);
+                btn.disabled = false;
+                btn.textContent = 'Save Rule';
+                return;
+            }
             close();
         } catch (e) {
             showError('Failed to save: ' + e.message);

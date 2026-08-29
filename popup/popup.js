@@ -798,6 +798,13 @@ class SpliceTapPopup {
             newRule.name = `${rule.name} (Copy)`;
             newRule.enabled = false;
             newRule.created = new Date().toISOString();
+            // PROD-1: dnrRuleId identifies a declarativeNetRequest rule, and
+            // saveRule only allocates one when it is missing. Cloning it meant
+            // enabling the copy sent Chrome two DNR rules with the same id;
+            // updateDynamicRules rejects the whole batch, so EVERY headers and
+            // queryparams rule silently stopped applying. Drop it so the copy
+            // gets its own.
+            delete newRule.dnrRuleId;
 
             const response = await this.sendMessage({
                 type: 'saveRule',
@@ -1316,11 +1323,17 @@ class SpliceTapPopup {
             this.rules = response.rules || [];
             const rejected = (response.rejected || []).length;
             const added = prepared.length - rejected;
-            this.showNotification(
-                rejected
-                    ? `Imported ${added} rule${added === 1 ? '' : 's'}, skipped ${rejected} invalid`
-                    : `Imported ${added} rule${added === 1 ? '' : 's'}`
-            );
+            const summary = rejected
+                ? `Imported ${added} rule${added === 1 ? '' : 's'}, skipped ${rejected} invalid`
+                : `Imported ${added} rule${added === 1 ? '' : 's'}`;
+            // CQ-3: an imported headers/queryparams rule can be stored yet
+            // rejected by declarativeNetRequest, which previously left the user
+            // with an unqualified success message for a rule that never applies.
+            if (response.dnrWarning) {
+                this.showError(`${summary} — but the network-layer rules could not be applied: ${response.dnrWarning}`);
+            } else {
+                this.showNotification(summary);
+            }
             if (ta) ta.value = '';
             this.togglePanel('importPanel', 'importToggleBtn', false);
             this.renderRules();

@@ -918,7 +918,15 @@ label.set-info {
   outline-offset: -2px;
 }
 
-.rule-card.disabled {
+/* A11Y-2: this used `opacity: 0.62` on the whole row, which dimmed the very
+   "Disabled" chip and rule text that were added to keep disabled rules legible
+   — measured 2.91:1 for the chip and 2.54:1 for the name in light theme,
+   against a 4.5:1 requirement (WCAG 2.1 SC 1.4.3). Dim through colour instead,
+   the same approach `.set-row.is-disabled` already uses, so the contrast stays
+   measurable. Only the non-text parts keep a visual fade. */
+.rule-card.disabled .rule-icon,
+.rule-card.disabled .method-badge,
+.rule-card.disabled .rule-type-badge {
   opacity: 0.62;
 }
 

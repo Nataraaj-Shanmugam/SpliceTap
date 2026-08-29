@@ -172,11 +172,18 @@ class SpliceTapBackground {
                     if ((ruleToSave.type === 'headers' || ruleToSave.type === 'queryparams') && !ruleToSave.dnrRuleId) {
                         ruleToSave.dnrRuleId = await this.allocateDnrIdSerialized();
                     }
-                    const savedRule = await this.storage.saveRule(ruleToSave);
+                    // QA-1: the storage layer's own result used to be discarded
+                    // here, so a quota-exceeded write still answered
+                    // success:true and the editor reported "Rule saved
+                    // successfully!" over a rule that was never persisted.
+                    const saveResult = await this.storage.saveRule(ruleToSave);
+                    if (!saveResult || !saveResult.success) {
+                        return { success: false, error: (saveResult && saveResult.error) || 'Failed to save rule' };
+                    }
                     this.rules = await this.storage.getRules();
                     await this.broadcastState();
                     const dnrResult = await syncDnrRules(this.rules, this.isActive);
-                    return { success: true, rule: savedRule, dnrWarning: dnrResult.success ? undefined : dnrResult.error };
+                    return { success: true, rule: saveResult.rule, dnrWarning: dnrResult.success ? undefined : dnrResult.error };
                 }
 
                 case 'setRules': {
@@ -208,7 +215,10 @@ class SpliceTapBackground {
                         }
                         prepared.push(rule);
                     }
-                    await this.storage.saveRules(prepared);
+                    const bulkResult = await this.storage.saveRules(prepared);
+                    if (!bulkResult || !bulkResult.success) {
+                        return { success: false, error: (bulkResult && bulkResult.error) || 'Failed to save rules' };
+                    }
                     this.rules = await this.storage.getRules();
                     await this.broadcastState();
                     const dnrResult = await syncDnrRules(this.rules, this.isActive);
@@ -224,7 +234,10 @@ class SpliceTapBackground {
                     if (!request.ruleId) {
                         throw new Error('Rule ID is required');
                     }
-                    await this.storage.toggleRule(request.ruleId, request.enabled);
+                    const toggleResult = await this.storage.toggleRule(request.ruleId, request.enabled);
+                    if (!toggleResult || !toggleResult.success) {
+                        return { success: false, error: (toggleResult && toggleResult.error) || 'Failed to toggle rule' };
+                    }
                     this.rules = await this.storage.getRules();
                     await this.broadcastState();
                     await syncDnrRules(this.rules, this.isActive);
@@ -234,7 +247,10 @@ class SpliceTapBackground {
                     if (!request.ruleId) {
                         throw new Error('Rule ID is required');
                     }
-                    await this.storage.deleteRule(request.ruleId);
+                    const deleteResult = await this.storage.deleteRule(request.ruleId);
+                    if (!deleteResult || !deleteResult.success) {
+                        return { success: false, error: (deleteResult && deleteResult.error) || 'Failed to delete rule' };
+                    }
                     this.rules = await this.storage.getRules();
                     await this.broadcastState();
                     await syncDnrRules(this.rules, this.isActive);

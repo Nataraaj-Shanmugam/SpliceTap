@@ -18,11 +18,61 @@
     const PATTERN_CACHE_MAX = 500;
     const patternCache = new Map();
 
-    // Crude nested-quantifier detector used as a ReDoS guard (S-10 / Q-30).
-    // Catches the classic catastrophic-backtracking shapes such as (a+)+,
-    // (a*)*, (.+)+, (\d*)* etc. Not exhaustive, but cheap and zero false
-    // positives on ordinary patterns.
-    const NESTED_QUANTIFIER_RE = /\([^()]*[+*][^()]*\)[+*]/;
+    // ReDoS guard. This used to be a shape test for nested quantifiers
+    // (/\([^()]*[+*][^()]*\)[+*]/), which caught (a+)+ but sailed straight past
+    // (a|a)+ — a textbook catastrophic shape that measured 42 SECONDS against a
+    // 28-character URL, hanging the tab. Any shape blocklist is a guess about
+    // which forms are slow; this measures whether THIS pattern is actually slow.
+    //
+    // The regex is run against escalating runs of characters it references,
+    // each followed by a terminator that forces a failed match — the shape that
+    // makes a backtracking engine explore exponentially many paths. Cost grows
+    // ~4x per +4 characters, so a catastrophic pattern blows the budget while
+    // lengths are still cheap, and we stop before ever reaching the slow ones.
+    //
+    // Measured: legitimate patterns finish in <1ms; catastrophic ones are
+    // rejected in 25-45ms. Only ever paid once per unique pattern (cached).
+    const PROBE_LENGTHS = [18, 22, 26, 30, 34];
+    const PROBE_BUDGET_MS = 20;
+
+    function probeAlphabet(regexBody) {
+        // Characters the pattern actually mentions, so probes can partially
+        // match and force backtracking. 'a'/'0' are always included because a
+        // pattern may reference classes (\d, \w) rather than literals.
+        const literals = Array.from(new Set(regexBody.match(/[A-Za-z0-9]/g) || [])).slice(0, 3);
+        return Array.from(new Set([...literals, 'a', '0'])).slice(0, 5);
+    }
+
+    function isCatastrophicRegex(regexBody) {
+        let re;
+        try {
+            re = new RegExp(regexBody, 'i');
+        } catch (error) {
+            return true;
+        }
+        const alphabet = probeAlphabet(regexBody);
+        const start = Date.now();
+        for (const len of PROBE_LENGTHS) {
+            for (const ch of alphabet) {
+                try {
+                    re.test(ch.repeat(len) + '￿');
+                } catch (error) {
+                    return true;
+                }
+                if (Date.now() - start > PROBE_BUDGET_MS) return true;
+            }
+            if (alphabet.length > 1) {
+                const mixed = (alphabet[0] + alphabet[1]).repeat(Math.ceil(len / 2)).slice(0, len);
+                try {
+                    re.test(mixed + '￿');
+                } catch (error) {
+                    return true;
+                }
+                if (Date.now() - start > PROBE_BUDGET_MS) return true;
+            }
+        }
+        return false;
+    }
 
     // Single-slot memo for the last URL's lowercase form (P-4): within one
     // findMatchingRule scan, matchUrl is called repeatedly with the SAME url
@@ -50,7 +100,7 @@
                 if (regexBody.length === 0) {
                     // Q-10: '/' or '//' must not become an empty regex that matches everything.
                     compiled = { kind: 'never' };
-                } else if (NESTED_QUANTIFIER_RE.test(regexBody)) {
+                } else if (isCatastrophicRegex(regexBody)) {
                     console.error('SpliceTap: refusing potentially catastrophic regex pattern:', pattern);
                     compiled = { kind: 'never' };
                 } else {
@@ -174,7 +224,10 @@
         return null;
     }
 
-    const api = { matchUrl, matchHeaders, matchGraphQL, findMatchingRule };
+    // isCatastrophicRegex is exported so the save-time validator and the
+    // redirect path guard against the same thing this matcher does, rather
+    // than each re-deriving (or, as before, omitting) the check.
+    const api = { matchUrl, matchHeaders, matchGraphQL, findMatchingRule, isCatastrophicRegex };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;

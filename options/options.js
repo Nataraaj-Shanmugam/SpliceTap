@@ -707,7 +707,19 @@ class OptionsManager {
             }
 
             this.ruleFormDirty = false;
-            this.showMessage('Rule saved successfully!', 'success');
+            // CQ-3: the background reports a declarativeNetRequest sync failure
+            // in `dnrWarning`, and nothing used to read it — so a headers or
+            // queryparams rule that never reached the network layer still
+            // showed "Rule saved successfully!". The rule IS stored, so this is
+            // a warning rather than an error, but it must be said out loud.
+            if (response.dnrWarning) {
+                this.showMessage(
+                    'Rule saved, but it could not be applied to the network layer: ' + response.dnrWarning,
+                    'error'
+                );
+            } else {
+                this.showMessage('Rule saved successfully!', 'success');
+            }
             this.loadStatistics();
             this.closeModal('ruleEditorModal');
         } catch (error) {

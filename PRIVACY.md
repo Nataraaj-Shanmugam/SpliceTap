@@ -40,10 +40,17 @@ traffic on those pages in order to match it against your rules. This access
 is used only to apply your rules and log the metadata described above — it
 is never transmitted anywhere.
 
-## Rule import
+## Rule import and export
 
-If you import a rules JSON file (Options → Rules → Import), it is read
-locally and validated before being applied; it is never uploaded anywhere.
+Export (popup → Data → Export) writes a JSON file of your rules to your own
+downloads folder.
+
+Import (popup → Data → Import) takes JSON you paste into the extension. There
+is no file picker: a Chrome popup closes as soon as an operating-system dialog
+takes focus, which would discard the import mid-flow.
+
+Both operations are entirely local. Pasted JSON is validated and applied on
+your own device, and neither export nor import uploads anything anywhere.
 
 ## Questions
 

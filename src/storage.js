@@ -43,6 +43,31 @@ export class SpliceTapStorage {
         this.QUOTA_BYTES = chrome.storage.local.QUOTA_BYTES || 10485760; // 10MB default
         this.QUOTA_WARNING_THRESHOLD = 0.8; // Warn at 80%
         this.MAX_BACKUPS = 5; // Keep only 5 most recent backups
+
+        // QA-2: saveRule/deleteRule/toggleRule are read-modify-write
+        // (getRules -> mutate -> saveRules). Run concurrently — popup and
+        // options open at once, or an import racing a toggle — the second read
+        // sees the pre-first-write array and its write clobbers the first,
+        // silently dropping a rule while both callers are told they succeeded.
+        // Reproduced: two concurrent saveRule calls left only one rule stored.
+        //
+        // Every such operation is funnelled through this promise chain so they
+        // execute one at a time. This mirrors allocateDnrIdSerialized() in
+        // background.js, which already solved exactly this race for the DNR id
+        // counter but was never applied to the rules array itself.
+        this._mutationChain = Promise.resolve();
+    }
+
+    /**
+     * Queue a read-modify-write behind any mutation already in flight.
+     * The chain deliberately swallows rejections for the *chain's* purposes
+     * (so one failure doesn't wedge every later write) while still returning
+     * the real result — success or failure — to this particular caller.
+     */
+    _serializeMutation(operation) {
+        const result = this._mutationChain.then(operation, operation);
+        this._mutationChain = result.then(() => undefined, () => undefined);
+        return result;
     }
 
     async loadAll() {
@@ -147,60 +172,74 @@ export class SpliceTapStorage {
         }
     }
 
+    /**
+     * Upsert a rule by id. Returns a uniform { success, rule?, error? } — the
+     * old contract returned the bare rule on success and a result object on
+     * failure, which is exactly why background.js's `savedRule` could hold an
+     * error object while the handler still answered success:true (QA-1).
+     */
     async saveRule(rule) {
-        try {
-            const rules = await this.getRules();
-            const existingIndex = rules.findIndex(r => r.id === rule.id);
+        return this._serializeMutation(async () => {
+            try {
+                const rules = await this.getRules();
+                const existingIndex = rules.findIndex(r => r.id === rule.id);
 
-            if (existingIndex >= 0) {
-                rules[existingIndex] = { 
-                    ...rule, 
-                    lastModified: new Date().toISOString() 
-                };
-            } else {
-                rules.push({ 
-                    ...rule, 
-                    created: new Date().toISOString(),
-                    lastModified: new Date().toISOString()
-                });
+                if (existingIndex >= 0) {
+                    rules[existingIndex] = {
+                        ...rule,
+                        lastModified: new Date().toISOString()
+                    };
+                } else {
+                    rules.push({
+                        ...rule,
+                        created: new Date().toISOString(),
+                        lastModified: new Date().toISOString()
+                    });
+                }
+
+                const result = await this.saveRules(rules);
+                return result.success
+                    ? { success: true, rule }
+                    : { success: false, error: result.error };
+            } catch (error) {
+                console.error('Failed to save rule:', error);
+                return { success: false, error: error.message };
             }
-
-            const result = await this.saveRules(rules);
-            return result.success ? rule : result;
-        } catch (error) {
-            console.error('Failed to save rule:', error);
-            return { success: false, error: error.message };
-        }
+        });
     }
 
     async deleteRule(ruleId) {
-        try {
-            const rules = await this.getRules();
-            const filteredRules = rules.filter(r => r.id !== ruleId);
-            return await this.saveRules(filteredRules);
-        } catch (error) {
-            console.error('Failed to delete rule:', error);
-            return { success: false, error: error.message };
-        }
+        return this._serializeMutation(async () => {
+            try {
+                const rules = await this.getRules();
+                const filteredRules = rules.filter(r => r.id !== ruleId);
+                return await this.saveRules(filteredRules);
+            } catch (error) {
+                console.error('Failed to delete rule:', error);
+                return { success: false, error: error.message };
+            }
+        });
     }
 
     async toggleRule(ruleId, enabled) {
-        try {
-            const rules = await this.getRules();
-            const rule = rules.find(r => r.id === ruleId);
+        return this._serializeMutation(async () => {
+            try {
+                const rules = await this.getRules();
+                const rule = rules.find(r => r.id === ruleId);
 
-            if (!rule) {
-                return { success: false, error: 'Rule not found' };
+                if (!rule) {
+                    return { success: false, error: 'Rule not found' };
+                }
+
+                rule.enabled = enabled;
+                rule.lastModified = new Date().toISOString();
+
+                return await this.saveRules(rules);
+            } catch (error) {
+                console.error('Failed to toggle rule:', error);
+                return { success: false, error: error.message };
             }
-
-            rule.enabled = enabled;
-            rule.lastModified = new Date().toISOString();
-
-            return await this.saveRules(rules);
-        } catch (error) {
-            console.error('Failed to toggle rule:', error);
-            return { success: false, error: error.message };
-        }
+        });
     }
 
     async saveActiveState(active) {

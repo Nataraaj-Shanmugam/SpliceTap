@@ -49,6 +49,18 @@ export class SpliceTapUtils {
                     return { isValid: false, error: 'Regex pattern cannot be empty' };
                 }
                 new RegExp(regexBody, 'i');
+                // SEC-1: compiling only proves the syntax is legal, not that the
+                // pattern terminates. A shape like /(a|a)+$/ compiles fine and
+                // then hangs the tab for ~42s per request. Reject it at save
+                // time so it can never reach the interceptor.
+                const matcher = (typeof window !== 'undefined' && window.SpliceTapMatcher)
+                    || (typeof globalThis !== 'undefined' && globalThis.SpliceTapMatcher);
+                if (matcher && matcher.isCatastrophicRegex && matcher.isCatastrophicRegex(regexBody)) {
+                    return {
+                        isValid: false,
+                        error: 'This regex can backtrack catastrophically and would freeze the page. Simplify it — nested or ambiguous repetition like (a|a)+ is the usual cause.'
+                    };
+                }
                 return { isValid: true };
             } else {
                 // Literal string pattern

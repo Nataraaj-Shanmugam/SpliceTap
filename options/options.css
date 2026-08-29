@@ -621,11 +621,28 @@ select {
   display: none;
 }
 
+/* A11Y-1: this lives in .content-scroll, NOT inside the modal, and the rule
+   editor's Save button sits outside <form> so a failed save never closes the
+   modal. Without a stacking context above .modal (position:fixed, z-index:1000,
+   opaque backdrop) every validation error rendered behind it — invisible to
+   sighted users, while screen readers still announced it from the live region.
+   Fixed-position it above the modal so the message is actually seen. */
 .message-container {
-  margin-bottom: 16px;
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1100;
+  width: min(560px, calc(100vw - 32px));
+  margin-bottom: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  pointer-events: none;
+}
+
+.message-container > * {
+  pointer-events: auto;
 }
 
 .message {

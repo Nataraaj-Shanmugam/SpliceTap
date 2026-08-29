@@ -187,6 +187,14 @@
         if (typeof pattern === 'string' && pattern.length >= 2 && pattern.startsWith('/') && pattern.endsWith('/')) {
             const regexBody = pattern.slice(1, -1);
             try {
+                // SEC-1: this compiled the raw body directly, bypassing the
+                // matcher's ReDoS guard entirely — so a pattern the matcher
+                // refused to run could still hang the page here. Reuse the same
+                // check rather than trusting that matchUrl already vetted it.
+                const matcher = window.SpliceTapMatcher;
+                if (matcher && matcher.isCatastrophicRegex && matcher.isCatastrophicRegex(regexBody)) {
+                    return destination;
+                }
                 return sourceUrl.replace(new RegExp(regexBody, 'i'), destination);
             } catch (e) {
                 return destination;
