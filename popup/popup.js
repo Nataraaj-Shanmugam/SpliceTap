@@ -1293,10 +1293,20 @@ class SpliceTapPopup {
 
         // Fresh ids on merge so imported rules can never collide with, and
         // therefore overwrite, a rule already stored under the same id.
-        const prepared = incoming.map((rule) => ({
-            ...rule,
-            id: keepExisting || !rule.id ? this.generateId() : rule.id
-        }));
+        const prepared = incoming.map((rule) => {
+            const next = {
+                ...rule,
+                id: keepExisting || !rule.id ? this.generateId() : rule.id
+            };
+            // Same collision as duplicating a rule (PROD-1): exports carry
+            // dnrRuleId, and setRules only allocates one when it is missing.
+            // Re-importing alongside the originals would hand Chrome two DNR
+            // rules with the same id, which rejects the entire batch and takes
+            // every headers/queryparams rule down with it. The id is an
+            // internal allocation, never user data, so always re-issue it.
+            delete next.dnrRuleId;
+            return next;
+        });
 
         // Re-fetch before merging: `this.rules` is a snapshot that may predate
         // rules added from the overlay or another surface while this popup was

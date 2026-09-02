@@ -173,6 +173,24 @@ export class SpliceTapStorage {
     }
 
     /**
+     * Whole-array replacement (bulk import, clear-all), queued behind any
+     * in-flight single-rule mutation.
+     *
+     * This is a separate entry point rather than serialization inside
+     * saveRules() because saveRule/deleteRule/toggleRule call saveRules() from
+     * *within* the chain — serializing it there would make them await a lock
+     * they already hold, and deadlock.
+     *
+     * Note this closes the storage-level race only. Import still merges in the
+     * popup (getRules -> combine -> setRules), so a rule created between those
+     * two steps can still be missed; fixing that needs the merge to move into
+     * the background, which is a larger change than a launch fix.
+     */
+    async replaceRules(rules) {
+        return this._serializeMutation(() => this.saveRules(rules));
+    }
+
+    /**
      * Upsert a rule by id. Returns a uniform { success, rule?, error? } — the
      * old contract returned the bare rule on success and a result object on
      * failure, which is exactly why background.js's `savedRule` could hold an

@@ -215,7 +215,7 @@ class SpliceTapBackground {
                         }
                         prepared.push(rule);
                     }
-                    const bulkResult = await this.storage.saveRules(prepared);
+                    const bulkResult = await this.storage.replaceRules(prepared);
                     if (!bulkResult || !bulkResult.success) {
                         return { success: false, error: (bulkResult && bulkResult.error) || 'Failed to save rules' };
                     }
@@ -264,12 +264,19 @@ class SpliceTapBackground {
                     await this.storage.updateStats(this.stats);
                     return { success: true, stats: this.stats };
 
-                case 'clearRules':
-                    await this.storage.saveRules([]);
+                case 'clearRules': {
+                    // QA-1: "delete everything" reporting success while the
+                    // write failed is the worst version of this bug — the user
+                    // believes their rules are gone when they are not.
+                    const clearResult = await this.storage.replaceRules([]);
+                    if (!clearResult || !clearResult.success) {
+                        return { success: false, error: (clearResult && clearResult.error) || 'Failed to clear rules' };
+                    }
                     this.rules = [];
                     await this.broadcastState();
                     await syncDnrRules(this.rules, this.isActive);
                     return { success: true };
+                }
 
                 case 'testRule':
                     if (!request.rule) {
@@ -277,13 +284,20 @@ class SpliceTapBackground {
                     }
                     return await this.validateRule(request.rule);
 
-                case 'settingsUpdated':
+                case 'settingsUpdated': {
                     if (request.settings) {
                         this.settings = request.settings;
-                        await this.storage.saveSettings(this.settings);
+                        // QA-1: the popup's Settings tab saves on every change
+                        // with no Save button, so a silently failed write would
+                        // leave the UI showing a setting that was never stored.
+                        const settingsResult = await this.storage.saveSettings(this.settings);
+                        if (settingsResult && settingsResult.success === false) {
+                            return { success: false, error: settingsResult.error || 'Failed to save settings' };
+                        }
                         await this.broadcastState();
                     }
                     return { success: true };
+                }
 
                 case 'logInterception':
                     if (request.entry) {
