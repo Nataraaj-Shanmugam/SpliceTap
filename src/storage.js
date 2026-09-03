@@ -409,9 +409,6 @@ export class SpliceTapStorage {
     /**
      * Generate unique ID for rules
      */
-    generateId(prefix = 'rule') {
-        return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    }
 }
 
 // Also expose as global for non-module contexts (popup, options page)

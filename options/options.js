@@ -7,14 +7,16 @@
 
 // Constants at top of file
 const MODAL_OPEN_DELAY = 200;
-const MAX_NAME_LENGTH = 100;
-const MAX_URL_LENGTH = 500;
-const MIN_STATUS_CODE = 100;
-const MAX_STATUS_CODE = 599;
-const MIN_DELAY = 0;
-const MAX_DELAY = 30000;
-const MIN_DELAY_MS = 1;
-const MAX_DELAY_MS = 30000;
+// CQ-10: one definition of the rule-schema limits, in src/common.js.
+const LIMITS = globalThis.SpliceTapCommon.LIMITS;
+const MAX_NAME_LENGTH = LIMITS.NAME_MAX;
+const MAX_URL_LENGTH = LIMITS.URL_MAX;
+const MIN_STATUS_CODE = LIMITS.STATUS_MIN;
+const MAX_STATUS_CODE = LIMITS.STATUS_MAX;
+const MIN_DELAY = LIMITS.DELAY_MIN;
+const MAX_DELAY = LIMITS.DELAY_MAX;
+const MIN_DELAY_MS = LIMITS.DELAY_MS_MIN;
+const MAX_DELAY_MS = LIMITS.DELAY_MS_MAX;
 const PREFILL_MAX_AGE_MS = 30000;
 
 // Tab -> page title map (U-7: the top-bar heading never updated on tab switch).
@@ -1479,8 +1481,10 @@ class OptionsManager {
         setTimeout(() => URL.revokeObjectURL(url), 100);
     }
 
+    // CQ-6: this produced ids shaped `item-...` while every other surface
+    // produced `rule_...`. Shared implementation now — see src/common.js.
     generateId() {
-        return 'item-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        return globalThis.SpliceTapCommon.generateId();
     }
 }
 

@@ -31,6 +31,19 @@
 
     const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', '*'];
 
+    // CQ-10: the rule-schema limits, read from the one shared definition
+    // (src/common.js) rather than repeated as literals here. Resolved lazily
+    // through a function so this file does not depend on content-script
+    // execution order, and still degrades to the documented defaults if the
+    // shared module somehow did not load.
+    function L() {
+        return (window.SpliceTapCommon && window.SpliceTapCommon.LIMITS) || {
+            STATUS_MIN: 100, STATUS_MAX: 599,
+            DELAY_MIN: 0, DELAY_MAX: 30000,
+            DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000
+        };
+    }
+
     const RULE_TYPES = [
         ['mock', 'Mock Response'],
         ['block', 'Block'],
@@ -535,7 +548,7 @@
               <!-- delay -->
               <div class="tm-field" data-types="delay">
                 <label for="tmDelayMs">Delay (ms)</label>
-                <input type="number" id="tmDelayMs" value="1000" min="1" max="30000">
+                <input type="number" id="tmDelayMs" value="1000" min="${L().DELAY_MS_MIN}" max="${L().DELAY_MS_MAX}">
                 <span class="tm-hint">Request passes through to the network after this delay.</span>
               </div>
 
@@ -853,11 +866,11 @@
 
             const mode = $('tmMode').value;
             const statusCode = parseInt($('tmStatus').value, 10);
-            if (isNaN(statusCode) || statusCode < 100 || statusCode > 599) {
+            if (isNaN(statusCode) || statusCode < L().STATUS_MIN || statusCode > L().STATUS_MAX) {
                 throw new Error('Status code must be between 100 and 599.');
             }
             const delay = parseInt($('tmDelay').value, 10) || 0;
-            if (delay < 0 || delay > 30000) throw new Error('Delay must be between 0 and 30000 ms.');
+            if (delay < L().DELAY_MIN || delay > L().DELAY_MAX) throw new Error(`Delay must be between ${L().DELAY_MIN} and ${L().DELAY_MAX} ms.`);
 
             rule.response = {
                 statusCode,
@@ -886,7 +899,7 @@
             }
         } else if (type === 'delay') {
             const ms = parseInt($('tmDelayMs').value, 10);
-            if (isNaN(ms) || ms < 1 || ms > 30000) throw new Error('Delay must be between 1 and 30000 ms.');
+            if (isNaN(ms) || ms < L().DELAY_MS_MIN || ms > L().DELAY_MS_MAX) throw new Error(`Delay must be between ${L().DELAY_MS_MIN} and ${L().DELAY_MS_MAX} ms.`);
             rule.delayMs = ms;
         } else if (type === 'redirect') {
             const dest = $('tmRedirect').value.trim();

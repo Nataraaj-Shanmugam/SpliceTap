@@ -76,19 +76,9 @@
     // textContent / setAttribute), which side-steps this class of bug by
     // construction, but this helper is kept — correctly, this time — for the
     // remaining innerHTML sink (the error banner) and for anyone reusing it.
+    // CQ-6: shared implementation — see src/common.js.
     function escapeHtml(value) {
-        if (value === null || value === undefined) return '';
-        return String(value).replace(/[&<>"'/]/g, (ch) => {
-            switch (ch) {
-                case '&': return '&amp;';
-                case '<': return '&lt;';
-                case '>': return '&gt;';
-                case '"': return '&quot;';
-                case "'": return '&#39;';
-                case '/': return '&#47;';
-                default: return ch;
-            }
-        });
+        return window.SpliceTapCommon.escapeHtml(value);
     }
 
     // A stable-ish identity for a log entry. The background's ring buffer

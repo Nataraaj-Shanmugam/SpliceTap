@@ -2027,13 +2027,9 @@ class SpliceTapPopup {
      * (e.g. from an imported rules JSON) could break out of the attribute
      * and inject arbitrary markup/attributes.
      */
+    // CQ-6: delegates to src/common.js so every surface escapes identically.
     escapeHtml(text) {
-        return String(text == null ? '' : text)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
+        return window.SpliceTapCommon.escapeHtml(text);
     }
 
     /**
@@ -2046,8 +2042,9 @@ class SpliceTapPopup {
     /**
      * Utility: Generate ID
      */
+    // CQ-6: shared implementation — see src/common.js.
     generateId() {
-        return `rule_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        return window.SpliceTapCommon.generateId();
     }
 
     /**

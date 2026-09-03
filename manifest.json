@@ -45,6 +45,7 @@
         "<all_urls>"
       ],
       "js": [
+        "src/common.js",
         "src/templates.js",
         "content/overlay.js"
       ],

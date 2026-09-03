@@ -12,8 +12,11 @@ import { SpliceTapUtils } from '../src/utils.js';
 // then read the API off globalThis, the same pattern injected.js uses for
 // the G1 shared modules via `window.SpliceTapMatcher` etc.
 import './dnr.js';
+// CQ-10: shared rule-schema limits (UMD; read off globalThis after import).
+import '../src/common.js';
 
 const { syncDnrRules } = globalThis.SpliceTapDnr;
+const { LIMITS } = globalThis.SpliceTapCommon;
 
 class SpliceTapBackground {
     constructor() {
@@ -715,15 +718,15 @@ class SpliceTapBackground {
 
                 if (rule.response.delay !== undefined) {
                     const delay = parseInt(rule.response.delay, 10);
-                    if (isNaN(delay) || delay < 0 || delay > 30000) {
-                        errors.push('Delay must be between 0 and 30000 ms');
+                    if (isNaN(delay) || delay < LIMITS.DELAY_MIN || delay > LIMITS.DELAY_MAX) {
+                        errors.push(`Delay must be between ${LIMITS.DELAY_MIN} and ${LIMITS.DELAY_MAX} ms`);
                     }
                 }
             }
         } else if (type === 'delay') {
             const ms = parseInt(rule.delayMs, 10);
-            if (isNaN(ms) || ms < 1 || ms > 30000) {
-                errors.push('Delay must be between 1 and 30000 ms');
+            if (isNaN(ms) || ms < LIMITS.DELAY_MS_MIN || ms > LIMITS.DELAY_MS_MAX) {
+                errors.push(`Delay must be between ${LIMITS.DELAY_MS_MIN} and ${LIMITS.DELAY_MS_MAX} ms`);
             }
         } else if (type === 'redirect') {
             if (!rule.redirect || !rule.redirect.destination) {

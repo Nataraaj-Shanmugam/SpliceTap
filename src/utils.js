@@ -12,9 +12,6 @@ import './matcher.js';
 import './placeholders.js';
 
 export class SpliceTapUtils {
-    static generateId(prefix = 'rule') {
-        return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    }
 
     static validateUrlPattern(pattern) {
         // Enhanced validation with edge cases
@@ -79,7 +76,7 @@ export class SpliceTapUtils {
     static matchUrl(url, pattern) {
         return globalThis.SpliceTapMatcher.matchUrl(url, pattern);
     }
-
+
 
     static validateStatusCode(code) {
         const numCode = parseInt(code, 10);
@@ -94,7 +91,7 @@ export class SpliceTapUtils {
 
         return { isValid: true, code: numCode };
     }
-
+
 
     // S-6: the textContent -> innerHTML round-trip escapes & < > but NOT
     // quotes, which is unsafe when the output is placed inside an HTML
@@ -125,14 +122,14 @@ export class SpliceTapUtils {
         }
         return obj;
     }
-
-
-
-
-
-
-
-
+
+
+
+
+
+
+
+
 
     /**
      * Process dynamic response with enhanced placeholders.
@@ -145,8 +142,8 @@ export class SpliceTapUtils {
     static processDynamicResponse(body, requestDetails = {}) {
         return globalThis.SpliceTapPlaceholders.processDynamicResponse(body, requestDetails);
     }
-
-
+
+
 }
 
 // Also expose as global for non-module contexts
