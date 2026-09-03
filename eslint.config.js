@@ -44,6 +44,7 @@ module.exports = [
                 Event: 'readonly',
                 TextEncoder: 'readonly',
                 TextDecoder: 'readonly',
+                DOMParser: 'readonly',
                 requestAnimationFrame: 'readonly',
                 cancelAnimationFrame: 'readonly',
                 performance: 'readonly',

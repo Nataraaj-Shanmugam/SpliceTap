@@ -406,6 +406,14 @@
         const typeOptions = RULE_TYPES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
         const methodOptions = METHODS.map(m => `<option value="${m}">${m === '*' ? 'Any (*)' : m}</option>`).join('');
 
+        // Read from the shared definition (src/templates.js) rather than a
+        // second copy, so options and overlay can never drift apart on these.
+        const templates = (window.SpliceTapTemplates && window.SpliceTapTemplates.listTemplates())
+            || [];
+        const templateOptions = ['<option value="">Blank rule</option>']
+            .concat(templates.map((t) => `<option value="${t.id}" title="${t.description}">${t.label}</option>`))
+            .join('');
+
         return `
         <div class="tm-backdrop" part="backdrop">
           <div class="tm-panel" role="dialog" aria-modal="true" aria-labelledby="tmTitle">
@@ -445,6 +453,16 @@
                  reader user got no feedback at all on a failed save, while the
                  options-page fallback announced correctly. -->
             <div class="tm-error" id="tmError" role="alert" aria-live="assertive"></div>
+
+              <!-- PROD-3: the README advertises these presets as the fast path
+                   to a first rule, but they existed only on the options page,
+                   which none of the documented entry points open. -->
+              <div class="tm-row">
+                <div class="tm-field tm-field-wide">
+                  <label for="tmTemplate">Start from a template</label>
+                  <select id="tmTemplate">${templateOptions}</select>
+                </div>
+              </div>
 
               <div class="tm-row">
                 <div class="tm-field">
@@ -599,6 +617,11 @@
             if (!e.isTrusted) return;
             save();
         });
+        $('tmTemplate').addEventListener('change', (e) => {
+            const id = e.target.value;
+            if (id) applyTemplate(id);
+            e.target.value = ''; // a template is a starting point, not a mode
+        });
         $('tmType').addEventListener('change', () => applyTypeVisibility());
         $('tmMode').addEventListener('change', () => applyTypeVisibility());
         $('tmHintClose').addEventListener('click', dismissHint);
@@ -624,6 +647,41 @@
      * outright. Escape twice in a row also closes, so nobody gets stuck — the
      * first press is treated as "did you mean that?", the second as "yes".
      */
+    /**
+     * PROD-3: fill the form from a shared template definition.
+     *
+     * Only fields the template actually specifies are written, so picking a
+     * template after typing a name keeps the name. The shared shape uses rule
+     * vocabulary; this maps it onto the overlay's controls, exactly as
+     * options.js maps it onto its own.
+     */
+    function applyTemplate(id) {
+        const t = window.SpliceTapTemplates && window.SpliceTapTemplates.getTemplate(id);
+        if (!t) return;
+
+        const set = (elId, value) => {
+            if (value === undefined || value === null) return;
+            const el = $(elId);
+            if (el) el.value = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+        };
+
+        set('tmType', t.type);
+        set('tmMethod', t.method);
+        set('tmUrl', t.url);
+        set('tmStatus', t.status);
+        set('tmMode', t.mode);
+        set('tmBody', t.body);
+        set('tmPatch', t.patch);
+        set('tmDelayMs', t.delayMs);
+        set('tmRedirect', t.redirectDestination);
+        set('tmGraphql', t.graphqlOperation);
+        set('tmHdrReq', t.headersModRequest);
+        set('tmHdrRes', t.headersModResponse);
+
+        applyTypeVisibility();
+        formDirty = true;
+    }
+
     function requestClose() {
         if (!formDirty) {
             close();

@@ -17,21 +17,37 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/placeholders.js", "src/matcher.js", "src/patch.js", "content/injected.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/placeholders.js",
+        "src/matcher.js",
+        "src/patch.js",
+        "content/injected.js"
+      ],
       "run_at": "document_start",
       "all_frames": true,
       "world": "MAIN"
     },
     {
-      "matches": ["<all_urls>"],
-      "js": ["content/content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/content.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     },
     {
-      "matches": ["<all_urls>"],
-      "js": ["content/overlay.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/templates.js",
+        "content/overlay.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }

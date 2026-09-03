@@ -749,61 +749,18 @@ class OptionsManager {
      * G5.5: apply a named quick-start template to the rule editor form.
      */
     applyTemplate(name) {
-        const templates = {
-            graphqlMock: {
-                type: 'mock',
-                method: 'POST',
-                url: '*/graphql*',
-                graphqlOperation: 'getUsers',
-                status: 200,
-                body: '{\n  "data": {}\n}'
-            },
-            patchResponse: {
-                type: 'mock',
-                method: 'GET',
-                url: '*/api/*',
-                mode: 'patch',
-                patch: '{\n  "data": null\n}'
-            },
-            blockRequest: {
-                type: 'block',
-                method: '*',
-                url: '*/api/*'
-            },
-            redirectLocalhost: {
-                type: 'redirect',
-                method: '*',
-                url: '/\\/(api\\/.*)/',
-                redirectDestination: 'http://localhost:3000/$1'
-            },
-            corsUnblock: {
-                // C-15: this used to default to url: '*' - one click applied
-                // Access-Control-Allow-Origin: * to every request on every
-                // site the user visits for as long as the rule stayed
-                // enabled. Scope the default to localhost (the actual "unblock
-                // CORS for my local dev API" use case); the user still has to
-                // widen it deliberately if they mean something broader.
-                type: 'headers',
-                method: '*',
-                url: '*://localhost/*',
-                headersModResponse: JSON.stringify([
-                    { op: 'set', name: 'Access-Control-Allow-Origin', value: '*' },
-                    { op: 'set', name: 'Access-Control-Allow-Headers', value: '*' }
-                ], null, 2)
-            },
-            customUserAgent: {
-                // C-15: same issue - was scoped to url: '*'.
-                type: 'headers',
-                method: '*',
-                url: '*://localhost/*',
-                headersModRequest: JSON.stringify([
-                    { op: 'set', name: 'User-Agent', value: 'Mozilla/5.0 (SpliceTap)' }
-                ], null, 2)
-            }
-        };
-
-        const tpl = templates[name];
+        // PROD-3/CQ-1: template definitions live in src/templates.js so this
+        // editor and the in-page overlay read one source instead of two that
+        // drift. This maps the shared, schema-shaped fields onto this form.
+        const tpl = (globalThis.SpliceTapTemplates && globalThis.SpliceTapTemplates.getTemplate(name)) || null;
         if (!tpl) return;
+
+        // Header-mod entries arrive as arrays; the form holds JSON text.
+        const set = (elId, value) => {
+            if (value === undefined || value === null) return;
+            const el = document.getElementById(elId);
+            if (el) el.value = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+        };
 
         const typeEl = document.getElementById('ruleType');
         if (typeEl) {
@@ -811,11 +768,8 @@ class OptionsManager {
             this.updateRuleTypeVisibility(tpl.type);
         }
 
-        const methodEl = document.getElementById('ruleMethod');
-        if (methodEl && tpl.method) methodEl.value = tpl.method;
-
-        const urlEl = document.getElementById('ruleUrl');
-        if (urlEl && tpl.url) urlEl.value = tpl.url;
+        set('ruleMethod', tpl.method);
+        set('ruleUrl', tpl.url);
 
         if (tpl.type === 'mock') {
             if (tpl.mode) {
@@ -825,34 +779,17 @@ class OptionsManager {
                     this.updateResponseModeVisibility(tpl.mode);
                 }
             }
-            if (tpl.graphqlOperation !== undefined) {
-                const gqlEl = document.getElementById('graphqlOperation');
-                if (gqlEl) gqlEl.value = tpl.graphqlOperation;
-            }
-            if (tpl.status !== undefined) {
-                const statusEl = document.getElementById('ruleStatus');
-                if (statusEl) statusEl.value = tpl.status;
-            }
-            if (tpl.body !== undefined) {
-                const bodyEl = document.getElementById('ruleBody');
-                if (bodyEl) bodyEl.value = tpl.body;
-            }
-            if (tpl.patch !== undefined) {
-                const patchEl = document.getElementById('rulePatch');
-                if (patchEl) patchEl.value = tpl.patch;
-            }
+            set('graphqlOperation', tpl.graphqlOperation);
+            set('ruleStatus', tpl.status);
+            set('ruleBody', tpl.body);
+            set('rulePatch', tpl.patch);
+        } else if (tpl.type === 'delay') {
+            set('delayMs', tpl.delayMs);
         } else if (tpl.type === 'redirect') {
-            const destEl = document.getElementById('redirectDestination');
-            if (destEl) destEl.value = tpl.redirectDestination || '';
+            set('redirectDestination', tpl.redirectDestination);
         } else if (tpl.type === 'headers') {
-            if (tpl.headersModRequest !== undefined) {
-                const el = document.getElementById('headersModRequest');
-                if (el) el.value = tpl.headersModRequest;
-            }
-            if (tpl.headersModResponse !== undefined) {
-                const el = document.getElementById('headersModResponse');
-                if (el) el.value = tpl.headersModResponse;
-            }
+            set('headersModRequest', tpl.headersModRequest);
+            set('headersModResponse', tpl.headersModResponse);
         }
 
         // C-15: headers rules are a real network-layer modifyHeaders rule

@@ -18,7 +18,20 @@
      * to JSON.stringify the result anyway (e.g. content/injected.js) can call
      * this directly to avoid the redundant parse + re-stringify (P-7 #3).
      */
-    function processDynamicResponseToString(bodyStr, requestDetails = {}) {
+    function processDynamicResponseToString(bodyStr, requestDetails = {}, jsonContext = false) {
+        // QA-4: for an object body the pipeline is stringify -> substitute into
+        // the raw JSON text -> parse. Every generated placeholder above uses a
+        // safe charset (hex, base36, digits, ISO dates, fixed word lists), but
+        // request.url and request.method carry whatever the page actually sent.
+        // A URL containing a double quote or backslash then produced invalid
+        // JSON, the parse threw, and the caller silently fell back to the
+        // UNPROCESSED body — shipping the literal "{{request.url}}" token to the
+        // page with only a console error. Escape those two for JSON string
+        // context; leave them raw when the body is plain text.
+        const forContext = (value) => {
+            const s = String(value);
+            return jsonContext ? JSON.stringify(s).slice(1, -1) : s;
+        };
         // Date/time placeholders — arguments are replacer callbacks so Date()
         // is only constructed when the token is actually present (P-7 #2).
         bodyStr = bodyStr.replace(/{{timestamp}}/g, () => new Date().toISOString());
@@ -69,10 +82,10 @@
         // Request details (if provided). Callback form avoids treating '$'
         // sequences inside the request URL/method as replacement patterns.
         if (requestDetails && requestDetails.url) {
-            bodyStr = bodyStr.replace(/{{request\.url}}/g, () => requestDetails.url);
+            bodyStr = bodyStr.replace(/{{request\.url}}/g, () => forContext(requestDetails.url));
         }
         if (requestDetails && requestDetails.method) {
-            bodyStr = bodyStr.replace(/{{request\.method}}/g, () => requestDetails.method);
+            bodyStr = bodyStr.replace(/{{request\.method}}/g, () => forContext(requestDetails.method));
         }
 
         return bodyStr;
@@ -95,7 +108,9 @@
             return body;
         }
 
-        const processedStr = processDynamicResponseToString(bodyStr, requestDetails);
+        // isObject means bodyStr is JSON text we are about to re-parse, so
+        // substituted values must be escaped for a JSON string literal.
+        const processedStr = processDynamicResponseToString(bodyStr, requestDetails, isObject);
 
         if (isObject) {
             try {

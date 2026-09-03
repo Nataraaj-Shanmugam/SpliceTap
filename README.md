@@ -175,7 +175,13 @@ produces `{ "user": { "name": "Real", "role": "admin" } }` — `role` is overwri
 ## Advanced Features
 
 ### Rule Templates
-The rule editor's "Quick Template" dropdown includes six ready-to-use presets: GraphQL Mock, Patch Response, Block Request, Redirect to localhost, CORS Unblock (headers), and Custom User-Agent (headers).
+Both rule editors — the in-page overlay and the options page — offer the same
+seven presets: GraphQL Mock, Patch Response, Block Request, Slow Request,
+Redirect to localhost, CORS Unblock (headers), and Custom User-Agent (headers).
+
+The two header templates are deliberately scoped to `*://localhost/*` rather
+than every site, because a CORS-disabling rule left on `*` is a real security
+downgrade, not just a mocking convenience. Widen them only when you mean to.
 
 ### Import/Export
 Both live in the popup's **Data** tab.

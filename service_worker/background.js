@@ -76,17 +76,62 @@ class SpliceTapBackground {
     }
 
     /**
-     * Reflect current state on the toolbar icon.
+     * SEC-3: is this interception-log entry plausibly one of ours?
      *
-     * PROD-6: for a tool that silently rewrites network traffic there was no
-     * passive signal that it was doing anything — the only way to know was to
-     * open the popup.
-     *
-     * PROD-5: chaos mode matters most here. It fails a percentage of requests
-     * on EVERY site, with no per-origin scope, so the dangerous case is leaving
-     * it on and later debugging something unrelated while requests randomly
-     * fail. It therefore outranks the other states and is shown in red.
+     * The entry arrives via a content-script relay living in the page's own
+     * document, so it is attacker-influenced input. Every genuine entry is
+     * emitted by the interceptor immediately after applying a rule, so it must
+     * name a rule that currently exists — a constraint a forging page cannot
+     * satisfy without already knowing a real rule id, which SEC-2's nonce now
+     * prevents it from learning.
      */
+    _isPlausibleLogEntry(entry) {
+        if (!entry || typeof entry !== 'object') return false;
+        if (typeof entry.url !== 'string' || entry.url.length > 2048) return false;
+        if (typeof entry.method !== 'string' || entry.method.length > 16) return false;
+        if (typeof entry.ruleId !== 'string') return false;
+        if (entry.ruleName !== undefined && typeof entry.ruleName !== 'string') return false;
+        if (entry.ruleType !== undefined && typeof entry.ruleType !== 'string') return false;
+        if (entry.status !== undefined && entry.status !== null && typeof entry.status !== 'number') return false;
+        if (entry.ts !== undefined && typeof entry.ts !== 'number') return false;
+
+        return (this.rules || []).some((r) => r && r.id === entry.ruleId);
+    }
+
+    /**
+     * QA-5: reload rules from storage without discarding hitCount increments
+     * still waiting on the throttled flush.
+     *
+     * logInterception bumps hitCount in memory and defers the write by up to
+     * PERSIST_THROTTLE_MS. Any rule mutation in that window used to do a plain
+     * `this.rules = await getRules()`, replacing the array with the disk copy —
+     * which does not have the bump yet — so the increment was lost permanently
+     * once the trailing flush wrote the replaced array back.
+     */
+    async reloadRulesPreservingHits() {
+        const pending = new Map();
+        if (this._rulesDirty) {
+            for (const r of this.rules || []) {
+                if (r && r.id && r.hitCount) pending.set(r.id, r.hitCount);
+            }
+        }
+
+        const fresh = await this.storage.getRules();
+
+        if (pending.size) {
+            for (const rule of fresh) {
+                const held = pending.get(rule.id);
+                // Keep whichever is higher — a concurrent write may already
+                // have persisted a later count than this worker held.
+                if (held && (!rule.hitCount || held > rule.hitCount)) {
+                    rule.hitCount = held;
+                }
+            }
+        }
+
+        this.rules = fresh;
+    }
+
     /**
      * Captures live in session storage only — they contain response bodies, so
      * they must not survive the browser session or reach chrome.storage.local.
@@ -100,6 +145,18 @@ class SpliceTapBackground {
         }
     }
 
+    /**
+     * Reflect current state on the toolbar icon.
+     *
+     * PROD-6: for a tool that silently rewrites network traffic there was no
+     * passive signal that it was doing anything — the only way to know was to
+     * open the popup.
+     *
+     * PROD-5: chaos mode matters most here. It fails a percentage of requests
+     * on EVERY site with no per-origin scope, so the dangerous case is leaving
+     * it on and later debugging something unrelated while requests randomly
+     * fail. It therefore outranks the other states and is shown in red.
+     */
     async updateBadge() {
         try {
             const chaosOn = !!(this.settings
@@ -252,7 +309,7 @@ class SpliceTapBackground {
                     if (!saveResult || !saveResult.success) {
                         return { success: false, error: (saveResult && saveResult.error) || 'Failed to save rule' };
                     }
-                    this.rules = await this.storage.getRules();
+                    await this.reloadRulesPreservingHits();
                     await this.broadcastState();
                     const dnrResult = await syncDnrRules(this.rules, this.isActive);
                     return { success: true, rule: saveResult.rule, dnrWarning: dnrResult.success ? undefined : dnrResult.error };
@@ -291,7 +348,7 @@ class SpliceTapBackground {
                     if (!bulkResult || !bulkResult.success) {
                         return { success: false, error: (bulkResult && bulkResult.error) || 'Failed to save rules' };
                     }
-                    this.rules = await this.storage.getRules();
+                    await this.reloadRulesPreservingHits();
                     await this.broadcastState();
                     const dnrResult = await syncDnrRules(this.rules, this.isActive);
                     return {
@@ -310,7 +367,7 @@ class SpliceTapBackground {
                     if (!toggleResult || !toggleResult.success) {
                         return { success: false, error: (toggleResult && toggleResult.error) || 'Failed to toggle rule' };
                     }
-                    this.rules = await this.storage.getRules();
+                    await this.reloadRulesPreservingHits();
                     await this.broadcastState();
                     await syncDnrRules(this.rules, this.isActive);
                     return { success: true };
@@ -323,7 +380,7 @@ class SpliceTapBackground {
                     if (!deleteResult || !deleteResult.success) {
                         return { success: false, error: (deleteResult && deleteResult.error) || 'Failed to delete rule' };
                     }
-                    this.rules = await this.storage.getRules();
+                    await this.reloadRulesPreservingHits();
                     await this.broadcastState();
                     await syncDnrRules(this.rules, this.isActive);
                     return { success: true };
@@ -372,7 +429,14 @@ class SpliceTapBackground {
                 }
 
                 case 'logInterception':
-                    if (request.entry) {
+                    // SEC-3: the relay runs in a page context, so this entry is
+                    // untrusted input. It used to be accepted on a bare
+                    // truthiness check, letting a page fill the DevTools panel
+                    // with fabricated rows a developer would be reading as fact,
+                    // and inflate any rule's persisted hitCount by replaying a
+                    // known ruleId. Validate the shape, and only accept an entry
+                    // whose ruleId names a rule that actually exists.
+                    if (request.entry && this._isPlausibleLogEntry(request.entry)) {
                         // QA-3: entries carried no tab identity, so the DevTools
                         // panel showed every tab's intercepted traffic at once —
                         // breaking its premise as a per-tab inspector and leaking

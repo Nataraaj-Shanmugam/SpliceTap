@@ -571,6 +571,7 @@
             let isMocked = false;      // true while WE own the response lifecycle for this request
             let redirectHandled = false; // true once open() rewrote the URL for a redirect rule
             let isAborted = false;
+            let patchAbort = null;   // QA-6: AbortController for patch mode's real request
             let mockTimeout = null;
             let progressInterval = null;
             let mockResponseHeaders = null; // Q-7: headers exposed via getResponseHeader(All)?
@@ -629,6 +630,18 @@
                     } else if (responseType === 'blob' && typeof Blob !== 'undefined') {
                         try {
                             responseValue = new Blob([responseText]);
+                        } catch (e) {
+                            // keep text fallback
+                        }
+                    } else if (responseType === 'document' && typeof DOMParser !== 'undefined') {
+                        // QA-7: this fell through to the text fallback, so
+                        // `xhr.response.querySelector(...)` — valid against a
+                        // real XHR — threw on a mocked one. Parse as the
+                        // declared content type, matching what the browser does.
+                        try {
+                            const declared = (headers && (headers['content-type'] || headers['Content-Type'])) || '';
+                            const mime = /xml/i.test(declared) ? 'application/xml' : 'text/html';
+                            responseValue = new DOMParser().parseFromString(responseText, mime);
                         } catch (e) {
                             // keep text fallback
                         }
@@ -798,6 +811,14 @@
             // Override abort
             xhr.abort = function () {
                 isAborted = true;
+
+                // QA-6: cancel the real request patch mode has in flight, not
+                // just its delivery. Without this the backend still completed
+                // the call the page asked to abort.
+                if (patchAbort) {
+                    try { patchAbort.abort(); } catch (e) { /* already settled */ }
+                    patchAbort = null;
+                }
 
                 // Clear any pending timeouts
                 if (mockTimeout) {
@@ -1016,11 +1037,19 @@
                                 // the page deliberately made anonymous, and
                                 // could fail CORS for servers that don't also
                                 // send Access-Control-Allow-Credentials).
+                                // QA-6: this call had no signal, so xhr.abort()
+                                // could only stop the patched response being
+                                // DELIVERED — the underlying request still ran
+                                // to completion against the real backend. For a
+                                // POST with side effects that means the write
+                                // the page explicitly cancelled still happened.
+                                patchAbort = new AbortController();
                                 const real = await originalFetch(requestUrl, {
                                     method: requestMethod,
                                     headers: requestHeaders,
                                     body: body ?? undefined,
-                                    credentials: xhr.withCredentials ? 'include' : 'same-origin'
+                                    credentials: xhr.withCredentials ? 'include' : 'same-origin',
+                                    signal: patchAbort.signal
                                 });
 
                                 if (isAborted) return;
