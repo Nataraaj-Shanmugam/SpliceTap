@@ -1,7 +1,7 @@
 /**
  * SpliceTap Storage Manager
  * Handles all data persistence with Chrome storage APIs
- * Now with quota management and backup cleanup
+ * Quota-aware, with all persistence serialized through one mutation chain.
  */
 
 export class SpliceTapStorage {
@@ -13,14 +13,13 @@ export class SpliceTapStorage {
             settings: 'spliceTapSettings',
             metrics: 'spliceTapMetrics',
             chaos: 'spliceTapChaos',
-            backupPrefix: 'spliceTapBackup_', // Changed to prefix for multiple backups
             dnrCounter: 'spliceTapDnrCounter' // integer counter, allocates chrome.declarativeNetRequest rule ids
         };
 
+        // CQ-5: `notifications` and `autoBackup` were removed — no runtime code
+        // ever read either, and options.js already documents them as dead.
         this.defaultSettings = {
             theme: 'auto',
-            notifications: true,
-            autoBackup: true,
             debugMode: false,
             shortcuts: {
                 toggle: 'Ctrl+Shift+M',
@@ -42,7 +41,6 @@ export class SpliceTapStorage {
         // Storage quota constants
         this.QUOTA_BYTES = chrome.storage.local.QUOTA_BYTES || 10485760; // 10MB default
         this.QUOTA_WARNING_THRESHOLD = 0.8; // Warn at 80%
-        this.MAX_BACKUPS = 5; // Keep only 5 most recent backups
 
         // QA-2: saveRule/deleteRule/toggleRule are read-modify-write
         // (getRules -> mutate -> saveRules). Run concurrently — popup and
@@ -363,13 +361,10 @@ export class SpliceTapStorage {
 
             if (percentUsed > this.QUOTA_WARNING_THRESHOLD) {
                 console.warn(`Storage quota warning: ${Math.round(percentUsed * 100)}% used (${this.formatBytes(bytesInUse)} / ${this.formatBytes(this.QUOTA_BYTES)})`);
-                
-                // Auto-cleanup old backups if over threshold
-                if (percentUsed > 0.9) {
-                    await this.cleanOldBackups(2); // Keep only 2 when critically low
-                } else {
-                    await this.cleanOldBackups(this.MAX_BACKUPS);
-                }
+                // CQ-5: this used to prune old backups here. Nothing in the
+                // product ever created one — createBackup() had no callers —
+                // so it was scanning storage to delete keys that never exist,
+                // on a path that runs before every rule save.
             }
 
             return {
@@ -384,151 +379,10 @@ export class SpliceTapStorage {
         }
     }
 
-    /**
-     * Backup data to local storage with automatic cleanup
-     */
-    async createBackup() {
-        try {
-            // Check quota first
-            await this.checkQuota();
 
-            const data = await this.loadAll();
-            const timestamp = new Date().toISOString();
-            const backupKey = `${this.storageKeys.backupPrefix}${timestamp}`;
-            
-            const backup = {
-                version: '1.0.0',
-                timestamp: timestamp,
-                data: data
-            };
 
-            // Store backup
-            await chrome.storage.local.set({ [backupKey]: backup });
 
-            // Clean old backups (keep only MAX_BACKUPS)
-            await this.cleanOldBackups(this.MAX_BACKUPS);
 
-            // Update last backup time in settings
-            const settings = await this.getSettings();
-            settings.lastBackup = timestamp;
-            await this.saveSettings(settings);
-
-            console.log(`Backup created: ${backupKey}`);
-            return { success: true, backup, key: backupKey };
-        } catch (error) {
-            console.error('Failed to create backup:', error);
-            return { success: false, error: error.message };
-        }
-    }
-
-    /**
-     * Clean old backups, keeping only the most recent ones
-     */
-    async cleanOldBackups(keepCount = 5) {
-        try {
-            const allData = await chrome.storage.local.get(null);
-            
-            // Find all backup keys
-            const backupKeys = Object.keys(allData)
-                .filter(key => key.startsWith(this.storageKeys.backupPrefix))
-                .map(key => ({
-                    key,
-                    timestamp: allData[key].timestamp,
-                    date: new Date(allData[key].timestamp)
-                }))
-                .sort((a, b) => b.date - a.date); // Sort newest first
-
-            // Determine which to delete
-            const toDelete = backupKeys.slice(keepCount).map(b => b.key);
-
-            if (toDelete.length > 0) {
-                await chrome.storage.local.remove(toDelete);
-                console.log(`Cleaned ${toDelete.length} old backup(s)`);
-            }
-
-            return { success: true, deleted: toDelete.length, kept: Math.min(backupKeys.length, keepCount) };
-        } catch (error) {
-            console.error('Failed to clean old backups:', error);
-            return { success: false, error: error.message };
-        }
-    }
-
-    /**
-     * Get all available backups
-     */
-    async getAllBackups() {
-        try {
-            const allData = await chrome.storage.local.get(null);
-            
-            const backups = Object.keys(allData)
-                .filter(key => key.startsWith(this.storageKeys.backupPrefix))
-                .map(key => ({
-                    key,
-                    ...allData[key]
-                }))
-                .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-            return backups;
-        } catch (error) {
-            console.error('Failed to get backups:', error);
-            return [];
-        }
-    }
-
-    /**
-     * Restore from a specific backup
-     */
-    async restoreFromBackup(backupKey) {
-        try {
-            const result = await chrome.storage.local.get(backupKey);
-            const backup = result[backupKey];
-
-            if (!backup || !backup.data) {
-                return { success: false, error: 'Backup not found or invalid' };
-            }
-
-            const { rules, settings, stats } = backup.data;
-
-            if (rules) await this.saveRules(rules);
-            if (settings) await this.saveSettings(settings);
-            if (stats) await this.updateStats(stats);
-
-            return { success: true, restored: backup };
-        } catch (error) {
-            console.error('Failed to restore backup:', error);
-            return { success: false, error: error.message };
-        }
-    }
-
-    /**
-     * Restore from uploaded backup file
-     */
-    async restoreFromFile(file) {
-        try {
-            const text = await file.text();
-            const data = JSON.parse(text);
-
-            if (data.data) {
-                // Restore full backup
-                const { rules, settings, stats } = data.data;
-
-                if (rules) await this.saveRules(rules);
-                if (settings) await this.saveSettings(settings);
-                if (stats) await this.updateStats(stats);
-
-                return { success: true, restored: data };
-            } else if (data.rules) {
-                // Restore rules only
-                await this.saveRules(data.rules);
-                return { success: true, restored: data };
-            }
-
-            return { success: false, error: 'Invalid backup format' };
-        } catch (error) {
-            console.error('Failed to restore backup:', error);
-            return { success: false, error: error.message };
-        }
-    }
 
     async clearAll() {
         try {
@@ -540,35 +394,6 @@ export class SpliceTapStorage {
         }
     }
 
-    async getStorageUsage() {
-        try {
-            const bytesInUse = await chrome.storage.local.getBytesInUse();
-            const data = await this.loadAll();
-
-            return {
-                bytesInUse,
-                quota: this.QUOTA_BYTES,
-                percentUsed: (bytesInUse / this.QUOTA_BYTES) * 100,
-                sizeFormatted: this.formatBytes(bytesInUse),
-                quotaFormatted: this.formatBytes(this.QUOTA_BYTES),
-                rulesCount: data.rules.length,
-                enabledRulesCount: data.rules.filter(r => r.enabled).length,
-                warning: bytesInUse > this.QUOTA_BYTES * this.QUOTA_WARNING_THRESHOLD
-            };
-        } catch (error) {
-            console.error('Failed to get storage usage:', error);
-            return {
-                bytesInUse: 0,
-                quota: this.QUOTA_BYTES,
-                percentUsed: 0,
-                sizeFormatted: '0 Bytes',
-                quotaFormatted: this.formatBytes(this.QUOTA_BYTES),
-                rulesCount: 0,
-                enabledRulesCount: 0,
-                warning: false
-            };
-        }
-    }
 
     /**
      * Format bytes to human readable size
