@@ -727,3 +727,26 @@ body.theme-light .slider:before { background: #fff; }
   .content-scroll { padding: 20px 16px 40px; }
   .top-bar { padding: 14px 16px; flex-wrap: wrap; }
 }
+
+/* UX-3: Rule Name and URL Pattern are required, but the Save button sits
+   outside <form> so native required-field UI never fires — the only signal
+   was an error after a failed save. The asterisk is decorative; the
+   screen-reader text beside it carries the meaning. */
+.required-mark {
+  color: var(--danger);
+  font-weight: 700;
+  margin-left: 1px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

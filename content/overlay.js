@@ -861,7 +861,12 @@
 
             rule.response = {
                 statusCode,
-                statusText: 'OK',
+                // CQ-2: this was hardcoded 'OK' whatever the status code, so a
+                // 404 or 500 mock created here reported "OK" as its reason
+                // phrase to the page under test — while the options editor
+                // derived it correctly. Both now use one shared table.
+                statusText: (window.SpliceTapTemplates
+                    && window.SpliceTapTemplates.getStatusText(statusCode)) || '',
                 headers: parseJson($('tmResHeaders').value, 'Response Headers', {}),
                 delay,
                 mode

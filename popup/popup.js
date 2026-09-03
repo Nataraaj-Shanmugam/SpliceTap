@@ -298,6 +298,7 @@ class SpliceTapPopup {
         
         // Footer actions
         this.addListener('newRuleBtn', 'click', () => this.createNewRule());
+        this.addListener('toggleAllBtn', 'click', () => this.toggleAllRules());
         this.addListener('testAllBtn', 'click', () => this.testAllRules());
         
         // Status toggle
@@ -613,6 +614,49 @@ class SpliceTapPopup {
                     <button class="rule-action" title="Move down — matched after the rules above it" data-action="move-down" data-rule-id="${safeId}" aria-label="Move rule down">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
                     </button>`;
+    }
+
+    /**
+     * PROD-8: enable or disable every rule at once.
+     *
+     * Previously the only options were the global on/off switch — which is
+     * all-or-nothing and also stops chaos mode and capture — or clicking each
+     * rule individually. Direction is inferred: if anything is enabled, this
+     * disables everything; otherwise it enables everything. That matches what
+     * the single visible affordance is for at any moment.
+     */
+    async toggleAllRules() {
+        try {
+            const fresh = await this.sendMessage({ type: 'getRules' });
+            const rules = (fresh && fresh.success && Array.isArray(fresh.rules))
+                ? fresh.rules
+                : (this.rules || []);
+
+            if (!rules.length) {
+                this.showError('No rules to toggle');
+                return;
+            }
+
+            const anyEnabled = rules.some((r) => r && r.enabled);
+            const next = rules.map((r) => ({ ...r, enabled: !anyEnabled }));
+
+            const response = await this.sendMessage({ type: 'setRules', rules: next });
+            if (!response || !response.success) {
+                this.showError((response && response.error) || 'Could not update rules');
+                return;
+            }
+
+            this.rules = response.rules || next;
+            this.applySearchFilter();
+            this.updateStatus();
+            this.updateTabCount();
+            this.showNotification(anyEnabled
+                ? `Disabled ${rules.length} rule${rules.length === 1 ? '' : 's'}`
+                : `Enabled ${rules.length} rule${rules.length === 1 ? '' : 's'}`);
+        } catch (error) {
+            console.error('Failed to toggle all rules:', error);
+            this.showError('Could not update rules');
+        }
     }
 
     /**
@@ -1944,6 +1988,12 @@ class SpliceTapPopup {
         // for the action button.
         toast.addEventListener('mouseenter', () => clearTimeout(dismissTimer));
         toast.addEventListener('mouseleave', scheduleDismiss);
+        // UX-2: a mouse user could hold the toast open indefinitely by hovering,
+        // but a keyboard user tabbing toward Undo got no such extension — and
+        // the toast sits after the footer in tab order, so they had further to
+        // travel. Pause on focus too.
+        toast.addEventListener('focusin', () => clearTimeout(dismissTimer));
+        toast.addEventListener('focusout', scheduleDismiss);
 
         container.appendChild(toast);
         scheduleDismiss();

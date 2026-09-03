@@ -827,13 +827,11 @@ class OptionsManager {
         }
     }
 
+    // CQ-2: delegates to the shared table in src/templates.js so this editor
+    // and the in-page overlay cannot disagree about a reason phrase.
     getStatusText(code) {
-        const statuses = {
-            200: 'OK', 201: 'Created', 204: 'No Content',
-            400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found',
-            500: 'Internal Server Error', 503: 'Service Unavailable'
-        };
-        return statuses[code] || 'Unknown';
+        return (globalThis.SpliceTapTemplates
+            && globalThis.SpliceTapTemplates.getStatusText(code)) || '';
     }
 
     async loadData() {

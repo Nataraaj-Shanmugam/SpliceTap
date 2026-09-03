@@ -110,6 +110,28 @@
         }
     ];
 
+    /**
+     * CQ-2: HTTP reason phrase for a status code.
+     *
+     * Lives here — beside the other thing both editors need — because the
+     * overlay hardcoded `statusText: 'OK'` regardless of the code, so a 404
+     * mock created there reported "404 OK" to the page under test, while the
+     * options page derived it correctly. Same class of drift as the templates.
+     */
+    const STATUS_TEXT = {
+        200: 'OK', 201: 'Created', 202: 'Accepted', 204: 'No Content',
+        301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified',
+        400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
+        404: 'Not Found', 409: 'Conflict', 418: "I'm a Teapot",
+        422: 'Unprocessable Entity', 429: 'Too Many Requests',
+        500: 'Internal Server Error', 502: 'Bad Gateway',
+        503: 'Service Unavailable', 504: 'Gateway Timeout'
+    };
+
+    function getStatusText(code) {
+        return STATUS_TEXT[Number(code)] || '';
+    }
+
     function listTemplates() {
         return TEMPLATES.map((t) => ({ id: t.id, label: t.label, description: t.description }));
     }
@@ -121,7 +143,7 @@
         return found ? JSON.parse(JSON.stringify(found.rule)) : null;
     }
 
-    const api = { listTemplates, getTemplate };
+    const api = { listTemplates, getTemplate, getStatusText };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;

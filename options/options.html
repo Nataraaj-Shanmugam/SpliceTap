@@ -111,7 +111,7 @@
 
                     <div class="form-row">
                         <div class="form-group" style="flex: 2;">
-                            <label for="ruleName">Rule Name</label>
+                            <label for="ruleName">Rule Name <span class="required-mark" aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
                             <input type="text" id="ruleName" placeholder="e.g. User Profile API" required>
                         </div>
                         <div class="form-group">
@@ -137,7 +137,7 @@
                             </select>
                         </div>
                         <div class="form-group" style="flex: 3;">
-                            <label for="ruleUrl">URL Pattern</label>
+                            <label for="ruleUrl">URL Pattern <span class="required-mark" aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
                             <input type="text" id="ruleUrl" placeholder="e.g. */api/users/*" required>
                             <span class="help-text">Use * for wildcards, or wrap in /.../  for regex</span>
                         </div>

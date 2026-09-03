@@ -286,6 +286,14 @@
       </div>
 
       <div class="footer-actions-secondary">
+        <!-- PROD-8: the only lever was the global on/off switch or toggling
+             each rule one at a time. -->
+        <button class="icon-btn-small" id="toggleAllBtn" title="Enable or disable every rule" aria-label="Enable or disable all rules">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <rect x="2" y="7" width="20" height="10" rx="5" />
+            <circle cx="8" cy="12" r="2.5" fill="currentColor" stroke="none" />
+          </svg>
+        </button>
         <button class="icon-btn-small" id="testAllBtn" title="Test all rules" aria-label="Test all rules">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
             <path d="M20 6 9 17l-5-5" />
