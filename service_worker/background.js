@@ -60,6 +60,10 @@ class SpliceTapBackground {
         // section completely.
         this._dnrIdChain = Promise.resolve();
 
+        // PERF-5: id -> rule index, rebuilt when this.rules is replaced.
+        this._ruleIndex = new Map();
+        this._ruleIndexSource = null;
+
         // Register event listeners synchronously, in the first turn of the
         // service-worker script. MV3 workers are ephemeral; a listener added
         // only after an `await` can miss the very event that woke the worker.
@@ -73,6 +77,24 @@ class SpliceTapBackground {
         this.ready = this.loadStoredData()
             .then(() => console.log('SpliceTap background service worker initialized (Config Mode)'))
             .catch((error) => console.error('Failed to initialize background service worker:', error));
+    }
+
+    /**
+     * PERF-5: O(1) rule lookup by id, for the per-request paths.
+     *
+     * The index is rebuilt lazily whenever this.rules is replaced — checked by
+     * identity, so a reassignment invalidates it without every mutation site
+     * having to remember to clear it.
+     */
+    _ruleById(id) {
+        if (this._ruleIndexSource !== this.rules) {
+            this._ruleIndex = new Map();
+            for (const r of this.rules || []) {
+                if (r && r.id) this._ruleIndex.set(r.id, r);
+            }
+            this._ruleIndexSource = this.rules;
+        }
+        return this._ruleIndex.get(id) || null;
     }
 
     /**
@@ -95,7 +117,7 @@ class SpliceTapBackground {
         if (entry.status !== undefined && entry.status !== null && typeof entry.status !== 'number') return false;
         if (entry.ts !== undefined && typeof entry.ts !== 'number') return false;
 
-        return (this.rules || []).some((r) => r && r.id === entry.ruleId);
+        return !!this._ruleById(entry.ruleId);
     }
 
     /**
@@ -462,7 +484,9 @@ class SpliceTapBackground {
                         // rides the same throttle as stats/log persistence
                         // rather than a save per intercepted request.
                         if (request.entry.ruleId) {
-                            const rule = this.rules.find((r) => r && r.id === request.entry.ruleId);
+                            // PERF-5: this was an Array.find per intercepted
+                            // request — O(rules × requests) on a busy page.
+                            const rule = this._ruleById(request.entry.ruleId);
                             if (rule) {
                                 rule.hitCount = (rule.hitCount || 0) + 1;
                                 this._rulesDirty = true;
@@ -517,6 +541,19 @@ class SpliceTapBackground {
                     await this.broadcastState();
                     return { success: true, armed: !!this.settings.captureArmed };
                 }
+
+                case 'getRuleStats':
+                    // PERF-2: the DevTools panel polls every 3s and needs two
+                    // integers, but 'getRules' hands back every rule object —
+                    // including embedded mock bodies — to be structured-cloned
+                    // across the message boundary each time. Compute the
+                    // numbers here instead.
+                    return {
+                        success: true,
+                        intercepted: (this.stats && this.stats.intercepted) || 0,
+                        activeRules: (this.rules || []).filter((r) => r && r.enabled).length,
+                        settings: this.settings
+                    };
 
                 case 'getInterceptionLog': {
                     // The panel passes the tab it is inspecting. Entries logged
@@ -768,7 +805,12 @@ class SpliceTapBackground {
         };
 
         try {
-            const tabs = await chrome.tabs.query({});
+            // PERF-6: this queried every tab in every window and sent the full
+            // rules array to each on every edit — including chrome:// tabs,
+            // extension pages and the PDF viewer, none of which can have a
+            // content script. The manifest only injects into http(s), so
+            // filtering here removes work that could never have landed.
+            const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
             const broadcastPromises = tabs.map(tab => this.broadcastToTab(tab.id, state));
             
             // Wait for all broadcasts to complete (but don't fail if some tabs fail)

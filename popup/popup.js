@@ -1088,7 +1088,16 @@ class SpliceTapPopup {
         if (this.searchClearBtn) {
             this.searchClearBtn.hidden = !e.target.value;
         }
-        this.applySearchFilter();
+
+        // PERF-3: applySearchFilter() ends in a full innerHTML rebuild of the
+        // list plus re-attaching listeners per row. Running that per keystroke
+        // is visible lag once a user has a few dozen rules. The clear button
+        // above still updates immediately, so typing stays responsive.
+        if (this._searchDebounce) clearTimeout(this._searchDebounce);
+        this._searchDebounce = setTimeout(() => {
+            this._searchDebounce = null;
+            this.applySearchFilter();
+        }, 120);
     }
 
     /**
@@ -1099,6 +1108,30 @@ class SpliceTapPopup {
      * filteredRules to the unfiltered list while the search box still
      * showed the (now ignored) query.
      */
+    /**
+     * PERF-3: the lowercased text a rule is searched against, computed once
+     * and cached on a WeakMap keyed by the rule object. Any mutation replaces
+     * the rule object (storage re-reads produce fresh objects), so a stale
+     * entry cannot outlive the data it describes.
+     */
+    _searchHaystack(rule) {
+        if (!this._haystacks) this._haystacks = new WeakMap();
+        const cached = this._haystacks.get(rule);
+        if (cached !== undefined) return cached;
+
+        const text = [
+            rule.name,
+            rule.match && rule.match.url,
+            rule.match && rule.match.method,
+            rule.type || 'mock',
+            rule.redirect && rule.redirect.destination,
+            rule.response ? JSON.stringify(rule.response) : ''
+        ].filter(Boolean).join(' ').toLowerCase();
+
+        this._haystacks.set(rule, text);
+        return text;
+    }
+
     applySearchFilter() {
         const searchTerm = this.searchTerm || '';
 
@@ -1108,17 +1141,11 @@ class SpliceTapPopup {
             // U-15: search used to only look at name/url/method — extended
             // to the rule type, redirect destination, and the mock response
             // body/status, all things a developer would plausibly search for.
-            this.filteredRules = this.rules.filter(rule => {
-                const haystack = [
-                    rule.name,
-                    rule.match && rule.match.url,
-                    rule.match && rule.match.method,
-                    rule.type || 'mock',
-                    rule.redirect && rule.redirect.destination,
-                    rule.response ? JSON.stringify(rule.response) : ''
-                ].filter(Boolean).join(' ').toLowerCase();
-                return haystack.includes(searchTerm);
-            });
+            // PERF-3: the haystack — including JSON.stringify of the whole
+            // response — was rebuilt for every rule on every keystroke, even
+            // though nothing about the rules changed between keystrokes. It is
+            // now computed once per rule and cached until the rules do change.
+            this.filteredRules = this.rules.filter(rule => this._searchHaystack(rule).includes(searchTerm));
         }
 
         this.renderRules();

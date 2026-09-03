@@ -219,11 +219,14 @@
     }
 
     async function fetchRuleStats() {
-        const response = await sendMessage({ type: 'getRules' });
+        // PERF-2: this used 'getRules', which returns every rule object
+        // (mock bodies included) every 3 seconds to derive two numbers.
+        // 'getRuleStats' returns just the numbers.
+        const response = await sendMessage({ type: 'getRuleStats' });
         if (response && response.success) {
             clearError();
-            ruleStats.intercepted = (response.stats && response.stats.intercepted) || 0;
-            ruleStats.activeRules = (response.rules || []).filter((r) => r.enabled).length;
+            ruleStats.intercepted = response.intercepted || 0;
+            ruleStats.activeRules = response.activeRules || 0;
             updateRuleStats();
             lastSettings = response.settings || lastSettings;
             applyTheme(lastSettings);
