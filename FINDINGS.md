@@ -6,15 +6,47 @@
 
 ## Status — updated 3 September 2026
 
-**50 of 57 closed.** Every Critical, every High, and every Medium is fixed
-and verified. The report below is the original audit and is kept as written;
-this section records what has changed since.
+**54 of 57 closed.** Every Critical, High, Medium and Low is fixed and
+verified except three, each deliberately declined with reasons recorded
+below. The report below is the original audit and is kept as written; this
+section records what has changed since.
 
 Closed in the order the analysis recommended: SEC-1, QA-1, QA-2, A11Y-1 and
 A11Y-2 first (silent failure and data loss), then PROD-1, CQ-3/PROD-9,
 PROD-2, then the trust and workflow tier (SEC-2, SEC-3, QA-3, CQ-4, PROD-3
 through PROD-10, the A11Y set, UX-1/2/3), then the structural cleanup
-(CQ-5, CQ-6, CQ-7, CQ-10, CWS-2) and the performance items PERF-2/3/5/6/9/10.
+(CQ-5, CQ-6, CQ-7, CQ-10, CWS-2), the performance items
+PERF-2/3/4/5/6/7/9/10, and finally CQ-8.
+
+### CQ-8 — the test gap, closed
+
+The three files carrying the most consequential logic had no coverage at all:
+`storage.js` and `background.js` are ESM (which plain CommonJS Jest cannot
+`require`), and `injected.js` is an IIFE exporting nothing. That was recorded
+as a comment in `tests/utils.test.js` rather than solved.
+
+Three harnesses under `tests/helpers/` close it — an ESM loader that rewrites
+only `import`/`export` (so the bytes under test are the bytes Chrome parses,
+rather than a Babel transform's output), a `chrome` mock that resolves on
+macrotasks so read-modify-write races are actually reachable, and an
+interceptor harness with a working `XMLHttpRequest`.
+
+**77 → 226 tests.** Coverage is aimed where regressions are expensive: the
+QA-2 mutation chain (these fail against the pre-fix unserialized code, so
+they can catch a regression rather than merely describe one), QA-1's save
+contract, the S-2 validation boundary including CQ-4, SEC-3's log guard,
+SEC-2's nonce channel, and both halves of interception — fetch and XHR.
+
+Two things surfaced while writing them:
+
+- `storage.saveRule` dropped `created` on every update, because it spread the
+  incoming rule and an editor rebuilds that from form inputs. Each caller had
+  been compensating separately; the invariant now lives once, in the layer
+  that knows the previous value.
+- Node's `EventTarget` ignores the boolean capture flag on
+  `removeEventListener`, which made `injected.js`'s one-shot bootstrap look
+  re-keyable. Verified in Chrome 148 that it is not — the harness normalises
+  the flag so the tests assert browser behaviour rather than a Node artifact.
 
 ### Deliberately not fixed
 
@@ -49,13 +81,32 @@ CQ-5. It did catch two real mistakes during remediation (an undefined
 permission is used and justified; the combination is what a network
 interception tool requires. Mitigation is preparation, not code.
 
-### Still open (4, all Low)
+**PERF-8 — nine closures allocated per `new XMLHttpRequest()`.** Measured
+before deciding, in isolated processes to keep GC pressure from one mode out
+of the other's numbers: ~315 ns for the pristine bail versus ~342 ns wrapped,
+so the wrapping costs about **27 ns per XHR** — 0.03 ms per thousand requests,
+against network latency measured in milliseconds. (The absolute figures carry
+the test harness's own constructor cost; the delta is the wrapper's own work
+and is what matters here.)
 
-`PERF-4` unbatched per-request messages · `PERF-7` linear rule scan (fine
-below ~50 rules) · `PERF-8` per-instance XHR closures · `CQ-8` no tests for
-`storage.js`, `background.js` handlers or `injected.js` — partially
-addressed: the shared modules now have 18 tests (59 → 77 total), but the
-three highest-risk files remain untested.
+The suggested fix is prototype patching plus a `WeakMap`. That would rewrite
+the 550-line block carrying Q-1, Q-7, Q-8, Q-12, Q-13, Q-27, QA-6 and QA-7 —
+and, more to the point, patching the prototype means *every* XHR gets patched
+methods that must each check whether interception applies. That removes
+P-1/P-10's pristine bail and adds per-call cost to every request on every
+page, including pages with no rules, to save allocation at construction. For
+27 ns, it is a net regression in the common case.
+
+The XHR path now has 23 tests, so if this is ever revisited for another
+reason, the refactor would be verifiable rather than a leap.
+
+### Still open (0)
+
+Nothing outstanding. The three declined items above are decisions, not
+backlog; each records the measurement or trade-off behind it. What remains
+before submission is external: GitHub Pages must be enabled (`master` /
+`/docs`) so the privacy-policy URL resolves, and the store needs screenshots
+at 1280×800 or 640×400.
 
 ---
 
