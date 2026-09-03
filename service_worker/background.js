@@ -68,6 +68,45 @@ class SpliceTapBackground {
     }
 
     /**
+     * Reflect current state on the toolbar icon.
+     *
+     * PROD-6: for a tool that silently rewrites network traffic there was no
+     * passive signal that it was doing anything — the only way to know was to
+     * open the popup.
+     *
+     * PROD-5: chaos mode matters most here. It fails a percentage of requests
+     * on EVERY site, with no per-origin scope, so the dangerous case is leaving
+     * it on and later debugging something unrelated while requests randomly
+     * fail. It therefore outranks the other states and is shown in red.
+     */
+    async updateBadge() {
+        try {
+            const chaosOn = !!(this.settings
+                && this.settings.chaosMode
+                && this.settings.chaosMode.enabled);
+            const enabledCount = (this.rules || []).filter((r) => r && r.enabled).length;
+
+            let text = '';
+            let color = '#1e63f5';
+
+            if (chaosOn && this.isActive) {
+                text = 'CHAOS';
+                color = '#b91c1c';
+            } else if (!this.isActive) {
+                text = 'OFF';
+                color = '#6b7280';
+            } else if (enabledCount > 0) {
+                text = String(enabledCount > 99 ? '99+' : enabledCount);
+            }
+
+            await chrome.action.setBadgeText({ text });
+            if (text) await chrome.action.setBadgeBackgroundColor({ color });
+        } catch (error) {
+            // Badge is a hint, never a feature — never let it break a state change.
+        }
+    }
+
+    /**
      * Serialized wrapper around storage.allocateDnrId() (Q-15).
      */
     allocateDnrIdSerialized() {
@@ -301,7 +340,19 @@ class SpliceTapBackground {
 
                 case 'logInterception':
                     if (request.entry) {
-                        this.interceptionLog.push(request.entry);
+                        // QA-3: entries carried no tab identity, so the DevTools
+                        // panel showed every tab's intercepted traffic at once —
+                        // breaking its premise as a per-tab inspector and leaking
+                        // one site's request URLs into a window inspecting
+                        // another. The sender's tab id is taken here rather than
+                        // trusted from the message body, since the page-side
+                        // relay could otherwise claim any tab.
+                        this.interceptionLog.push({
+                            ...request.entry,
+                            tabId: (sender && sender.tab && typeof sender.tab.id === 'number')
+                                ? sender.tab.id
+                                : null
+                        });
                         if (this.interceptionLog.length > this.MAX_INTERCEPTION_LOG) {
                             this.interceptionLog.splice(0, this.interceptionLog.length - this.MAX_INTERCEPTION_LOG);
                         }
@@ -325,8 +376,17 @@ class SpliceTapBackground {
                     }
                     return { success: true };
 
-                case 'getInterceptionLog':
-                    return { success: true, entries: this.interceptionLog };
+                case 'getInterceptionLog': {
+                    // The panel passes the tab it is inspecting. Entries logged
+                    // before this change (or from a frame with no tab id) have
+                    // no tabId and are kept, so an upgrade doesn't blank the
+                    // panel; omitting tabId entirely returns everything.
+                    const forTab = request.tabId;
+                    const entries = (typeof forTab === 'number')
+                        ? this.interceptionLog.filter((e) => e.tabId === forTab || e.tabId == null)
+                        : this.interceptionLog;
+                    return { success: true, entries };
+                }
 
                 case 'clearInterceptionLog':
                     this.interceptionLog = [];
@@ -511,10 +571,22 @@ class SpliceTapBackground {
             errors.push(`Unknown rule type: ${type}`);
         }
 
-        // headers/queryparams rules are DNR-backed and cannot express
-        // header or GraphQL match conditions.
-        if ((type === 'headers' || type === 'queryparams') && rule.match && (rule.match.headers || rule.match.graphql)) {
-            errors.push('Header/GraphQL match conditions are not supported for this rule type');
+        // headers/queryparams are DNR-backed: the network layer cannot express
+        // these conditions at all.
+        //
+        // CQ-4: redirect is added here for a different reason. It IS
+        // interceptor-handled, but XHR must choose the redirect URL in open(),
+        // and request headers are not set until after open() — so the XHR path
+        // matches on url+method only while fetch honours the full condition.
+        // The same rule would then redirect an XHR call and skip the identical
+        // fetch call. The options form already refused this combination, but
+        // nothing stopped it arriving by import or hand-edit, so enforce it at
+        // the one boundary every write passes through.
+        const dnrBacked = type === 'headers' || type === 'queryparams';
+        if ((dnrBacked || type === 'redirect') && rule.match && (rule.match.headers || rule.match.graphql)) {
+            errors.push(dnrBacked
+                ? 'Header/GraphQL match conditions are not supported for this rule type'
+                : 'Redirect rules cannot use header or GraphQL match conditions, because the redirect target must be chosen before request headers exist');
         }
 
         if (errors.length > 0) {
@@ -542,6 +614,10 @@ class SpliceTapBackground {
      * Broadcast current rules/settings to all content scripts with retry logic
      */
     async broadcastState() {
+        // Every state change funnels through here, so this is the one place the
+        // badge needs to be refreshed from.
+        this.updateBadge();
+
         const state = {
             type: 'syncState',
             rules: this.rules,
@@ -658,12 +734,13 @@ class SpliceTapBackground {
                 // in-page overlay can't reach, so opening it on install landed
                 // people on a near-empty tab that explained nothing.
                 //
-                // A badge points at the toolbar icon instead, which is where
-                // the extension actually is. The popup's empty state carries
-                // the getting-started copy, and popup.js clears this the first
-                // time it opens.
-                chrome.action.setBadgeText({ text: 'NEW' });
-                chrome.action.setBadgeBackgroundColor({ color: '#1e63f5' });
+                // No install badge either: the badge now carries live state
+                // (rule count, OFF, CHAOS) and a one-off "NEW" would either be
+                // overwritten by the first state change or, worse, mask the
+                // CHAOS warning. Chrome's own "Extension added" pin prompt
+                // already points at the toolbar, and the popup's empty state
+                // carries the getting-started copy.
+                this.updateBadge();
             } else if (details.reason === 'update') {
                 console.log('SpliceTap updated to version', chrome.runtime.getManifest().version);
                 // Could trigger migration here if needed

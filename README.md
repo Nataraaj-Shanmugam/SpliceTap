@@ -187,6 +187,16 @@ Both live in the popup's **Data** tab.
   failing the whole batch — the result reports how many were skipped
 - **Migration**: v1 rule files (no `type` field) load transparently — each rule is normalized to `type: 'mock'` with `response.mode: 'static'`
 
+### Chaos Mode
+Fails a configurable percentage of requests at random, for exercising retry and
+error handling. Enable it in the popup's **Settings** tab.
+
+**It is global and unscoped.** Unlike rules, it has no URL pattern — while it is
+on it fails requests on *every* site, not just the one you are testing. The
+toolbar icon shows a red **CHAOS** badge the entire time it is active, so you
+can see at a glance that failures are being injected deliberately rather than
+debugging a problem that isn't real.
+
 ### DevTools Panel
 Open Chrome DevTools and select the **SpliceTap** panel. Because mocked/blocked/delayed/redirected requests never reach the real network stack (and so can't appear in the normal Network tab), the panel instead shows SpliceTap's own interception log: it polls the background service worker every 3 seconds and renders each applied rule (method, URL, rule name, type, status, relative time), newest first. A "Clear" button empties the log.
 

@@ -27,8 +27,50 @@
 (function() {
     'use strict';
 
-    const SYNC_STATE_EVENT = '__splicetap_sync_state__';
-    const LOG_INTERCEPTION_EVENT = '__splicetap_log__';
+    // SEC-2: the channel names are keyed by a per-frame random nonce so a page
+    // script (or a third-party iframe) cannot listen in on the rule set or
+    // forge state into the interceptor. See the long note in content/injected.js
+    // for the threat model and its honest limits.
+    //
+    // The handover happens here, synchronously, at document_start — before any
+    // page script has executed — so nothing on the page can be listening for
+    // the bootstrap event yet, and the nonce is unguessable afterwards.
+    const nonce = (() => {
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    })();
+
+    const SYNC_STATE_EVENT = '__splicetap_sync_state__:' + nonce;
+    const LOG_INTERCEPTION_EVENT = '__splicetap_log__:' + nonce;
+
+    // Manifest injection order across worlds is not something to bet the
+    // feature on, so the handshake works whichever script runs first:
+    //   injected first -> it is listening, this dispatch lands.
+    //   relay first    -> this dispatch is lost, but injected announces itself
+    //                     on load and we re-send once.
+    // Only the first handover is honoured on both sides, so a page script
+    // cannot replay "ready" later to make us re-broadcast the nonce.
+    let readyHandled = false;
+
+    function dispatchBootstrap() {
+        document.dispatchEvent(new CustomEvent('__splicetap_bootstrap__', {
+            detail: { nonce }
+        }));
+    }
+
+    function onInjectedReady() {
+        // Answer exactly one "ready", then stop listening — otherwise a page
+        // script could replay it after document_start to make us re-broadcast
+        // the nonce at a moment when it *can* be listening.
+        if (readyHandled) return;
+        readyHandled = true;
+        document.removeEventListener('__splicetap_ready__', onInjectedReady, true);
+        dispatchBootstrap();
+    }
+
+    document.addEventListener('__splicetap_ready__', onInjectedReady, true);
+    dispatchBootstrap();
 
     // Rule types the interceptor (content/injected.js) actually consults.
     // Must mirror src/matcher.js's INTERCEPTOR_TYPES. 'headers'/'queryparams'

@@ -935,6 +935,21 @@ label.set-info {
   color: var(--text-muted);
 }
 
+/* Hit counter on a rule row (PROD-7). Monospace with tabular figures so the
+   line doesn't reflow as the count climbs, and muted so it never competes
+   with the URL beside it. */
+.hit-count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg-chip);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
 .disabled-chip {
   font-size: 9.5px;
   font-weight: 600;

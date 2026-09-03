@@ -529,7 +529,11 @@ class OptionsManager {
             }
             if (hasForbiddenMatch) {
                 this.showMessage(
-                    'Redirect rules cannot specify header or GraphQL match conditions (declarativeNetRequest cannot express them). Recreate this rule without those conditions.',
+                    // CQ-4: the old wording blamed declarativeNetRequest, which
+                    // does not handle redirect rules at all. The real reason is
+                    // that XHR must pick the redirect target in open(), before
+                    // any request header has been set.
+                    'Redirect rules cannot specify header or GraphQL match conditions, because the redirect target is chosen before request headers exist. Recreate this rule without those conditions.',
                     'error'
                 );
                 return;

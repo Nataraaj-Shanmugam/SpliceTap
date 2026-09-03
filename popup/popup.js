@@ -68,14 +68,12 @@ class SpliceTapPopup {
             this.renderSettings();
             this.addShortcutHints();
 
-            // The install badge has done its job once the popup is open.
-            // Cleared unconditionally — it is a no-op when no badge is set,
-            // and cheaper than tracking a "seen" flag in storage.
-            try {
-                await chrome.action.setBadgeText({ text: '' });
-            } catch (error) {
-                // Non-fatal: the badge is a hint, not a feature.
-            }
+            // NOTE: the popup must NOT clear the badge. It used to, back when
+            // the badge was a one-off "NEW" install hint. The badge now shows
+            // live state — enabled-rule count, OFF, or the red CHAOS warning —
+            // and clearing it here would silently erase exactly the warning
+            // that stops someone debugging an unrelated site while chaos mode
+            // randomly fails their requests. The background owns it.
 
             // Animate popup entrance
             document.body.classList.add('loaded');
@@ -235,6 +233,16 @@ class SpliceTapPopup {
         this.addListener('tabRules', 'click', () => this.switchTab('rules'));
         this.addListener('tabSettings', 'click', () => this.switchTab('settings'));
         this.addListener('tabData', 'click', () => this.switchTab('data'));
+
+        // A11Y-8: role="tablist" promises arrow-key movement between tabs
+        // (ARIA Authoring Practices). Click-only left the widget behaving
+        // differently from how its role tells assistive tech it behaves.
+        const tabStrip = document.querySelector('.tabs');
+        if (tabStrip) {
+            const handler = (e) => this.handleTabKeydown(e);
+            tabStrip.addEventListener('keydown', handler);
+            this.listeners.push({ element: tabStrip, event: 'keydown', handler });
+        }
 
         // Settings pane — each control persists immediately (there is no
         // Save button in the popup), then notifies the background so the
@@ -512,11 +520,13 @@ class SpliceTapPopup {
                         <div class="rule-details">
                             <span class="rule-method ${methodClass}">${safeMethod}</span>
                             ${safeUrl} → ${this.getRuleSummaryText(rule)}
+                            ${this.getHitCountHTML(rule)}
                         </div>
                     </div>
                     <div class="status-indicator" role="img" aria-label="${statusTooltip}" title="${statusTooltip}">${statusIcon}</div>
                 </div>
                 <div class="rule-actions">
+                    ${this.getReorderHTML(safeId)}
                     <button class="rule-action" title="Edit" data-action="edit" data-rule-id="${safeId}" aria-label="Edit rule">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                     </button>
@@ -532,6 +542,141 @@ class SpliceTapPopup {
                 </div>
             </div>
         `;
+    }
+
+    /**
+     * A11Y-8: Left/Right move between tabs, Home/End jump to the ends —
+     * the interaction model the ARIA tabs pattern specifies. Selection follows
+     * focus, which is the expected behaviour when switching panels is cheap.
+     */
+    handleTabKeydown(e) {
+        const order = ['rules', 'data', 'settings'];
+        const ids = { rules: 'tabRules', data: 'tabData', settings: 'tabSettings' };
+
+        const current = order.findIndex((name) => {
+            const el = document.getElementById(ids[name]);
+            return el && el.getAttribute('aria-selected') === 'true';
+        });
+        if (current < 0) return;
+
+        let next = null;
+        if (e.key === 'ArrowRight') next = (current + 1) % order.length;
+        else if (e.key === 'ArrowLeft') next = (current - 1 + order.length) % order.length;
+        else if (e.key === 'Home') next = 0;
+        else if (e.key === 'End') next = order.length - 1;
+        else return;
+
+        e.preventDefault();
+        const name = order[next];
+        this.switchTab(name);
+        const el = document.getElementById(ids[name]);
+        if (el) el.focus();
+    }
+
+    /**
+     * A11Y-4: after a list-mutating action destroys the focused control,
+     * move focus somewhere sensible rather than letting it fall to <body>.
+     * Prefers the first remaining rule card, then the New rule button.
+     */
+    restoreListFocus() {
+        const firstCard = document.querySelector('.rule-card');
+        if (firstCard) {
+            firstCard.focus();
+            return;
+        }
+        const newRule = document.getElementById('newRuleBtn');
+        if (newRule) newRule.focus();
+    }
+
+    /**
+     * Reorder controls, omitted while a search filter is active.
+     *
+     * Position is precedence, but a filtered list shows a subset in which
+     * "up" would move a rule past rules the user cannot currently see —
+     * looking like nothing happened, or worse, like it moved the wrong way.
+     * Rather than reorder within a filtered view (which cannot express the
+     * real array), the controls only appear on the unfiltered list.
+     */
+    getReorderHTML(safeId) {
+        if (this.searchTerm) return '';
+        return `
+                    <button class="rule-action" title="Move up — matched before the rules below it" data-action="move-up" data-rule-id="${safeId}" aria-label="Move rule up">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m18 15-6-6-6 6"/></svg>
+                    </button>
+                    <button class="rule-action" title="Move down — matched after the rules above it" data-action="move-down" data-rule-id="${safeId}" aria-label="Move rule down">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
+                    </button>`;
+    }
+
+    /**
+     * PROD-4: move a rule one position earlier or later.
+     *
+     * For interceptor-handled types the FIRST matching rule in array order
+     * wins, so array position is the precedence control — but there was no way
+     * to change it short of deleting and recreating a rule, or hand-editing an
+     * exported JSON file. The moment two rules can match the same request, that
+     * made overlapping rules unmanageable.
+     *
+     * Reorders against the authoritative list from the background rather than
+     * this popup's snapshot, which may predate a rule added from the overlay
+     * while the popup was open, and persists via the bulk path so the whole
+     * order is written atomically.
+     */
+    async moveRule(ruleId, delta) {
+        try {
+            const fresh = await this.sendMessage({ type: 'getRules' });
+            const rules = (fresh && fresh.success && Array.isArray(fresh.rules))
+                ? fresh.rules
+                : (this.rules || []);
+
+            const from = rules.findIndex((r) => r && r.id === ruleId);
+            if (from < 0) return;
+
+            const to = from + delta;
+            if (to < 0 || to >= rules.length) return; // already at an end
+
+            const reordered = rules.slice();
+            const [moved] = reordered.splice(from, 1);
+            reordered.splice(to, 0, moved);
+
+            const response = await this.sendMessage({ type: 'setRules', rules: reordered });
+            if (!response || !response.success) {
+                this.showError((response && response.error) || 'Could not reorder rules');
+                return;
+            }
+
+            this.rules = response.rules || reordered;
+            this.applySearchFilter();
+            this.updateTabCount();
+
+            // Keep focus on the button that was pressed — renderRules() rebuilds
+            // the list wholesale, which would otherwise drop focus to <body> and
+            // make repeated presses impossible for keyboard users (A11Y-4).
+            // Matched by dataset rather than built into a selector string: an
+            // imported rule's id is arbitrary text and would need escaping to
+            // be safe (and legal) inside an attribute selector.
+            const action = delta < 0 ? 'move-up' : 'move-down';
+            const btn = Array.from(document.querySelectorAll(`.rule-action[data-action="${action}"]`))
+                .find((el) => el.dataset.ruleId === ruleId);
+            if (btn) btn.focus();
+        } catch (error) {
+            console.error('Failed to reorder rule:', error);
+            this.showError('Could not reorder rules');
+        }
+    }
+
+    /**
+     * PROD-7: hitCount was incremented and persisted but rendered nowhere, so
+     * the most basic question — "did my rule actually fire?" — could only be
+     * answered by discovering the custom DevTools panel. Show it on the card.
+     * Rendered only once a rule has fired, to keep untouched rows quiet.
+     */
+    getHitCountHTML(rule) {
+        const hits = Number(rule && rule.hitCount) || 0;
+        if (hits <= 0) return '';
+        const shown = hits > 999 ? '999+' : String(hits);
+        const label = hits === 1 ? '1 hit' : `${shown} hits`;
+        return `<span class="hit-count" title="Times this rule has been applied">${label}</span>`;
     }
 
     /**
@@ -723,6 +868,12 @@ class SpliceTapPopup {
         if (!action || !ruleId) return;
 
         switch (action) {
+            case 'move-up':
+                await this.moveRule(ruleId, -1);
+                break;
+            case 'move-down':
+                await this.moveRule(ruleId, 1);
+                break;
             case 'edit':
                 await this.editRule(ruleId);
                 break;
@@ -817,6 +968,8 @@ class SpliceTapPopup {
                 // re-apply whatever search is active instead of dropping it.
                 this.applySearchFilter();
                 this.updateStatus();
+                // A11Y-4: same rebuild-destroys-focus problem as delete.
+                this.restoreListFocus();
                 this.showNotification('Rule duplicated');
             } else {
                 this.showError('Failed to duplicate rule');
@@ -905,6 +1058,11 @@ class SpliceTapPopup {
                 await this.loadData();
                 this.applySearchFilter();
                 this.updateStatus();
+                // A11Y-4: renderRules() rebuilds the list via innerHTML, which
+                // destroys the Delete button that was just activated — focus
+                // then falls to <body> and a keyboard user has to Tab from the
+                // top of the popup again. Park focus somewhere stable instead.
+                this.restoreListFocus();
                 this.showUndoToast(`Deleted "${rule.name}"`, rule);
             } else {
                 this.showError('Failed to delete rule');
@@ -1079,6 +1237,13 @@ class SpliceTapPopup {
 
         // Update body class for CSS styling
         document.body.classList.toggle('is-active', this.isActive && enabledCount > 0);
+
+        // A11Y-5: the button ships aria-pressed="true" in markup and nothing
+        // ever updated it, so screen readers announced "pressed" even when the
+        // visible label read "Disabled" — the exposed state contradicted the
+        // real one (WCAG 2.1 SC 4.1.2).
+        const statusToggle = document.getElementById('statusToggle');
+        if (statusToggle) statusToggle.setAttribute('aria-pressed', String(!!this.isActive));
 
         if (this.isActive && enabledCount > 0) {
             statusText.textContent = `Active (${enabledCount})`;
@@ -1260,6 +1425,11 @@ class SpliceTapPopup {
             const ta = document.getElementById('importJson');
             if (ta) ta.focus();
         }
+        // A11Y-9: on close, send focus back to the control that opened the
+        // panel. The Cancel button lives inside the panel being hidden, and
+        // `.sub-panel[hidden]` sets display:none — so without this, focus falls
+        // to <body> the instant it is clicked and the user loses their place.
+        if (!next && trigger) trigger.focus();
     }
 
     /**
@@ -1430,6 +1600,26 @@ class SpliceTapPopup {
                     break;
             }
         } else if (e.key === 'Escape') {
+            // A11Y-3: Escape used to close the whole popup unconditionally,
+            // which threw away a half-pasted import JSON on the reflex keystroke
+            // people use to mean "cancel this". Close the innermost open thing
+            // first, and only fall through to closing the popup when there is
+            // nothing left to dismiss.
+            const openPanel = document.querySelector('.sub-panel:not([hidden])');
+            if (openPanel) {
+                const trigger = openPanel.id === 'importPanel' ? 'importToggleBtn' : 'resetAllBtn';
+                this.togglePanel(openPanel.id, trigger, false);
+                return;
+            }
+
+            const search = document.getElementById('searchInput');
+            if (search && search.value) {
+                search.value = '';
+                this.handleSearch({ target: search });
+                search.focus();
+                return;
+            }
+
             window.close();
         }
     }

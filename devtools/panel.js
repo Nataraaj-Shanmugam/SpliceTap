@@ -177,7 +177,14 @@
     }
 
     async function fetchInterceptionLog() {
-        const response = await sendMessage({ type: 'getInterceptionLog' });
+        // QA-3: scope the log to the tab this panel is inspecting. Without
+        // this the panel showed traffic intercepted in every other tab too.
+        const inspectedTabId = (typeof chrome !== 'undefined'
+            && chrome.devtools
+            && chrome.devtools.inspectedWindow)
+            ? chrome.devtools.inspectedWindow.tabId
+            : undefined;
+        const response = await sendMessage({ type: 'getInterceptionLog', tabId: inspectedTabId });
         if (response && response.success) {
             clearError();
             // Background stores entries oldest-first (ring buffer push order);

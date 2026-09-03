@@ -25,6 +25,8 @@
     let editingRule = null;
     let previousActiveElement = null; // A-5: focus to restore on close
     let bodyWasInert = false; // A-5: host page's own inert state, if any, to restore on close
+    let formDirty = false; // A11Y-7: has the user typed anything into this editor?
+    let closeArmed = false; // A11Y-7: a second Escape within the window discards
     const HINT_SEEN_KEY = 'tmOverlayHintSeen'; // U-13: one-time first-run tip
 
     const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', '*'];
@@ -437,7 +439,12 @@
             </div>
 
             <div class="tm-body">
-              <div class="tm-error" id="tmError"></div>
+              <!-- A11Y-6: role="alert" so validation failures are announced.
+                 This is the primary editor — every documented way to create a
+                 rule opens it — yet it was the one surface where a screen
+                 reader user got no feedback at all on a failed save, while the
+                 options-page fallback announced correctly. -->
+            <div class="tm-error" id="tmError" role="alert" aria-live="assertive"></div>
 
               <div class="tm-row">
                 <div class="tm-field">
@@ -598,10 +605,37 @@
 
         // Close on backdrop click (but not when clicking inside the panel).
         shadow.querySelector('.tm-backdrop').addEventListener('click', (e) => {
-            if (e.target.classList.contains('tm-backdrop')) close();
+            if (e.target.classList.contains('tm-backdrop')) requestClose();
         });
 
+        // A11Y-7: track whether the form has been touched, so an accidental
+        // dismissal can be distinguished from a deliberate one. The options
+        // page has guarded its editor this way for a while; this — the editor
+        // people actually use — discarded a half-written rule silently.
+        shadow.querySelector('.tm-panel').addEventListener('input', () => { formDirty = true; }, true);
+        shadow.querySelector('.tm-panel').addEventListener('change', () => { formDirty = true; }, true);
+
         document.addEventListener('keydown', onKeydown, true);
+    }
+
+    /**
+     * A11Y-7: accidental dismissals (Escape, backdrop click) are ignored while
+     * the form has unsaved input; the explicit Cancel button still closes
+     * outright. Escape twice in a row also closes, so nobody gets stuck — the
+     * first press is treated as "did you mean that?", the second as "yes".
+     */
+    function requestClose() {
+        if (!formDirty) {
+            close();
+            return;
+        }
+        if (closeArmed) {
+            close();
+            return;
+        }
+        closeArmed = true;
+        showError('You have unsaved changes. Press Escape again, or use Cancel, to discard them.');
+        setTimeout(() => { closeArmed = false; }, 4000);
     }
 
     function getFocusableElements() {
@@ -617,7 +651,7 @@
 
         if (e.key === 'Escape') {
             e.stopPropagation();
-            close();
+            requestClose();
             return;
         }
 
@@ -969,6 +1003,11 @@
         ensureHost();
         editingRule = message.rule || null;
         populate(editingRule, message.prefillUrl);
+        // A11Y-7: populate() fires input/change events as it fills the form, so
+        // reset the dirty flags AFTER it runs — otherwise every editor would
+        // open already considering itself modified.
+        formDirty = false;
+        closeArmed = false;
         applyTheme();
         maybeShowHint();
 

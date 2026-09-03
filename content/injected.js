@@ -29,8 +29,27 @@
         window.__SPLICETAP_INITIALIZED__ = true;
     }
 
-    const SYNC_STATE_EVENT = '__splicetap_sync_state__';
-    const LOG_INTERCEPTION_EVENT = '__splicetap_log__';
+    // SEC-2: these were fixed, guessable names. Because a MAIN-world script
+    // shares the page's realm, ANY page script — or any third-party iframe on
+    // the page — could simply
+    //     document.addEventListener('__splicetap_sync_state__', e => exfil(e.detail))
+    // and receive the user's entire rule set on every sync: mock bodies,
+    // redirect destinations, and the URL patterns of internal endpoints. It
+    // could equally dispatch a forged event to disable interception for itself
+    // while the popup still showed the rules as active.
+    //
+    // The channel is now keyed by a per-frame random nonce handed over in a
+    // single bootstrap event. Content scripts run at document_start, before any
+    // page script executes, so the page cannot have a listener registered in
+    // time to observe the handover, and cannot guess the nonce afterwards.
+    //
+    // Honest limitation: this is not airtight against a same-realm adversary —
+    // sharing a realm is inherent to MAIN-world injection, and a sufficiently
+    // determined script could still tamper with globals. It removes the
+    // trivial, zero-effort eavesdropping and forgery the fixed names allowed.
+    const BOOTSTRAP_EVENT = '__splicetap_bootstrap__';
+    let SYNC_STATE_EVENT = null;
+    let LOG_INTERCEPTION_EVENT = null;
 
     // Store originals
     const originalFetch = window.fetch;
@@ -89,6 +108,9 @@
 
     // Helper: report an applied rule to content.js -> background (1.5 step 1)
     function logInterception(rule, url, method, status) {
+        // Null until the bootstrap handshake completes. Dispatching on a null
+        // name would throw inside the interception path and break the request.
+        if (!LOG_INTERCEPTION_EVENT) return;
         document.dispatchEvent(new CustomEvent(LOG_INTERCEPTION_EVENT, {
             detail: {
                 ts: Date.now(),
@@ -676,9 +698,17 @@
 
                 let finalUrl = url;
 
-                // Redirect-only pre-match (url+method only) so we can rewrite the URL
-                // passed to originalOpen. A redirect rule with match.headers/graphql
-                // is invalid (G5 enforces this), so url+method is sufficient here.
+                // Redirect-only pre-match (url+method only) so we can rewrite the
+                // URL passed to originalOpen. Request headers do not exist yet at
+                // open() — setRequestHeader() runs after it — so a header or
+                // GraphQL condition cannot be evaluated at this point.
+                //
+                // CQ-4: this previously claimed such rules were "invalid (G5
+                // enforces this)". Nothing enforced it — the options form refused
+                // the combination, but import and hand-editing did not, so a
+                // redirect rule carrying a header condition was honoured by fetch
+                // and silently ignored here. background.js validateRule() now
+                // rejects it, which makes url+method genuinely sufficient.
                 // P-10c: skip the scan entirely when no enabled redirect rule exists.
                 if (tmState.active && tmState._hasRedirectRules) {
                     const redirectRule = tmState.rules.find((rule) =>
@@ -959,8 +989,8 @@
 
     // --- SYNC STATE ---
     // Transport note: see the header comment and content/content.js — this is
-    // a namespaced CustomEvent on `document`, not window.postMessage/'message'.
-    document.addEventListener(SYNC_STATE_EVENT, (event) => {
+    // a nonce-keyed CustomEvent on `document`, not window.postMessage/'message'.
+    function onSyncState(event) {
         const payload = event && event.detail;
 
         // Validate payload
@@ -991,7 +1021,28 @@
                 settings: tmState.settings
             });
         }
-    });
+    }
+
+    // One-shot handshake: the relay hands over this frame's nonce, we bind the
+    // real listener to the nonced name, then stop listening on the fixed one so
+    // a later page script cannot re-key the channel by dispatching its own
+    // bootstrap event.
+    function onBootstrap(event) {
+        document.removeEventListener(BOOTSTRAP_EVENT, onBootstrap, true);
+        const nonce = event && event.detail && event.detail.nonce;
+        if (typeof nonce !== 'string' || !nonce) return;
+
+        SYNC_STATE_EVENT = '__splicetap_sync_state__:' + nonce;
+        LOG_INTERCEPTION_EVENT = '__splicetap_log__:' + nonce;
+        document.addEventListener(SYNC_STATE_EVENT, onSyncState, true);
+    }
+
+    document.addEventListener(BOOTSTRAP_EVENT, onBootstrap, true);
+
+    // Announce ourselves so the relay can hand the nonce over even if it ran
+    // before this script did. Carries no payload — it is purely a "listener is
+    // bound now" signal, so nothing is disclosed if the page observes it.
+    document.dispatchEvent(new CustomEvent('__splicetap_ready__'));
 
     log(spliceTapGlobalsReady ? 'Interceptor injected and active' : 'Interceptor injected but INACTIVE (missing shared modules)');
 
