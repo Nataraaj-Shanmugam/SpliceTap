@@ -111,6 +111,36 @@
     <!-- ── Data pane: backup, restore and stored-data management ───── -->
     <div class="pane pane-settings" id="paneData" role="tabpanel" aria-labelledby="tabData" hidden>
 
+      <section class="set-group" aria-labelledby="setCapture">
+        <h2 class="set-label" id="setCapture">Capture</h2>
+
+        <div class="set-row">
+          <label class="set-info" for="captureArmed">
+            <span class="set-title">Record real responses</span>
+            <span class="set-desc">Then turn one into a rule, instead of writing the body by hand</span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="captureArmed">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+
+        <p class="capture-note" id="captureNote" hidden>
+          Recording on every site until you switch this off. Response bodies are
+          held for this browser session only and never leave your device.
+        </p>
+
+        <div class="capture-list" id="captureList" role="list"></div>
+
+        <div class="set-row" id="captureActionsRow" hidden>
+          <div class="set-info">
+            <div class="set-title"><span id="captureCount">0</span> captured</div>
+            <p class="set-desc">Cleared when the browser closes</p>
+          </div>
+          <button type="button" class="mini-btn" id="clearCapturesBtn">Clear</button>
+        </div>
+      </section>
+
       <section class="set-group" aria-labelledby="setBackup">
         <h2 class="set-label" id="setBackup">Backup</h2>
 

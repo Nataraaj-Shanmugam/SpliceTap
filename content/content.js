@@ -43,6 +43,7 @@
 
     const SYNC_STATE_EVENT = '__splicetap_sync_state__:' + nonce;
     const LOG_INTERCEPTION_EVENT = '__splicetap_log__:' + nonce;
+    const CAPTURE_EVENT = '__splicetap_capture__:' + nonce;
 
     // Manifest injection order across worlds is not something to bet the
     // feature on, so the handshake works whichever script runs first:
@@ -201,6 +202,19 @@
      * script and forward them to the background script (the 1.5 pipeline).
      */
     function setupPageMessageListener() {
+        document.addEventListener(CAPTURE_EVENT, (event) => {
+            const entry = event && event.detail;
+            if (!entry || typeof entry !== 'object' || typeof entry.body !== 'string') return;
+
+            chrome.runtime.sendMessage({
+                type: 'logCapture',
+                entry
+            }).catch(() => {
+                // Background may be asleep or the page closing — captures are
+                // a convenience, never worth surfacing an error for.
+            });
+        });
+
         document.addEventListener(LOG_INTERCEPTION_EVENT, (event) => {
             const entry = event && event.detail;
             if (!entry || typeof entry !== 'object') {

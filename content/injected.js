@@ -50,6 +50,7 @@
     const BOOTSTRAP_EVENT = '__splicetap_bootstrap__';
     let SYNC_STATE_EVENT = null;
     let LOG_INTERCEPTION_EVENT = null;
+    let CAPTURE_EVENT = null;
 
     // Store originals
     const originalFetch = window.fetch;
@@ -88,6 +89,61 @@
     // so chaos mode still fires even when the user has no regular rules — P-1)
     function isChaosModeActive() {
         return !!(tmState.settings && tmState.settings.chaosMode && tmState.settings.chaosMode.enabled);
+    }
+
+    // Capture mode: record real responses so a rule can be built from one,
+    // instead of hand-writing a mock body from scratch. Like chaos mode it has
+    // no rule dependency — the whole point is to use it BEFORE any rule exists —
+    // so it has to gate the zero-rule early-outs too.
+    //
+    // Off by default and explicitly armed by the user. While disarmed this is a
+    // single property read and nothing else on the request path changes.
+    function isCaptureArmed() {
+        return !!(tmState.settings && tmState.settings.captureArmed);
+    }
+
+    // Response bodies are the one thing this extension otherwise never touches
+    // at rest, so capture is deliberately bounded: only bodies that look like
+    // text/JSON, only up to this size, and only while armed.
+    const CAPTURE_MAX_BODY = 100 * 1024;
+    const CAPTURE_TEXTUAL = /^(application\/(json|.*\+json|xml|javascript|x-www-form-urlencoded)|text\/)/i;
+
+    function emitCapture(entry) {
+        if (!CAPTURE_EVENT) return;
+        document.dispatchEvent(new CustomEvent(CAPTURE_EVENT, { detail: entry }));
+    }
+
+    /**
+     * Record a passed-through response without altering it.
+     *
+     * Takes a clone so the page still gets an unread body — reading the real
+     * one would consume the stream and break the very request we are observing.
+     */
+    async function captureFetchResponse(response, url, method) {
+        try {
+            const contentType = response.headers.get('content-type') || '';
+            if (!CAPTURE_TEXTUAL.test(contentType)) return;
+
+            const clone = response.clone();
+            const text = await clone.text();
+            if (text.length > CAPTURE_MAX_BODY) return;
+
+            const headers = {};
+            response.headers.forEach((v, k) => { headers[k] = v; });
+
+            emitCapture({
+                ts: Date.now(),
+                url: sanitizeUrlForLog(url),
+                method,
+                status: response.status,
+                statusText: response.statusText,
+                contentType,
+                headers,
+                body: text
+            });
+        } catch (e) {
+            // Capture is best-effort and must never affect the real request.
+        }
     }
 
     // Guard: the shared UMD modules must be present (loaded earlier in the
@@ -341,7 +397,7 @@
         // the common "installed but nothing to do" case. Chaos mode has no
         // rule dependency, so it must still gate this bail (correctness).
         window.fetch = function (...args) {
-            if (!tmState.active || (tmState.rules.length === 0 && !isChaosModeActive())) {
+            if (!tmState.active || (tmState.rules.length === 0 && !isChaosModeActive() && !isCaptureArmed())) {
                 return originalFetch.apply(this, args);
             }
             return handleInterceptedFetch.apply(this, args);
@@ -391,6 +447,13 @@
             // 4. Find matching rule
             const rule = window.SpliceTapMatcher.findMatchingRule(tmState.rules, { url, method, headers, bodyText });
             if (!rule) {
+                // Nothing to apply — but this is exactly the response worth
+                // capturing, since a rule for it does not exist yet.
+                if (isCaptureArmed()) {
+                    const passed = await originalFetch.apply(this, args);
+                    captureFetchResponse(passed, url, method);
+                    return passed;
+                }
                 return originalFetch.apply(this, args);
             }
 
@@ -494,7 +557,7 @@
             // zero own-property overrides) when there's nothing this instance
             // could ever need to do. Chaos mode has no rule dependency, so it
             // must still gate this bail (correctness).
-            if (!tmState.active || (tmState.rules.length === 0 && !isChaosModeActive())) {
+            if (!tmState.active || (tmState.rules.length === 0 && !isChaosModeActive() && !isCaptureArmed())) {
                 return new originalXHR();
             }
 
@@ -831,6 +894,42 @@
                 });
 
                 if (!rule) {
+                    // No rule applies, so this response is a capture candidate.
+                    // XHR has no clone(), but reading responseText after the
+                    // fact is non-destructive — unlike a fetch body stream.
+                    if (isCaptureArmed()) {
+                        xhr.addEventListener('load', function onCaptureLoad() {
+                            xhr.removeEventListener('load', onCaptureLoad);
+                            try {
+                                const ct = xhr.getResponseHeader('content-type') || '';
+                                if (!CAPTURE_TEXTUAL.test(ct)) return;
+                                // responseText throws for arraybuffer/blob types.
+                                const rt = (xhr.responseType === '' || xhr.responseType === 'text')
+                                    ? xhr.responseText
+                                    : null;
+                                if (typeof rt !== 'string' || rt.length > CAPTURE_MAX_BODY) return;
+
+                                const headers = {};
+                                (xhr.getAllResponseHeaders() || '').trim().split(/[\r\n]+/).forEach((line) => {
+                                    const i = line.indexOf(':');
+                                    if (i > 0) headers[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+                                });
+
+                                emitCapture({
+                                    ts: Date.now(),
+                                    url: sanitizeUrlForLog(requestUrl),
+                                    method: requestMethod,
+                                    status: xhr.status,
+                                    statusText: xhr.statusText,
+                                    contentType: ct,
+                                    headers,
+                                    body: rt
+                                });
+                            } catch (e) {
+                                // Best-effort only.
+                            }
+                        });
+                    }
                     return originalSend.apply(this, arguments);
                 }
 
@@ -1034,6 +1133,7 @@
 
         SYNC_STATE_EVENT = '__splicetap_sync_state__:' + nonce;
         LOG_INTERCEPTION_EVENT = '__splicetap_log__:' + nonce;
+        CAPTURE_EVENT = '__splicetap_capture__:' + nonce;
         document.addEventListener(SYNC_STATE_EVENT, onSyncState, true);
     }
 

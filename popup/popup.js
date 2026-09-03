@@ -274,6 +274,13 @@ class SpliceTapPopup {
             this.settings.chaosMode.failureRate = percent / 100;
             this.saveSettings();
         });
+        // Capture
+        this.addListener('captureArmed', 'change', (e) => this.setCaptureArmed(e.target.checked));
+        this.addListener('clearCapturesBtn', 'click', async () => {
+            await this.sendMessage({ type: 'clearCaptures' });
+            this.renderCaptureSection();
+        });
+
         // Data management (moved out of the options page)
         this.addListener('exportRulesBtn', 'click', () => this.exportRules());
         this.addListener('importToggleBtn', 'click', () => this.togglePanel('importPanel', 'importToggleBtn'));
@@ -1292,7 +1299,10 @@ class SpliceTapPopup {
         // Re-read on open so each pane reflects what the background actually
         // holds, rather than whatever was true when the popup first loaded.
         if (active === 'settings') this.renderSettings();
-        if (active === 'data') this.renderDataSection();
+        if (active === 'data') {
+            this.renderDataSection();
+            this.renderCaptureSection();
+        }
     }
 
     /**
@@ -1361,6 +1371,159 @@ class SpliceTapPopup {
     updateTabCount() {
         const el = document.getElementById('tabRuleCount');
         if (el) el.textContent = String((this.rules || []).length);
+    }
+
+    /**
+     * Capture: record a real response, then build a rule from it.
+     *
+     * The gap this closes: patch mode edits a live response, and a mock needs a
+     * body — both require knowing the real payload's shape, which previously
+     * meant copying it out of DevTools by hand. Capture removes that step.
+     */
+    async setCaptureArmed(armed) {
+        try {
+            const response = await this.sendMessage({ type: 'setCaptureArmed', armed });
+            if (!response || !response.success) {
+                this.showError((response && response.error) || 'Could not change capture');
+                return;
+            }
+            this.settings = { ...(this.settings || {}), captureArmed: !!armed };
+            this.renderCaptureSection();
+            if (armed) this.showNotification('Recording — trigger the request you want to mock');
+        } catch (error) {
+            console.error('Failed to toggle capture:', error);
+            this.showError('Could not change capture');
+        }
+    }
+
+    async renderCaptureSection() {
+        const armed = !!(this.settings && this.settings.captureArmed);
+
+        const toggle = document.getElementById('captureArmed');
+        if (toggle) toggle.checked = armed;
+
+        const note = document.getElementById('captureNote');
+        if (note) note.hidden = !armed;
+
+        let captures = [];
+        try {
+            const response = await this.sendMessage({ type: 'getCaptures' });
+            if (response && response.success) captures = response.captures || [];
+        } catch (error) {
+            // Background asleep — leave the list empty rather than erroring.
+        }
+        this.captures = captures;
+
+        const countEl = document.getElementById('captureCount');
+        if (countEl) countEl.textContent = String(captures.length);
+
+        const actionsRow = document.getElementById('captureActionsRow');
+        if (actionsRow) actionsRow.hidden = captures.length === 0;
+
+        const list = document.getElementById('captureList');
+        if (!list) return;
+
+        // Newest first — the request just triggered is the one being looked for.
+        list.innerHTML = captures.slice().reverse().map((c) => {
+            const isError = c.status >= 400;
+            return `
+                <div class="capture-item" role="listitem">
+                    <div class="capture-main">
+                        <div class="capture-url" title="${this.escapeHtml(c.url)}">${this.escapeHtml(c.url)}</div>
+                        <div class="capture-meta">
+                            <span>${this.escapeHtml(c.method)}</span>
+                            <span class="capture-status ${isError ? 'is-error' : ''}">${Number(c.status) || 0}</span>
+                            <span>${this.formatBytes((c.body || '').length)}</span>
+                        </div>
+                    </div>
+                    <div class="capture-actions">
+                        <button type="button" class="mini-btn" data-capture-action="mock" data-capture-id="${this.escapeHtml(c.id)}" title="Create a rule returning this exact response">Mock</button>
+                        <button type="button" class="mini-btn" data-capture-action="patch" data-capture-id="${this.escapeHtml(c.id)}" title="Create a rule that edits this response, keeping the rest live">Patch</button>
+                    </div>
+                </div>`;
+        }).join('');
+
+        list.querySelectorAll('[data-capture-action]').forEach((btn) => {
+            const handler = () => this.createRuleFromCapture(btn.dataset.captureId, btn.dataset.captureAction);
+            btn.addEventListener('click', handler);
+            this.listeners.push({ element: btn, event: 'click', handler });
+        });
+    }
+
+    formatBytes(n) {
+        if (n < 1024) return `${n} B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+        return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    }
+
+    /**
+     * Build a rule from a captured response.
+     *
+     * mock  — replay this exact payload, so the endpoint can be edited freely.
+     * patch — start from an empty merge patch against the live response, which
+     *         is the mode that has no equivalent elsewhere; the captured body
+     *         is what tells you which fields are available to patch.
+     */
+    async createRuleFromCapture(captureId, mode) {
+        const capture = (this.captures || []).find((c) => c.id === captureId);
+        if (!capture) return;
+
+        let parsedBody = null;
+        try {
+            parsedBody = JSON.parse(capture.body);
+        } catch (error) {
+            parsedBody = null; // not JSON — keep the raw text
+        }
+
+        // Pattern the exact path, not the whole origin: capturing /api/users/42
+        // should not produce a rule that swallows every request on the host.
+        let urlPattern = capture.url;
+        try {
+            const u = new URL(capture.url);
+            urlPattern = `*${u.pathname}*`;
+        } catch (error) {
+            // Relative or already-redacted URL — match it as a substring.
+        }
+
+        const isPatch = mode === 'patch';
+        const rule = {
+            id: this.generateId(),
+            name: isPatch ? `Patch ${urlPattern}` : `Mock ${urlPattern}`,
+            enabled: false, // never start intercepting without the user looking
+            type: 'mock',
+            created: new Date().toISOString(),
+            lastModified: new Date().toISOString(),
+            match: { method: capture.method, url: urlPattern },
+            response: {
+                statusCode: capture.status,
+                statusText: capture.statusText || '',
+                headers: capture.contentType ? { 'Content-Type': capture.contentType } : {},
+                body: isPatch ? {} : (parsedBody !== null ? parsedBody : capture.body),
+                delay: 0,
+                mode: isPatch ? 'patch' : 'static',
+                patch: isPatch ? {} : {}
+            }
+        };
+        if (isPatch) rule.response.patch = {};
+
+        try {
+            const response = await this.sendMessage({ type: 'saveRule', rule });
+            if (!response || !response.success) {
+                this.showError((response && response.error) || 'Could not create the rule');
+                return;
+            }
+            await this.loadData();
+            this.applySearchFilter();
+            this.updateTabCount();
+            this.showNotification(
+                isPatch
+                    ? 'Patch rule created — add the fields to change, then enable it'
+                    : 'Mock rule created — enable it on the Rules tab'
+            );
+        } catch (error) {
+            console.error('Failed to create rule from capture:', error);
+            this.showError('Could not create the rule');
+        }
     }
 
     /**

@@ -343,7 +343,7 @@
                 <li>SpliceTap has no backend, no analytics SDK, and no telemetry.</li>
                 <li>Nothing you create or capture ever leaves your device.</li>
                 <li>There is no account, no sign-in, and no user identifier of any kind.</li>
-                <li>Response and request bodies are never stored.</li>
+                <li>Response bodies are stored only if you switch on Capture, and only for the browser session.</li>
                 <li>The full source is public and auditable under the MIT License.</li>
             </ul>
         </div>
@@ -397,6 +397,20 @@
                 sensitive query-string parameters (tokens, API keys, session ids) are redacted before a URL is
                 recorded.
             </div>
+        </section>
+
+        <section class="card">
+            <h2>Capture</h2>
+            <p>One feature does record response bodies, and only when you ask it to. <strong>Capture</strong>, in the
+                popup's Data tab, records real responses so you can build a rule from an actual payload instead of
+                retyping it by hand. It is off until you switch it on.</p>
+            <p>While it is running the toolbar icon shows a <strong>REC</strong> badge, so it cannot be left on
+                unnoticed. At most 25 responses are kept, each up to 100&nbsp;KB, and only for textual content types
+                such as JSON. They are held in session storage — the same place as the interception log — which means
+                they are gone when the browser closes, and you can clear them yourself at any time from the same
+                panel.</p>
+            <p>As with everything else here, captured responses stay on your device. There is nowhere for them to be
+                sent.</p>
         </section>
 
         <section class="card">

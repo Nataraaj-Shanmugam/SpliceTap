@@ -34,6 +34,14 @@ class SpliceTapBackground {
         this.interceptionLog = [];
         this.MAX_INTERCEPTION_LOG = 200;
 
+        // Captured real responses, used to build a rule from an actual payload
+        // instead of hand-writing one. Session-backed and capped: these hold
+        // response BODIES, the one thing the extension otherwise never keeps,
+        // so they are short-lived by construction and cleared when the browser
+        // closes. Capture is off unless the user explicitly arms it.
+        this.captures = [];
+        this.MAX_CAPTURES = 25;
+
         // Throttle for persisting stats + the interception log, to avoid a
         // storage write on every single intercepted request.
         this._lastPersist = 0;
@@ -79,11 +87,25 @@ class SpliceTapBackground {
      * it on and later debugging something unrelated while requests randomly
      * fail. It therefore outranks the other states and is shown in red.
      */
+    /**
+     * Captures live in session storage only — they contain response bodies, so
+     * they must not survive the browser session or reach chrome.storage.local.
+     */
+    async _persistCaptures() {
+        try {
+            await chrome.storage.session.set({ spliceTapCaptures: this.captures });
+        } catch (error) {
+            // Session storage unavailable — captures stay in memory for this
+            // service-worker lifetime, which is still useful.
+        }
+    }
+
     async updateBadge() {
         try {
             const chaosOn = !!(this.settings
                 && this.settings.chaosMode
                 && this.settings.chaosMode.enabled);
+            const capturing = !!(this.settings && this.settings.captureArmed);
             const enabledCount = (this.rules || []).filter((r) => r && r.enabled).length;
 
             let text = '';
@@ -92,6 +114,11 @@ class SpliceTapBackground {
             if (chaosOn && this.isActive) {
                 text = 'CHAOS';
                 color = '#b91c1c';
+            } else if (capturing && this.isActive) {
+                // Capture records real response bodies, so it gets the same
+                // treatment as chaos mode: impossible to leave running unnoticed.
+                text = 'REC';
+                color = '#b45309';
             } else if (!this.isActive) {
                 text = 'OFF';
                 color = '#6b7280';
@@ -132,9 +159,15 @@ class SpliceTapBackground {
             // Restore the volatile interception log from session storage so the
             // DevTools panel keeps its history across SW suspensions.
             try {
-                const sess = await chrome.storage.session.get('spliceTapInterceptionLog');
+                const sess = await chrome.storage.session.get([
+                    'spliceTapInterceptionLog',
+                    'spliceTapCaptures'
+                ]);
                 if (Array.isArray(sess.spliceTapInterceptionLog)) {
                     this.interceptionLog = sess.spliceTapInterceptionLog;
+                }
+                if (Array.isArray(sess.spliceTapCaptures)) {
+                    this.captures = sess.spliceTapCaptures;
                 }
             } catch (e) {
                 // session storage unavailable — non-fatal
@@ -375,6 +408,51 @@ class SpliceTapBackground {
                         await this._persistVolatile();
                     }
                     return { success: true };
+
+                case 'logCapture': {
+                    const e = request.entry;
+                    if (!e || typeof e.body !== 'string') return { success: true };
+                    // Only accept captures while armed. The relay runs in a page
+                    // context, so a compromised one must not be able to push
+                    // response bodies into storage when the user has not asked.
+                    if (!(this.settings && this.settings.captureArmed)) return { success: true };
+
+                    this.captures.push({
+                        id: `cap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                        ts: Number(e.ts) || Date.now(),
+                        url: String(e.url || ''),
+                        method: String(e.method || 'GET').toUpperCase(),
+                        status: Number(e.status) || 200,
+                        statusText: String(e.statusText || ''),
+                        contentType: String(e.contentType || ''),
+                        headers: (e.headers && typeof e.headers === 'object') ? e.headers : {},
+                        body: e.body,
+                        tabId: (sender && sender.tab && typeof sender.tab.id === 'number') ? sender.tab.id : null
+                    });
+                    if (this.captures.length > this.MAX_CAPTURES) {
+                        this.captures.splice(0, this.captures.length - this.MAX_CAPTURES);
+                    }
+                    await this._persistCaptures();
+                    return { success: true };
+                }
+
+                case 'getCaptures':
+                    return { success: true, captures: this.captures, armed: !!(this.settings && this.settings.captureArmed) };
+
+                case 'clearCaptures':
+                    this.captures = [];
+                    await this._persistCaptures();
+                    return { success: true };
+
+                case 'setCaptureArmed': {
+                    this.settings = { ...this.settings, captureArmed: !!request.armed };
+                    const armResult = await this.storage.saveSettings(this.settings);
+                    if (armResult && armResult.success === false) {
+                        return { success: false, error: armResult.error || 'Failed to change capture state' };
+                    }
+                    await this.broadcastState();
+                    return { success: true, armed: !!this.settings.captureArmed };
+                }
 
                 case 'getInterceptionLog': {
                     // The panel passes the tab it is inspecting. Entries logged

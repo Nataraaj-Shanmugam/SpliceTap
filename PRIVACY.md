@@ -20,9 +20,18 @@ Chrome's built-in extension storage, never a remote server:
   requests' metadata (URL, method, rule name/type, response status) so the
   DevTools panel keeps history across service-worker restarts within a
   browser session. Session storage clears automatically when the browser
-  closes. Response and request **bodies are never stored**, only metadata.
-  Common sensitive query-string parameters (tokens, API keys, session ids)
-  are redacted before a URL is written to this log.
+  closes. Response and request **bodies are never written to this log**, only
+  metadata. Common sensitive query-string parameters (tokens, API keys,
+  session ids) are redacted before a URL is written to it.
+- **Captures** (`chrome.storage.session`) — response bodies, and only when you
+  explicitly switch on **Capture** in the popup's Data tab. This is the one
+  feature that records a response body, and it exists so you can build a rule
+  from a real payload instead of retyping it. While it is on, the toolbar icon
+  shows a **REC** badge so it cannot run unnoticed. At most 25 responses are
+  kept, each up to 100 KB, only for textual content types, and — like the
+  interception log — they live in session storage and are gone when the browser
+  closes. You can clear them at any time from the same panel. Capture is off
+  until you turn it on, and nothing captured is ever sent anywhere.
 
 None of the above ever leaves your device. SpliceTap has no backend, no
 analytics SDK, and no telemetry — a repo-wide search confirms the only

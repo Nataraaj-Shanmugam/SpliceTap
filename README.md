@@ -187,6 +187,28 @@ Both live in the popup's **Data** tab.
   failing the whole batch — the result reports how many were skipped
 - **Migration**: v1 rule files (no `type` field) load transparently — each rule is normalized to `type: 'mock'` with `response.mode: 'static'`
 
+### Capture — build a rule from a real response
+Mocking an endpoint normally starts with retyping its payload by hand, and patch
+mode is worse: you have to know the real response's shape before you can decide
+which fields to change.
+
+Capture removes that step. Switch it on in the popup's **Data** tab, trigger the
+request you care about, and the real response is recorded. Each capture then
+offers two buttons:
+
+- **Mock** — a rule replaying that exact status, content type and body, ready to
+  edit.
+- **Patch** — a rule that lets the real response through and merges your changes
+  into it, with the captured body showing you which fields exist to change.
+
+New rules are created **disabled**, so nothing starts intercepting while you are
+still looking at it.
+
+Capture is the one feature that records response bodies, so it is deliberately
+bounded: off until you switch it on, a **REC** badge on the toolbar icon the
+whole time it is running, at most 25 textual responses of up to 100 KB each, and
+session storage only — cleared when the browser closes, or by you, at any time.
+
 ### Chaos Mode
 Fails a configurable percentage of requests at random, for exercising retry and
 error handling. Enable it in the popup's **Settings** tab.

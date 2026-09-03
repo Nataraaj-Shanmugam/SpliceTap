@@ -25,9 +25,15 @@ Every claim below is verifiable against the source in this repository.
   *your own* API, so the real response can be modified.
 - **No account, no sign-in, no sync.** Nothing to log into and nothing to sync
   to. Your rules exist only on the device you created them on.
-- **No request or response bodies are stored.** The DevTools log keeps metadata
-  only — timestamp, URL, method, rule name and type, status code — capped at
-  200 entries in session storage, which is cleared when the browser closes.
+- **The DevTools log never stores bodies.** It keeps metadata only — timestamp,
+  URL, method, rule name and type, status code — capped at 200 entries in
+  session storage, which is cleared when the browser closes.
+- **One feature does record response bodies, on request.** Capture (popup →
+  Data) exists so you can build a rule from a real payload rather than retyping
+  it. It is off by default, shows a **REC** badge on the toolbar icon the whole
+  time it is on, keeps at most 25 textual responses of up to 100 KB each, stores
+  them in session storage only, and lets you clear them at any time. Nothing
+  captured is transmitted — there is nowhere for it to go.
 - **Sensitive URL parameters are redacted before logging.** Common token, key
   and session parameter names are stripped from URLs before they reach the log.
 - **No remote code.** Everything that runs ships in the package. There is no
