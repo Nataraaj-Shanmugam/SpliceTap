@@ -245,13 +245,38 @@
      * rules and the freshly computed desired set, so syncDnrRules can skip a
      * no-op remove+re-add (C-16). Order-independent; compares by rule id.
      */
+    /**
+     * PERF-10: compare the fields a DNR rule is actually made of, rather than
+     * JSON.stringify-ing both sides per rule.
+     *
+     * Beyond the allocation, stringify comparison is also wrong in principle
+     * here — it treats key order as significant, so two structurally identical
+     * rules built in different order would compare unequal and trigger a
+     * pointless updateDynamicRules call.
+     */
+    function dnrRuleEqual(a, b) {
+        if (a.id !== b.id || a.priority !== b.priority) return false;
+
+        const ac = a.condition || {};
+        const bc = b.condition || {};
+        if (ac.urlFilter !== bc.urlFilter) return false;
+        if (ac.isUrlFilterCaseSensitive !== bc.isUrlFilterCaseSensitive) return false;
+        if (String(ac.resourceTypes) !== String(bc.resourceTypes)) return false;
+        if (String(ac.requestMethods) !== String(bc.requestMethods)) return false;
+
+        // The action holds header/query-param lists whose shape varies by rule
+        // type; comparing it structurally would mean re-encoding the DNR schema
+        // here, so this one part stays a serialized comparison.
+        return JSON.stringify(a.action) === JSON.stringify(b.action);
+    }
+
     function rulesetsEqual(current, desired) {
         if (current.length !== desired.length) return false;
         const byId = new Map(current.map((r) => [r.id, r]));
         for (const rule of desired) {
             const existing = byId.get(rule.id);
             if (!existing) return false;
-            if (JSON.stringify(existing) !== JSON.stringify(rule)) return false;
+            if (!dnrRuleEqual(existing, rule)) return false;
         }
         return true;
     }

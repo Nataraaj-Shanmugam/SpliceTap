@@ -97,18 +97,26 @@ export class SpliceTapStorage {
 
     async saveRules(rules) {
         try {
-            // Check quota before saving
-            await this.checkQuota();
+            // PERF-9: this ran getBytesInUse() before every single save — a
+            // scan of all extension storage to answer a question that only
+            // changes slowly. Throttled to once a minute; the write itself
+            // still surfaces a genuine QUOTA_BYTES failure through the catch
+            // below, so nothing depends on the pre-check to stay correct.
+            const now = Date.now();
+            if (now - (this._lastQuotaCheck || 0) > 60000) {
+                this._lastQuotaCheck = now;
+                await this.checkQuota();
+            }
 
             await chrome.storage.local.set({
                 [this.storageKeys.rules]: rules
             });
-            
-            await this.updateStats({ 
+
+            await this.updateStats({
                 rulesCount: rules.length,
                 lastUpdated: new Date().toISOString()
             });
-            
+
             return { success: true };
         } catch (error) {
             console.error('Failed to save rules:', error);

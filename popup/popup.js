@@ -453,7 +453,7 @@ class SpliceTapPopup {
                 } catch (error) {
                     console.error('Failed to render rule card:', rule && rule.id, error);
                     const safeId = this.escapeHtml((rule && rule.id) || '');
-                    return `<div class="rule-card rule-card-error" data-rule-id="${safeId}" role="listitem">
+                    return `<div class="rule-card rule-card-error" data-rule-id="${safeId}">
                         <div class="rule-details">⚠ This rule could not be displayed (${this.escapeHtml(error.message)}).
                         <button class="rule-action" data-action="delete" data-rule-id="${safeId}">Delete it</button></div>
                     </div>`;
@@ -511,7 +511,15 @@ class SpliceTapPopup {
         const disabledChip = rule.enabled ? '' : '<span class="disabled-chip">Disabled</span>';
 
         return `
-            <div class="rule-card ${enabledClass}" data-rule-id="${safeId}" role="listitem" tabindex="0" aria-label="Edit ${safeName}">
+            <!-- A11Y-10: the row is focusable and Enter/Space opens the editor
+                 (A-16), but it was role="listitem" — a structural role AT need
+                 not announce as activatable, so a keyboard user heard "list
+                 item" with no hint that Enter did anything. It is a button, so
+                 it says so. role="list" was dropped from the container to make
+                 that valid, since a list may only contain listitems; for a set
+                 of activatable rows, announcing each one correctly is worth
+                 more than the "list of N" count. -->
+            <div class="rule-card ${enabledClass}" data-rule-id="${safeId}" role="button" tabindex="0" aria-label="Edit ${safeName}">
                 <div class="rule-header">
                     <div class="rule-info">
                         <div class="rule-name">

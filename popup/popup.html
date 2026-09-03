@@ -87,11 +87,13 @@
       </div>
 
       <!-- Rules List -->
-      <!-- A11Y-12: role="list" used to sit on <main>, which overrides the
+      <!-- A11Y-12: role="list" used to sit on <main>, which overrides an
            element's native semantics — the popup then had no main landmark at
-           all. The list role now lives on an inner wrapper. -->
+           all. The landmark is restored here. The rows inside are activatable
+           (role="button", see getRuleCardHTML), and a list may only contain
+           listitems, so no list role is applied to the container either. -->
       <main class="rules-list">
-      <div id="rulesContainer" role="list">
+      <div id="rulesContainer">
       <!-- Empty State (Default) -->
       <div class="empty-state">
         <div class="empty-icon">
