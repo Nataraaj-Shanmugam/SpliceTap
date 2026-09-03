@@ -4,6 +4,61 @@
 **Date:** 2026-08-28
 **Scope:** Full codebase, docs and store-readiness, ahead of first Chrome Web Store submission.
 
+## Status — updated 3 September 2026
+
+**50 of 57 closed.** Every Critical, every High, and every Medium is fixed
+and verified. The report below is the original audit and is kept as written;
+this section records what has changed since.
+
+Closed in the order the analysis recommended: SEC-1, QA-1, QA-2, A11Y-1 and
+A11Y-2 first (silent failure and data loss), then PROD-1, CQ-3/PROD-9,
+PROD-2, then the trust and workflow tier (SEC-2, SEC-3, QA-3, CQ-4, PROD-3
+through PROD-10, the A11Y set, UX-1/2/3), then the structural cleanup
+(CQ-5, CQ-6, CQ-7, CQ-10, CWS-2) and the performance items PERF-2/3/5/6/9/10.
+
+### Deliberately not fixed
+
+**PERF-1 — content scripts ship unminified (~86 KB parsed per frame).**
+Real, and the largest remaining performance item. Both available fixes cost
+more than they save:
+
+- *Minify at package time.* PERMISSIONS.md tells users the packaged build has
+  "no bundler, no minifier, no transformation — what you read here is what
+  ships", and points them at reading the source to verify the privacy claim.
+  Minifying would make that claim false. The market analysis identified
+  auditability as this product's only durable advantage over a
+  better-resourced competitor; trading it for parse bytes is the wrong way
+  round.
+- *Inject the overlay on demand* (it is 47 KB of editor loaded on every top
+  frame, and most page loads never open it). This needs the `scripting`
+  permission, which the extension does not currently request. Adding a
+  permission to an extension already asking for `<all_urls>` works directly
+  against CWS-1's Extended Review risk, and widens the surface the trust
+  pitch rests on.
+
+Revisit if the extension ever gains `scripting` for another reason, or if
+real users report page-load impact.
+
+**CQ-9 — the ESLint config is narrow.** Accurate, and a documented trade-off
+for a no-build-step extension. `no-unused-vars` structurally cannot see an
+unused class method, so no config change would have caught the dead code in
+CQ-5. It did catch two real mistakes during remediation (an undefined
+`DOMParser`, a duplicate globals key), which is the job it is there for.
+
+**CWS-1 — broad permissions invite Extended Review.** Not a defect. Every
+permission is used and justified; the combination is what a network
+interception tool requires. Mitigation is preparation, not code.
+
+### Still open (4, all Low)
+
+`PERF-4` unbatched per-request messages · `PERF-7` linear rule scan (fine
+below ~50 rules) · `PERF-8` per-instance XHR closures · `CQ-8` no tests for
+`storage.js`, `background.js` handlers or `injected.js` — partially
+addressed: the shared modules now have 18 tests (59 → 77 total), but the
+three highest-risk files remain untested.
+
+---
+
 ## Method
 
 Seven independent read-only reviewers examined the codebase in parallel, each from a
