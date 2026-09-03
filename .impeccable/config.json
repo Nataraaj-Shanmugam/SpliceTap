@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "popup/popup.css"
+        ],
+        "createdAt": "2026-09-03T06:25:07.105Z",
+        "reason": "Claude: body::before is a 3px full-width brand hairline fixed to the window top edge (top/left/right:0), not a side accent on a card. Verified at popup.css:117. Same motif on options, devtools and overlay."
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "options/options.css"
+        ],
+        "createdAt": "2026-09-03T06:25:15.083Z",
+        "reason": "Claude: body::before is a 3px full-width brand hairline fixed to the window top edge, spanning sidebar and main column, not a side accent on a card. Same motif as popup/devtools/overlay."
+      }
+    ]
+  }
+}
