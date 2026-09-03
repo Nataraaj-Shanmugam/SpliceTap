@@ -211,6 +211,15 @@ export class SpliceTapStorage {
                 if (existingIndex >= 0) {
                     rules[existingIndex] = {
                         ...rule,
+                        // Carry the original creation timestamp forward. An
+                        // update arrives as whatever fields the caller built,
+                        // and a caller rebuilding a rule from form inputs has
+                        // no reason to know about `created` — spreading the
+                        // incoming rule alone silently dropped it. Callers had
+                        // each been compensating separately (see overlay.js's
+                        // `editingRule.created ||` fallback); the invariant
+                        // belongs here, once, where the previous value is known.
+                        created: rules[existingIndex].created || rule.created,
                         lastModified: new Date().toISOString()
                     };
                 } else {
@@ -387,11 +396,6 @@ export class SpliceTapStorage {
         }
     }
 
-
-
-
-
-
     async clearAll() {
         try {
             await chrome.storage.local.clear();
@@ -413,10 +417,6 @@ export class SpliceTapStorage {
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
-
-    /**
-     * Generate unique ID for rules
-     */
 }
 
 // Also expose as global for non-module contexts (popup, options page)

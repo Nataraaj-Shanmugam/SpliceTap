@@ -68,7 +68,10 @@ module.exports = [
         }
     },
     {
-        files: ['tests/**/*.test.js'],
+        // Covers tests/helpers/*.js too, not just *.test.js — the harnesses
+        // there (chrome-mock, load-esm, injected-harness) are Node modules
+        // that need __dirname and EventTarget.
+        files: ['tests/**/*.js'],
         languageOptions: {
             globals: {
                 describe: 'readonly',
@@ -76,7 +79,12 @@ module.exports = [
                 expect: 'readonly',
                 beforeEach: 'readonly',
                 afterEach: 'readonly',
-                jest: 'readonly'
+                jest: 'readonly',
+                __dirname: 'readonly',
+                __filename: 'readonly',
+                process: 'readonly',
+                EventTarget: 'readonly',
+                crypto: 'readonly'
             }
         }
     },
