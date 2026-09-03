@@ -1069,10 +1069,15 @@ label.set-info {
   text-overflow: ellipsis;
 }
 
-/* Checkbox rendered as a compact toggle: 24x24 hit target, 26x15 pill. */
+/* A11Y-11: the comment here claimed a "24x24 hit target" while the rule set
+   28x18 — below the WCAG 2.2 SC 2.5.8 minimum. The visible pill stays 26x15;
+   vertical padding brings the actual target to 24px without moving anything,
+   the same approach .switch already documents. */
 .rule-checkbox {
   width: 28px;
-  height: 18px;
+  height: 24px;
+  padding: 3px 0;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;

@@ -33,6 +33,26 @@ const TAB_TITLES = {
  * promise - dynamic `import()` is valid inside a classic script (unlike a
  * static `import` declaration, which would require `type="module"`).
  */
+// UX-1: options.html hard-codes class="theme-dark" and applyTheme() only runs
+// after loadData()'s async round-trip, so a light-theme user got a dark flash
+// on every open. popup.js fixed this for itself and its own comment named
+// options.html as having the same bug; the fix was never ported. Apply the
+// last resolved theme synchronously, before any await.
+(function applyCachedThemeEarly() {
+    try {
+        const cached = window.localStorage.getItem('tm-theme');
+        // This script is the last element in <body>, so document.body already
+        // exists and the swap happens before first paint — no DOMContentLoaded
+        // wait, which would land after the dark frame the user would see.
+        if ((cached === 'dark' || cached === 'light') && document.body) {
+            document.body.classList.remove('theme-dark', 'theme-light');
+            document.body.classList.add(`theme-${cached}`);
+        }
+    } catch (error) {
+        // localStorage unavailable — applyTheme() still runs once data loads.
+    }
+})();
+
 let _spliceTapUtilsPromise = null;
 function getSpliceTapUtils() {
     if (!_spliceTapUtilsPromise) {
@@ -1093,6 +1113,15 @@ class OptionsManager {
         // wholesale would wipe any other class on <body>.
         document.body.classList.remove('theme-dark', 'theme-light');
         document.body.classList.add(`theme-${resolved}`);
+
+        // UX-1: cache the resolved theme so the next open can apply it before
+        // any async work. Same key the popup uses — both pages share this
+        // extension origin's localStorage.
+        try {
+            window.localStorage.setItem('tm-theme', resolved);
+        } catch (error) {
+            // localStorage unavailable — the flash returns, nothing else breaks.
+        }
     }
 
     switchTab(tabName) {

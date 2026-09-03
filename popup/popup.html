@@ -87,7 +87,11 @@
       </div>
 
       <!-- Rules List -->
-      <main class="rules-list" id="rulesContainer" role="list">
+      <!-- A11Y-12: role="list" used to sit on <main>, which overrides the
+           element's native semantics — the popup then had no main landmark at
+           all. The list role now lives on an inner wrapper. -->
+      <main class="rules-list">
+      <div id="rulesContainer" role="list">
       <!-- Empty State (Default) -->
       <div class="empty-state">
         <div class="empty-icon">
@@ -104,6 +108,7 @@
         <h2>No rules yet</h2>
         <p>Point a URL pattern at a canned response and SpliceTap answers it before the network does.</p>
         <div class="empty-hint">Alt + Shift + M toggles mocking</div>
+      </div>
       </div>
       </main>
     </div>
