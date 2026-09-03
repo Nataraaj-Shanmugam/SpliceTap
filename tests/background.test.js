@@ -489,6 +489,68 @@ describe('interception log (SEC-3)', () => {
         expect((await send({ type: 'getInterceptionLog' })).entries).toHaveLength(0);
     });
 
+    test('accepts a batch of entries in one message (PERF-4)', async () => {
+        const { send } = await setup({
+            initial: { spliceTapRules: [validMockRule({ id: 'a' })] }
+        });
+
+        const response = await send({
+            type: 'logInterceptionBatch',
+            entries: [
+                { url: 'https://example.test/1', method: 'GET', ruleId: 'a' },
+                { url: 'https://example.test/2', method: 'GET', ruleId: 'a' },
+                { url: 'https://example.test/3', method: 'GET', ruleId: 'a' }
+            ]
+        });
+
+        expect(response.accepted).toBe(3);
+        expect((await send({ type: 'getInterceptionLog' })).entries).toHaveLength(3);
+    });
+
+    test('still validates every entry inside a batch (SEC-3)', async () => {
+        // Batching is a transport change; it must not become a way to smuggle
+        // an entry past the per-entry checks.
+        const { send } = await setup({
+            initial: { spliceTapRules: [validMockRule({ id: 'a' })] }
+        });
+
+        const response = await send({
+            type: 'logInterceptionBatch',
+            entries: [
+                { url: 'https://example.test/ok', method: 'GET', ruleId: 'a' },
+                { url: 'https://evil.test/', method: 'GET', ruleId: 'not-a-rule' },
+                { url: 12345, method: 'GET', ruleId: 'a' }
+            ]
+        });
+
+        expect(response.accepted).toBe(1);
+        expect((await send({ type: 'getInterceptionLog' })).entries).toHaveLength(1);
+    });
+
+    test('counts a batch toward the rule hit count', async () => {
+        const { send } = await setup({
+            initial: { spliceTapRules: [validMockRule({ id: 'a' })] }
+        });
+
+        await send({
+            type: 'logInterceptionBatch',
+            entries: [
+                { url: 'https://example.test/1', method: 'GET', ruleId: 'a' },
+                { url: 'https://example.test/2', method: 'GET', ruleId: 'a' }
+            ]
+        });
+
+        const stats = await send({ type: 'getRuleStats' });
+        expect(stats.intercepted).toBe(2);
+    });
+
+    test('tolerates a missing or malformed entries array', async () => {
+        const { send } = await setup();
+
+        expect((await send({ type: 'logInterceptionBatch' })).success).toBe(true);
+        expect((await send({ type: 'logInterceptionBatch', entries: 'nope' })).success).toBe(true);
+    });
+
     test('clearInterceptionLog empties it', async () => {
         const { send } = await setup({
             initial: { spliceTapRules: [validMockRule({ id: 'a' })] }

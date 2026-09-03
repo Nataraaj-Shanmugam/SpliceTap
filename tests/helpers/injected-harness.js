@@ -12,34 +12,19 @@
  * only as a property bag. Those are shimmed below; everything that affects
  * the result is genuine.
  *
- * XMLHttpRequest is stubbed just far enough for the patch to install. The XHR
- * interception path is not exercised here; the fetch path is.
+ * XMLHttpRequest is a working simulation (see mock-xhr.js), so both halves of
+ * the interception surface — fetch and XHR — are exercised.
  */
 
 const fs = require('fs');
 const path = require('path');
 
+const { createMockXHRClass, ProgressEventShim } = require('./mock-xhr');
+
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const INJECTED_SRC = fs.readFileSync(path.join(REPO_ROOT, 'content', 'injected.js'), 'utf8');
 
 const BOOTSTRAP_EVENT = '__splicetap_bootstrap__';
-
-/** Minimal XMLHttpRequest stand-in: enough shape for the patch to wrap it. */
-class StubXMLHttpRequest {
-    constructor() { this.readyState = 0; }
-    open() {}
-    send() {}
-    setRequestHeader() {}
-    getAllResponseHeaders() { return ''; }
-    addEventListener() {}
-    removeEventListener() {}
-    abort() {}
-}
-StubXMLHttpRequest.UNSENT = 0;
-StubXMLHttpRequest.OPENED = 1;
-StubXMLHttpRequest.HEADERS_RECEIVED = 2;
-StubXMLHttpRequest.LOADING = 3;
-StubXMLHttpRequest.DONE = 4;
 
 class StubDOMParser {
     parseFromString() { return {}; }
@@ -87,6 +72,14 @@ function createInterceptor(options = {}) {
             status: 200,
             headers: { 'Content-Type': 'application/json' }
         }),
+        // Stands in for the network behind XMLHttpRequest, the way
+        // originalFetch does for fetch.
+        xhrResponder = async () => ({
+            status: 200,
+            statusText: 'OK',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{"origin":true}'
+        }),
         withGlobals = true,
         bootstrap = true
     } = options;
@@ -94,10 +87,16 @@ function createInterceptor(options = {}) {
     const doc = createDocumentTarget();
     const passthroughCalls = [];
 
+    const xhrCalls = [];
+    const MockXHR = createMockXHRClass((request) => {
+        xhrCalls.push(request);
+        return xhrResponder(request);
+    });
+
     const win = {
         location: { href: 'https://example.test/page' },
         crypto: globalThis.crypto,
-        XMLHttpRequest: StubXMLHttpRequest,
+        XMLHttpRequest: MockXHR,
         postMessage() {},
         fetch: function (...args) {
             passthroughCalls.push(args);
@@ -123,10 +122,10 @@ function createInterceptor(options = {}) {
 
     // injected.js is an IIFE that reads `window`/`document` from its scope.
     const factory = new Function(
-        'window', 'document', 'XMLHttpRequest', 'DOMParser', 'console',
+        'window', 'document', 'XMLHttpRequest', 'DOMParser', 'ProgressEvent', 'console',
         INJECTED_SRC
     );
-    factory(win, doc, StubXMLHttpRequest, StubDOMParser, quietConsole);
+    factory(win, doc, MockXHR, StubDOMParser, ProgressEventShim, quietConsole);
 
     const nonce = 'test-nonce-' + Math.random().toString(36).slice(2);
     const channels = {
@@ -173,9 +172,12 @@ function createInterceptor(options = {}) {
         collect,
         logs,
         passthroughCalls,
+        xhrCalls,
         BOOTSTRAP_EVENT,
-        fetch: (...args) => win.fetch(...args)
+        fetch: (...args) => win.fetch(...args),
+        // Construct through window so the patched constructor is the one used.
+        newXHR: () => new win.XMLHttpRequest()
     };
 }
 
-module.exports = { createInterceptor, StubXMLHttpRequest, BOOTSTRAP_EVENT };
+module.exports = { createInterceptor, BOOTSTRAP_EVENT };

@@ -110,6 +110,58 @@ class SpliceTapBackground {
      * satisfy without already knowing a real rule id, which SEC-2's nonce now
      * prevents it from learning.
      */
+    /**
+     * Validate one interception-log entry and fold it into the in-memory log,
+     * stats and the rule's hit count. Returns whether it was accepted.
+     *
+     * SEC-3: the relay runs in a page context, so an entry is untrusted input.
+     * It used to be accepted on a bare truthiness check, letting a page fill
+     * the DevTools panel with fabricated rows a developer would read as fact,
+     * and inflate any rule's persisted hitCount by replaying a known ruleId.
+     * The shape is validated, and only an entry whose ruleId names a rule that
+     * actually exists is kept.
+     *
+     * Persistence is deliberately NOT done here — the caller decides, so a
+     * batch pays for one write instead of one per entry (PERF-4).
+     */
+    _recordLogEntry(entry, sender) {
+        if (!entry || !this._isPlausibleLogEntry(entry)) return false;
+
+        // QA-3: entries carried no tab identity, so the DevTools panel showed
+        // every tab's intercepted traffic at once — breaking its premise as a
+        // per-tab inspector and leaking one site's request URLs into a window
+        // inspecting another. The sender's tab id is taken here rather than
+        // trusted from the message body, since the page-side relay could
+        // otherwise claim any tab.
+        this.interceptionLog.push({
+            ...entry,
+            tabId: (sender && sender.tab && typeof sender.tab.id === 'number')
+                ? sender.tab.id
+                : null
+        });
+        if (this.interceptionLog.length > this.MAX_INTERCEPTION_LOG) {
+            this.interceptionLog.splice(0, this.interceptionLog.length - this.MAX_INTERCEPTION_LOG);
+        }
+        this._applyStatsIncrement(1);
+
+        // Q-26/G-6: hitCount was defined in the schema and rendered in the UI
+        // but nothing ever incremented it. Bumped in-memory immediately (so a
+        // getRules() call right after reflects it); the write to storage rides
+        // the same throttle as stats/log persistence rather than a save per
+        // intercepted request.
+        if (entry.ruleId) {
+            // PERF-5: this was an Array.find per intercepted request —
+            // O(rules × requests) on a busy page.
+            const rule = this._ruleById(entry.ruleId);
+            if (rule) {
+                rule.hitCount = (rule.hitCount || 0) + 1;
+                this._rulesDirty = true;
+            }
+        }
+
+        return true;
+    }
+
     _isPlausibleLogEntry(entry) {
         if (!entry || typeof entry !== 'object') return false;
         if (typeof entry.url !== 'string' || entry.url.length > 2048) return false;
@@ -454,51 +506,29 @@ class SpliceTapBackground {
                 }
 
                 case 'logInterception':
-                    // SEC-3: the relay runs in a page context, so this entry is
-                    // untrusted input. It used to be accepted on a bare
-                    // truthiness check, letting a page fill the DevTools panel
-                    // with fabricated rows a developer would be reading as fact,
-                    // and inflate any rule's persisted hitCount by replaying a
-                    // known ruleId. Validate the shape, and only accept an entry
-                    // whose ruleId names a rule that actually exists.
-                    if (request.entry && this._isPlausibleLogEntry(request.entry)) {
-                        // QA-3: entries carried no tab identity, so the DevTools
-                        // panel showed every tab's intercepted traffic at once —
-                        // breaking its premise as a per-tab inspector and leaking
-                        // one site's request URLs into a window inspecting
-                        // another. The sender's tab id is taken here rather than
-                        // trusted from the message body, since the page-side
-                        // relay could otherwise claim any tab.
-                        this.interceptionLog.push({
-                            ...request.entry,
-                            tabId: (sender && sender.tab && typeof sender.tab.id === 'number')
-                                ? sender.tab.id
-                                : null
-                        });
-                        if (this.interceptionLog.length > this.MAX_INTERCEPTION_LOG) {
-                            this.interceptionLog.splice(0, this.interceptionLog.length - this.MAX_INTERCEPTION_LOG);
-                        }
-                        this._applyStatsIncrement(1);
-
-                        // Q-26/G-6: hitCount was defined in the schema and
-                        // rendered in the UI but nothing ever incremented it.
-                        // Bumped in-memory immediately (so a getRules() call
-                        // right after reflects it); the write to storage
-                        // rides the same throttle as stats/log persistence
-                        // rather than a save per intercepted request.
-                        if (request.entry.ruleId) {
-                            // PERF-5: this was an Array.find per intercepted
-                            // request — O(rules × requests) on a busy page.
-                            const rule = this._ruleById(request.entry.ruleId);
-                            if (rule) {
-                                rule.hitCount = (rule.hitCount || 0) + 1;
-                                this._rulesDirty = true;
-                            }
-                        }
-
+                    // SEC-3 validation and the per-entry bookkeeping both live
+                    // in _recordLogEntry; see there for the threat model.
+                    if (this._recordLogEntry(request.entry, sender)) {
                         await this._persistVolatile();
                     }
                     return { success: true };
+
+                case 'logInterceptionBatch': {
+                    // PERF-4: the relay coalesces a busy page's entries into
+                    // one message. Each is validated individually — batching
+                    // is a transport change, not a relaxation of SEC-3 — but
+                    // the storage write happens once for the whole batch
+                    // rather than once per intercepted request.
+                    const batch = Array.isArray(request.entries) ? request.entries : [];
+                    let accepted = 0;
+                    for (const entry of batch.slice(0, this.MAX_INTERCEPTION_LOG)) {
+                        if (this._recordLogEntry(entry, sender)) accepted++;
+                    }
+                    if (accepted > 0) {
+                        await this._persistVolatile();
+                    }
+                    return { success: true, accepted };
+                }
 
                 case 'logCapture': {
                     const e = request.entry;

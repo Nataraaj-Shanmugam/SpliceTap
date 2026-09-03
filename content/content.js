@@ -222,14 +222,64 @@
                 return;
             }
 
-            chrome.runtime.sendMessage({
-                type: 'logInterception',
-                entry
-            }).catch(error => {
-                console.error('Failed to send interception log entry to background:', error);
-            });
+            queueLogEntry(entry);
         });
     }
+
+    // PERF-4: this used to be one chrome.runtime.sendMessage per intercepted
+    // request. On a page whose rules match a polling or streaming endpoint
+    // that is a continuous stream of messages, and each one is a reason for
+    // the service worker to stay awake — so a busy mocked page could keep it
+    // resident indefinitely, which is exactly what MV3's ephemeral worker
+    // model is trying to avoid.
+    //
+    // Entries are coalesced into one message per window instead. The log is a
+    // diagnostic the user reads after the fact, so a sub-second delay costs
+    // nothing; losing entries would matter, so the queue also flushes when it
+    // fills and when the page goes away.
+    const LOG_BATCH_WINDOW_MS = 250;
+    const LOG_BATCH_MAX = 25;
+
+    let logQueue = [];
+    let logFlushTimer = null;
+
+    function flushLogQueue() {
+        if (logFlushTimer !== null) {
+            clearTimeout(logFlushTimer);
+            logFlushTimer = null;
+        }
+        if (logQueue.length === 0) return;
+
+        const entries = logQueue;
+        logQueue = [];
+
+        chrome.runtime.sendMessage({
+            type: 'logInterceptionBatch',
+            entries
+        }).catch(error => {
+            console.error('Failed to send interception log entries to background:', error);
+        });
+    }
+
+    function queueLogEntry(entry) {
+        logQueue.push(entry);
+
+        if (logQueue.length >= LOG_BATCH_MAX) {
+            flushLogQueue();
+            return;
+        }
+        if (logFlushTimer === null) {
+            logFlushTimer = setTimeout(flushLogQueue, LOG_BATCH_WINDOW_MS);
+        }
+    }
+
+    // A navigation or tab close would otherwise discard whatever is still
+    // queued. 'pagehide' fires for both, including bfcache eviction, where
+    // 'unload' is unreliable.
+    window.addEventListener('pagehide', flushLogQueue);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flushLogQueue();
+    });
 
     /**
      * Check if we should inject on this page

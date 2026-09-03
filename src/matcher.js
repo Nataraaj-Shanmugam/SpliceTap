@@ -107,10 +107,39 @@
                     compiled = { kind: 'regex', regex: new RegExp(regexBody, 'i') };
                 }
             } else if (pattern.includes('*')) {
-                const regexPattern = pattern
-                    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                    .replace(/\\\*/g, '.*');
-                compiled = { kind: 'regex', regex: new RegExp('^' + regexPattern + '$', 'i') };
+                // PERF-7: the overwhelmingly common shapes here are '*/api/x*',
+                // '/api/x*' and '*/api/x' — a single literal with stars around
+                // it. Those are exactly includes/startsWith/endsWith, so
+                // compiling them to a regex meant paying the regex engine on
+                // every rule for every request to answer a substring question.
+                // Multi-literal patterns ('a*b') still compile to a regex.
+                //
+                // The anchored '^...$' form the regex branch uses makes these
+                // equivalences exact: '*X*' is "contains X", 'X*' is "starts
+                // with X", '*X' is "ends with X".
+                const segments = pattern.split('*');
+                const literals = segments.filter((segment) => segment.length > 0);
+
+                if (literals.length === 0) {
+                    compiled = { kind: 'any' }; // '*', '**', ...
+                } else if (literals.length === 1) {
+                    const literal = literals[0].toLowerCase();
+                    const openLeft = segments[0] === '';
+                    const openRight = segments[segments.length - 1] === '';
+
+                    if (openLeft && openRight) {
+                        compiled = { kind: 'substring', lower: literal };
+                    } else if (openRight) {
+                        compiled = { kind: 'prefix', lower: literal };
+                    } else {
+                        compiled = { kind: 'suffix', lower: literal };
+                    }
+                } else {
+                    const regexPattern = pattern
+                        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                        .replace(/\\\*/g, '.*');
+                    compiled = { kind: 'regex', regex: new RegExp('^' + regexPattern + '$', 'i') };
+                }
             } else {
                 compiled = { kind: 'substring', lower: pattern.toLowerCase() };
             }
@@ -140,6 +169,7 @@
 
         const compiled = compilePattern(pattern);
         if (compiled.kind === 'never') return false;
+        if (compiled.kind === 'any') return true;
 
         if (compiled.kind === 'regex') {
             return compiled.regex.test(url);
@@ -149,6 +179,9 @@
             lastUrl = url;
             lastUrlLower = url.toLowerCase();
         }
+
+        if (compiled.kind === 'prefix') return lastUrlLower.startsWith(compiled.lower);
+        if (compiled.kind === 'suffix') return lastUrlLower.endsWith(compiled.lower);
         return lastUrlLower.includes(compiled.lower);
     }
 
@@ -204,6 +237,11 @@
         if (!Array.isArray(rules)) return null;
         const { url, method, headers, bodyText } = request || {};
 
+        // PERF-7: this uppercased the *request's* method once per rule, so a
+        // page with N rules allocated N throwaway strings for every request to
+        // compare against a value that cannot change mid-scan.
+        const requestMethod = String(method || '').toUpperCase();
+
         for (const rule of rules) {
             if (!rule || !rule.enabled) continue;
 
@@ -212,7 +250,7 @@
 
             const match = rule.match || {};
             const ruleMethod = (match.method || '*').toUpperCase();
-            if (ruleMethod !== '*' && String(method || '').toUpperCase() !== ruleMethod) continue;
+            if (ruleMethod !== '*' && requestMethod !== ruleMethod) continue;
 
             if (!matchUrl(url, match.url)) continue;
             if (!matchHeaders(headers, match.headers)) continue;

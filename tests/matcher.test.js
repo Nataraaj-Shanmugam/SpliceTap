@@ -151,4 +151,47 @@ describe('SpliceTapMatcher', () => {
             expect(findMatchingRule(undefined, { url: 'https://x.com', method: 'GET' })).toBeNull();
         });
     });
+    // PERF-7 compiles single-literal wildcards to includes/startsWith/endsWith
+    // instead of a regex. These pin the equivalence: each case is one the
+    // anchored '^...$' regex answered the same way before the change.
+    describe('wildcard fast paths (PERF-7)', () => {
+        test("'*X*' behaves as contains", () => {
+            expect(matchUrl('https://a.test/api/users/1', '*/api/users*')).toBe(true);
+            expect(matchUrl('https://a.test/api/orders/1', '*/api/users*')).toBe(false);
+        });
+
+        test("'X*' behaves as starts-with, not contains", () => {
+            expect(matchUrl('https://a.test/x', 'https://a.test/*')).toBe(true);
+            expect(matchUrl('https://b.test/https://a.test/x', 'https://a.test/*')).toBe(false);
+        });
+
+        test("'*X' behaves as ends-with, not contains", () => {
+            expect(matchUrl('https://a.test/data.json', '*.json')).toBe(true);
+            expect(matchUrl('https://a.test/data.json?v=1', '*.json')).toBe(false);
+        });
+
+        test("'*' matches any URL", () => {
+            expect(matchUrl('https://a.test/anything', '*')).toBe(true);
+            expect(matchUrl('https://a.test/', '**')).toBe(true);
+        });
+
+        test('multi-literal wildcards still match through the regex path', () => {
+            expect(matchUrl('https://a.test/api/v1/9/items/3', '*/api/v1/*/items*')).toBe(true);
+            expect(matchUrl('https://a.test/api/v2/9/orders/3', '*/api/v1/*/items*')).toBe(false);
+        });
+
+        test('fast paths stay case-insensitive', () => {
+            expect(matchUrl('https://a.test/API/Users/1', '*/api/users*')).toBe(true);
+            expect(matchUrl('https://A.TEST/x', 'https://a.test/*')).toBe(true);
+            expect(matchUrl('https://a.test/DATA.JSON', '*.json')).toBe(true);
+        });
+
+        test('regex metacharacters in a literal are matched literally', () => {
+            // The regex path escaped these; the literal path must not start
+            // treating them as syntax.
+            expect(matchUrl('https://a.test/a+b', '*a+b*')).toBe(true);
+            expect(matchUrl('https://a.test/aXb', '*a+b*')).toBe(false);
+            expect(matchUrl('https://a.test/(b)', '*(b)*')).toBe(true);
+        });
+    });
 });
