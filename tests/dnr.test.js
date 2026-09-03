@@ -5,8 +5,8 @@
  * syncDnrRules() is intentionally NOT tested here: it depends on the
  * chrome.declarativeNetRequest API, which does not exist in Jest/jsdom, and
  * mocking the whole API just to exercise a thin diff/update wrapper would
- * test the mock rather than the code. Per TODO.md §G4.6/§G4 intro, only the
- * pure mapping/validation functions are covered.
+ * test the mock rather than the code. Only the pure mapping and validation
+ * functions are covered here.
  */
 const { ruleToDnr, validateHeadersMod } = require('../service_worker/dnr');
 

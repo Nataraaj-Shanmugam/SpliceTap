@@ -7,30 +7,5 @@
 </head>
 <body>
     <script src="devtools.js"></script>
-    <!-- <script>
-        // Create DevTools panel
-        chrome.devtools.panels.create(
-            'SpliceTap',
-            '/assets/icons/icon-16.png',
-            '/devtools/panel.html',
-            function(panel) {
-                console.log('SpliceTap DevTools panel created');
-            }
-        );
-        
-        // Listen for network events
-        chrome.devtools.network.onRequestFinished.addListener(function(request) {
-            // Check if this request was mocked
-            const isMocked = request.response && 
-                request.response.headers && 
-                request.response.headers.some(header => 
-                    header.name.toLowerCase() === 'x-splicetap' && header.value === 'true'
-                );
-            
-            if (isMocked) {
-                console.log('SpliceTap: Detected mocked request', request.request.url);
-            }
-        });
-    </script> -->
 </body>
 </html>
