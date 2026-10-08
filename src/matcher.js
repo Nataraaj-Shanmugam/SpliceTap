@@ -55,7 +55,7 @@
         for (const len of PROBE_LENGTHS) {
             for (const ch of alphabet) {
                 try {
-                    re.test(ch.repeat(len) + '￿');
+                    re.test(ch.repeat(len) + '\uFFFF');
                 } catch (error) {
                     return true;
                 }
@@ -64,7 +64,7 @@
             if (alphabet.length > 1) {
                 const mixed = (alphabet[0] + alphabet[1]).repeat(Math.ceil(len / 2)).slice(0, len);
                 try {
-                    re.test(mixed + '￿');
+                    re.test(mixed + '\uFFFF');
                 } catch (error) {
                     return true;
                 }

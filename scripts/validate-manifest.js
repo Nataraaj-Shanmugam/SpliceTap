@@ -191,6 +191,20 @@ function validateManifest() {
             console.log(`✅ package.json version matches manifest.json (${manifest.version})`);
         }
 
+        // Every file that would ship must pass Chromium's UTF-8 check, or the
+        // extension fails to install with "It isn't UTF-8 encoded".
+        const { buildAllowlist, ROOT } = require('./package-extension');
+        const { findChromiumTextProblem, isTextFile } = require('./chromium-text');
+        const shipped = [...buildAllowlist(manifest)].filter(isTextFile);
+        const encodingProblems = shipped
+            .map((rel) => ({ rel, problem: findChromiumTextProblem(fs.readFileSync(path.join(ROOT, rel))) }))
+            .filter((r) => r.problem);
+        if (encodingProblems.length > 0) {
+            for (const r of encodingProblems) console.error(`❌ ${r.rel}: ${r.problem}`);
+            return false;
+        }
+        console.log(`✅ All ${shipped.length} shipped text files pass Chrome's UTF-8 check`);
+
         console.log('\n🎉 Manifest validation passed!');
         console.log(`Extension: ${manifest.name} v${manifest.version}`);
         console.log(`Description: ${manifest.description}`);

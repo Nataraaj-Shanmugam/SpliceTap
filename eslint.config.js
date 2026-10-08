@@ -84,7 +84,10 @@ module.exports = [
                 __filename: 'readonly',
                 process: 'readonly',
                 EventTarget: 'readonly',
-                crypto: 'readonly'
+                crypto: 'readonly',
+                Buffer: 'readonly',
+                TextDecoder: 'readonly',
+                performance: 'readonly'
             }
         }
     },
@@ -108,7 +111,8 @@ module.exports = [
                 process: 'readonly',
                 module: 'writable',
                 require: 'readonly',
-                console: 'readonly'
+                console: 'readonly',
+                TextDecoder: 'readonly'
             }
         }
     }

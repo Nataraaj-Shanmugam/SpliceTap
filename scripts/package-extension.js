@@ -26,6 +26,7 @@
 
 'use strict';
 
+const { findChromiumTextProblem, isTextFile } = require('./chromium-text');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
@@ -286,6 +287,20 @@ function main() {
         data: fs.readFileSync(path.join(ROOT, relPath)),
     }));
 
+    // Refuse to build a package Chrome would refuse to install. A content
+    // script containing a Unicode noncharacter is rejected as "not UTF-8
+    // encoded" even though it decodes fine everywhere else — see
+    // scripts/chromium-text.js for the incident that made this necessary.
+    const problems = entries
+        .filter((e) => isTextFile(e.name))
+        .map((e) => ({ name: e.name, problem: findChromiumTextProblem(e.data) }))
+        .filter((r) => r.problem);
+    if (problems.length > 0) {
+        console.error('Refusing to package — Chrome would reject these files:');
+        for (const r of problems) console.error(`  ${r.name}: ${r.problem}`);
+        process.exit(1);
+    }
+
     console.log('Packaging extension — allowlisted files (derived from manifest.json):');
     for (const e of entries) console.log('  ' + e.name);
     console.log(`\n${entries.length} files, ${entries.reduce((n, e) => n + e.data.length, 0)} bytes uncompressed.`);
@@ -300,4 +315,10 @@ function main() {
     console.log(`\nWrote ${outputZip} (${zipBuffer.length} bytes).`);
 }
 
-main();
+// Run only when invoked directly, so tests and the manifest validator can
+// reuse buildAllowlist() to reason about exactly what ships.
+if (require.main === module) {
+    main();
+}
+
+module.exports = { buildAllowlist, ROOT };
