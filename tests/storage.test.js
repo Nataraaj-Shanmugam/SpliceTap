@@ -159,6 +159,14 @@ describe('saveRule contract (QA-1)', () => {
         expect(stored.lastModified).toEqual(expect.any(String));
     });
 
+    test('keeps a creation time the caller provides on insert (undo restore)', async () => {
+        // Undo re-saves a deleted rule by id; that is an insert, and it used
+        // to overwrite the original `created` with the time of the undo.
+        const { mock, storage } = setup();
+        await storage.saveRule({ id: 'r1', name: 'A', created: '2026-01-02T03:04:05.000Z' });
+        expect(mock.raw.spliceTapRules[0].created).toBe('2026-01-02T03:04:05.000Z');
+    });
+
     test('preserves created across an update that omits it', async () => {
         // An editor rebuilds a rule from form inputs and has no reason to
         // carry `created`; spreading the incoming rule alone dropped it.

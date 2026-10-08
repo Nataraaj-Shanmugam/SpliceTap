@@ -7,16 +7,19 @@
  */
 
 import { SpliceTapStorage } from '../src/storage.js';
-import { SpliceTapUtils } from '../src/utils.js';
-// dnr.js is UMD-only (see its file header for why) — side-effect import it,
-// then read the API off globalThis, the same pattern injected.js uses for
-// the G1 shared modules via `window.SpliceTapMatcher` etc.
-import './dnr.js';
-// CQ-10: shared rule-schema limits (UMD; read off globalThis after import).
+// UMD shared modules: side-effect import, then read the API off globalThis —
+// the same pattern injected.js uses via `window.SpliceTapMatcher`. Order
+// matters: ES modules evaluate in import order, and rule-schema reads common
+// (LIMITS) and matcher (the ReDoS probe) at load, while dnr reads rule-schema.
 import '../src/common.js';
+import '../src/templates.js'; // status reason phrases, read by storage.normalizeRule
+import '../src/matcher.js';
+import '../src/rule-schema.js';
+import './dnr.js';
 
 const { syncDnrRules } = globalThis.SpliceTapDnr;
-const { LIMITS } = globalThis.SpliceTapCommon;
+const { generateId } = globalThis.SpliceTapCommon;
+const RuleSchema = globalThis.SpliceTapRuleSchema;
 
 class SpliceTapBackground {
     constructor() {
@@ -126,6 +129,15 @@ class SpliceTapBackground {
      */
     _recordLogEntry(entry, sender) {
         if (!entry || !this._isPlausibleLogEntry(entry)) return false;
+
+        // An entry for a request made before the log was last cleared, that
+        // was still in a tab's batch queue at the time. Dropped, not shown:
+        // the user asked for those to be gone. (ts is page-supplied, so a page
+        // could only use this to hide its own entries, which it can already do
+        // by not sending them.)
+        if (this._logClearedAt && typeof entry.ts === 'number' && entry.ts < this._logClearedAt) {
+            return false;
+        }
 
         // QA-3: entries carried no tab identity, so the DevTools panel showed
         // every tab's intercepted traffic at once — breaking its premise as a
@@ -308,7 +320,7 @@ class SpliceTapBackground {
             }
 
             await this.broadcastState();
-            await syncDnrRules(this.rules, this.isActive);
+            await this._syncNetworkRules();
         } catch (error) {
             console.error('Failed to load stored data:', error);
             // Initialize with defaults on error
@@ -345,15 +357,20 @@ class SpliceTapBackground {
                         rules: this.rules,
                         active: this.isActive,
                         stats: this.stats,
-                        settings: this.settings
+                        settings: this.settings,
+                        // ruleId -> Chrome's reason, for rules declarativeNetRequest
+                        // refused; lets the popup flag the specific rule instead
+                        // of only a transient toast.
+                        dnrErrors: this.dnrRejected ? Object.fromEntries(this.dnrRejected) : {}
                     };
 
-                case 'toggleExtension':
+                case 'toggleExtension': {
                     this.isActive = request.active;
                     await this.storage.saveActiveState(this.isActive);
                     await this.broadcastState();
-                    await syncDnrRules(this.rules, this.isActive);
-                    return { success: true, active: this.isActive };
+                    const dnrWarning = await this._syncNetworkRules();
+                    return { success: true, active: this.isActive, dnrWarning };
+                }
 
                 case 'saveRule': {
                     if (!request.rule) {
@@ -375,6 +392,9 @@ class SpliceTapBackground {
                     }
 
                     const ruleToSave = { ...request.rule };
+                    if (typeof ruleToSave.id !== 'string' || !ruleToSave.id.trim()) {
+                        ruleToSave.id = generateId();
+                    }
                     if ((ruleToSave.type === 'headers' || ruleToSave.type === 'queryparams') && !ruleToSave.dnrRuleId) {
                         ruleToSave.dnrRuleId = await this.allocateDnrIdSerialized();
                     }
@@ -388,8 +408,8 @@ class SpliceTapBackground {
                     }
                     await this.reloadRulesPreservingHits();
                     await this.broadcastState();
-                    const dnrResult = await syncDnrRules(this.rules, this.isActive);
-                    return { success: true, rule: saveResult.rule, dnrWarning: dnrResult.success ? undefined : dnrResult.error };
+                    const dnrWarning = await this._syncNetworkRules();
+                    return { success: true, rule: saveResult.rule, dnrWarning };
                 }
 
                 case 'setRules': {
@@ -416,6 +436,9 @@ class SpliceTapBackground {
                             continue;
                         }
                         const rule = { ...incoming };
+                        if (typeof rule.id !== 'string' || !rule.id.trim()) {
+                            rule.id = generateId();
+                        }
                         if ((rule.type === 'headers' || rule.type === 'queryparams') && !rule.dnrRuleId) {
                             rule.dnrRuleId = await this.allocateDnrIdSerialized();
                         }
@@ -427,12 +450,12 @@ class SpliceTapBackground {
                     }
                     await this.reloadRulesPreservingHits();
                     await this.broadcastState();
-                    const dnrResult = await syncDnrRules(this.rules, this.isActive);
+                    const dnrWarning = await this._syncNetworkRules();
                     return {
                         success: true,
                         rules: this.rules,
                         rejected: rejected.length ? rejected : undefined,
-                        dnrWarning: dnrResult.success ? undefined : dnrResult.error
+                        dnrWarning
                     };
                 }
 
@@ -446,8 +469,9 @@ class SpliceTapBackground {
                     }
                     await this.reloadRulesPreservingHits();
                     await this.broadcastState();
-                    await syncDnrRules(this.rules, this.isActive);
-                    return { success: true };
+                    // This path used to discard the sync result, so a toggle
+                    // Chrome had not applied still answered plain success.
+                    return { success: true, dnrWarning: await this._syncNetworkRules() };
 
                 case 'deleteRule':
                     if (!request.ruleId) {
@@ -459,8 +483,7 @@ class SpliceTapBackground {
                     }
                     await this.reloadRulesPreservingHits();
                     await this.broadcastState();
-                    await syncDnrRules(this.rules, this.isActive);
-                    return { success: true };
+                    return { success: true, dnrWarning: await this._syncNetworkRules() };
 
                 case 'resetStats':
                     this.stats = {
@@ -480,8 +503,7 @@ class SpliceTapBackground {
                     }
                     this.rules = [];
                     await this.broadcastState();
-                    await syncDnrRules(this.rules, this.isActive);
-                    return { success: true };
+                    return { success: true, dnrWarning: await this._syncNetworkRules() };
                 }
 
                 case 'testRule':
@@ -602,6 +624,11 @@ class SpliceTapBackground {
 
                 case 'clearInterceptionLog':
                     this.interceptionLog = [];
+                    // Requests made just before the clear may still be in a
+                    // tab's batch queue (PERF-4's 250ms window) and would land
+                    // afterwards, refilling a log the user just emptied. Clear
+                    // means "forget everything before now"; see _recordLogEntry.
+                    this._logClearedAt = Date.now();
                     try {
                         await chrome.storage.session.remove('spliceTapInterceptionLog');
                     } catch (e) {
@@ -706,119 +733,66 @@ class SpliceTapBackground {
      * hard-failed every block/delay/redirect/headers/queryparams rule even
      * when perfectly well-formed.
      */
+    /**
+     * Apply the current rules to declarativeNetRequest and return a warning
+     * string if Chrome refused any of them (undefined when all applied).
+     *
+     * Every handler goes through here. Several used to call the sync and
+     * discard its result, so a toggle or delete Chrome did not apply still
+     * answered plain success. Refused rules are also kept by rule id, so
+     * getRules can tell the popup which specific rule is not being applied.
+     */
+    async _syncNetworkRules() {
+        const outcome = await syncDnrRules(this.rules, this.isActive);
+        this.dnrRejected = new Map((outcome.rejected || []).map((r) => [r.id, r.error]));
+        return outcome.success ? undefined : outcome.error;
+    }
+
     async validateRule(rule) {
-        const errors = [];
+        // The checks themselves live in src/rule-schema.js, shared with both
+        // editors, so a rule the editor accepts is a rule this boundary
+        // accepts — and an import, which bypasses the editors, meets the
+        // exact same rules (CQ-1).
+        const { errors } = RuleSchema.validateRule(rule);
 
-        if (!rule || typeof rule !== 'object') {
-            return { success: true, passed: false, results: [{ status: 'failed', message: 'Rule data is required' }] };
-        }
-
-        // Fields common to every rule type.
-        if (!rule.name || rule.name.trim().length === 0) {
-            errors.push('Rule name is required');
-        }
-
-        if (!rule.match || !rule.match.url) {
-            errors.push('URL pattern is required');
-        } else {
-            const urlValidation = SpliceTapUtils.validateUrlPattern(rule.match.url);
-            if (!urlValidation.isValid) {
-                errors.push(`Invalid URL pattern: ${urlValidation.error}`);
-            }
-        }
-
-        if (!rule.match || !rule.match.method) {
-            errors.push('HTTP method is required');
-        }
-
-        const type = rule.type || 'mock';
-
-        if (type === 'mock') {
-            if (!rule.response) {
-                errors.push('Response configuration is required');
-            } else {
-                const statusValidation = SpliceTapUtils.validateStatusCode(rule.response.statusCode);
-                if (!statusValidation.isValid) {
-                    errors.push(`Invalid status code: ${statusValidation.error}`);
-                }
-
-                if (rule.response.headers && typeof rule.response.headers !== 'object') {
-                    errors.push('Headers must be an object');
-                }
-
-                if (rule.response.delay !== undefined) {
-                    const delay = parseInt(rule.response.delay, 10);
-                    if (isNaN(delay) || delay < LIMITS.DELAY_MIN || delay > LIMITS.DELAY_MAX) {
-                        errors.push(`Delay must be between ${LIMITS.DELAY_MIN} and ${LIMITS.DELAY_MAX} ms`);
-                    }
-                }
-            }
-        } else if (type === 'delay') {
-            const ms = parseInt(rule.delayMs, 10);
-            if (isNaN(ms) || ms < LIMITS.DELAY_MS_MIN || ms > LIMITS.DELAY_MS_MAX) {
-                errors.push(`Delay must be between ${LIMITS.DELAY_MS_MIN} and ${LIMITS.DELAY_MS_MAX} ms`);
-            }
-        } else if (type === 'redirect') {
-            if (!rule.redirect || !rule.redirect.destination) {
-                errors.push('Redirect destination is required');
-            }
-        } else if (type === 'headers') {
-            if (!rule.headersMod || (!(rule.headersMod.request || []).length && !(rule.headersMod.response || []).length)) {
-                errors.push('At least one request or response header operation is required');
-            } else {
-                const dnr = globalThis.SpliceTapDnr;
-                if (dnr && typeof dnr.validateHeadersMod === 'function') {
-                    const headerValidation = dnr.validateHeadersMod(rule.headersMod);
-                    if (!headerValidation.valid) {
-                        errors.push(...headerValidation.errors);
-                    }
-                }
-            }
-        } else if (type === 'queryparams') {
-            const qp = rule.queryParams || {};
-            if (!(qp.add || []).length && !(qp.remove || []).length) {
-                errors.push('At least one query parameter to add or remove is required');
-            }
-        } else if (type !== 'block') {
-            errors.push(`Unknown rule type: ${type}`);
-        }
-
-        // headers/queryparams are DNR-backed: the network layer cannot express
-        // these conditions at all.
-        //
-        // CQ-4: redirect is added here for a different reason. It IS
-        // interceptor-handled, but XHR must choose the redirect URL in open(),
-        // and request headers are not set until after open() — so the XHR path
-        // matches on url+method only while fetch honours the full condition.
-        // The same rule would then redirect an XHR call and skip the identical
-        // fetch call. The options form already refused this combination, but
-        // nothing stopped it arriving by import or hand-edit, so enforce it at
-        // the one boundary every write passes through.
+        // The one check that needs Chrome: declarativeNetRequest evaluates
+        // regexFilter with RE2, not JavaScript's engine. Lookarounds,
+        // backreferences and oversized patterns are valid JS but rejected by
+        // DNR — and a rejected rule takes its whole updateDynamicRules batch
+        // down with it. Ask Chrome rather than approximate RE2 here.
+        const type = rule && (rule.type || 'mock');
+        const pattern = rule && rule.match && rule.match.url;
         const dnrBacked = type === 'headers' || type === 'queryparams';
-        if ((dnrBacked || type === 'redirect') && rule.match && (rule.match.headers || rule.match.graphql)) {
-            errors.push(dnrBacked
-                ? 'Header/GraphQL match conditions are not supported for this rule type'
-                : 'Redirect rules cannot use header or GraphQL match conditions, because the redirect target must be chosen before request headers exist');
+        if (errors.length === 0 && dnrBacked && RuleSchema.isRegexPattern(pattern)
+            && chrome.declarativeNetRequest && typeof chrome.declarativeNetRequest.isRegexSupported === 'function') {
+            try {
+                const support = await chrome.declarativeNetRequest.isRegexSupported({
+                    regex: pattern.slice(1, -1),
+                    isCaseSensitive: false
+                });
+                if (support && support.isSupported === false) {
+                    const why = support.reason === 'memoryLimitExceeded'
+                        ? "it is too complex for Chrome's network rules"
+                        : "Chrome's network rules do not support its syntax (no lookarounds or backreferences)";
+                    errors.push(`Invalid URL pattern: this regex cannot be used for header or query-parameter rules — ${why}`);
+                }
+            } catch (error) {
+                // Availability check only; the resilient sync in dnr.js still
+                // isolates a rule Chrome refuses.
+            }
         }
 
         if (errors.length > 0) {
             return {
                 success: true,
                 passed: false,
-                results: errors.map(error => ({
-                    status: 'failed',
-                    message: error
-                }))
+                results: errors.map((message) => ({ status: 'failed', message }))
             };
         }
-
         return {
             success: true,
             passed: true,
-            results: [{
-                status: 'passed',
-                message: 'Rule validation passed'
-            }]
+            results: [{ status: 'passed', message: 'Rule validation passed' }]
         };
     }
 
@@ -1009,7 +983,7 @@ class SpliceTapBackground {
                     this.isActive = !this.isActive;
                     await this.storage.saveActiveState(this.isActive);
                     await this.broadcastState();
-                    await syncDnrRules(this.rules, this.isActive);
+                    await this._syncNetworkRules();
                 } else if (command === 'new-rule') {
                     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
                     if (tab && tab.id && tab.url && /^https?:/i.test(tab.url)) {

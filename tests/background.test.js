@@ -97,7 +97,7 @@ describe('validateRule — common fields', () => {
     });
 
     test('rejects a URL pattern that can backtrack catastrophically', async () => {
-        // Guards the ReDoS check in SpliceTapUtils.validateUrlPattern: a rule
+        // Guards the ReDoS check in the shared rule schema's validateUrlPattern: a rule
         // pattern runs against every request URL, so a pathological regex
         // hangs the page, not just the editor.
         const { bg } = await setup();
@@ -549,6 +549,27 @@ describe('interception log (SEC-3)', () => {
 
         expect((await send({ type: 'logInterceptionBatch' })).success).toBe(true);
         expect((await send({ type: 'logInterceptionBatch', entries: 'nope' })).success).toBe(true);
+    });
+
+    test('an entry stamped before the last clear is dropped when it arrives late', async () => {
+        // The relay batches for up to 250ms, so a request made just before
+        // "Clear" can arrive just after it and refill the emptied log.
+        const { send } = await setup({
+            initial: { spliceTapRules: [validMockRule({ id: 'a' })] }
+        });
+        const beforeClear = Date.now() - 100;
+        await send({ type: 'clearInterceptionLog' });
+
+        await send({
+            type: 'logInterceptionBatch',
+            entries: [
+                { url: 'https://example.test/stale', method: 'GET', ruleId: 'a', ts: beforeClear },
+                { url: 'https://example.test/fresh', method: 'GET', ruleId: 'a', ts: Date.now() + 1 }
+            ]
+        });
+
+        const { entries } = await send({ type: 'getInterceptionLog' });
+        expect(entries.map((e) => e.url)).toEqual(['https://example.test/fresh']);
     });
 
     test('clearInterceptionLog empties it', async () => {

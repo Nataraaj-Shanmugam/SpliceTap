@@ -30,8 +30,9 @@ const path = require('path');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
-const RE_SIDE_EFFECT_IMPORT = /^[ \t]*import\s+['"]([^'"]+)['"]\s*;?[ \t]*$/gm;
-const RE_NAMED_IMPORT = /^[ \t]*import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]\s*;?[ \t]*$/gm;
+// Both tolerate a trailing `// comment` after the statement.
+const RE_SIDE_EFFECT_IMPORT = /^[ \t]*import\s+['"]([^'"]+)['"]\s*;?[ \t]*(?:\/\/.*)?$/gm;
+const RE_NAMED_IMPORT = /^[ \t]*import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]\s*;?[ \t]*(?:\/\/.*)?$/gm;
 const RE_EXPORT_DECL = /^([ \t]*)export\s+(?=(?:class|function|const|let|var|async)\b)/gm;
 const RE_EXPORT_DEFAULT = /^[ \t]*export\s+default\s+/gm;
 

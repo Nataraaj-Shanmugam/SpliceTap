@@ -155,6 +155,15 @@ export class SpliceTapStorage {
                 ...normalized.response,
                 mode: normalized.response.mode || 'static'
             };
+            // A rule that arrived without a reason phrase — by import, by the
+            // API, or saved before the editors derived one — would otherwise
+            // be served with whatever the interceptor defaults to. Derive it
+            // from the status code. Only when ABSENT: an explicit '' is a
+            // faithful capture of an HTTP/2 response, which has none.
+            const templates = typeof globalThis !== 'undefined' && globalThis.SpliceTapTemplates;
+            if (normalized.response.statusText === undefined && templates && typeof templates.getStatusText === 'function') {
+                normalized.response.statusText = templates.getStatusText(normalized.response.statusCode || 200);
+            }
         }
 
         return normalized;
@@ -225,7 +234,11 @@ export class SpliceTapStorage {
                 } else {
                     rules.push({
                         ...rule,
-                        created: new Date().toISOString(),
+                        // Keep a creation time the caller already has. Undo
+                        // re-saves a just-deleted rule "identically" (U-11),
+                        // which is an insert here — stamping "now" over it
+                        // silently reset the rule's history on every undo.
+                        created: rule.created || new Date().toISOString(),
                         lastModified: new Date().toISOString()
                     });
                 }

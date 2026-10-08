@@ -245,8 +245,23 @@ describe('validateHeadersMod (S-3)', () => {
         expect(result.valid).toBe(true);
     });
 
-    test('empty/absent headersMod is valid', () => {
-        expect(validateHeadersMod({}).valid).toBe(true);
-        expect(validateHeadersMod(undefined).valid).toBe(true);
+    // Contract change: this used to check only the forbidden list and treat an
+    // empty or absent headersMod as valid, leaving shape to the caller — and
+    // the save boundary never checked shape at all. It is now the shared
+    // validator from src/rule-schema.js, which owns the whole shape, so an
+    // empty or missing set of operations is (correctly) invalid here.
+    test('empty or absent headersMod is invalid, with a clear reason', () => {
+        expect(validateHeadersMod({}).valid).toBe(false);
+        expect(validateHeadersMod({}).errors[0]).toMatch(/at least one request or response header/i);
+        expect(validateHeadersMod(undefined).valid).toBe(false);
+    });
+
+    test('incomplete operations are rejected, since Chrome refuses them', () => {
+        const errorsFor = (op) => validateHeadersMod({ request: [op] }).errors.join(' ');
+        expect(errorsFor({ op: 'set', name: 'X-A' })).toMatch(/needs a string "value"/);
+        expect(errorsFor({ op: 'set', value: '1' })).toMatch(/header name is required/);
+        expect(errorsFor({ op: 'append', name: 'X-A', value: '1' })).toMatch(/"op" must be "set" or "remove"/);
+        expect(errorsFor({ op: 'set', name: 'X A', value: '1' })).toMatch(/not a valid header name/);
+        expect(validateHeadersMod({ request: [{ op: 'remove', name: 'X-A' }] }).valid).toBe(true);
     });
 });

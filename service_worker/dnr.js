@@ -5,7 +5,7 @@
  *
  * Module-loading note: written UMD-only (no top-level ESM `export`) because
  * this repo's Jest has no ESM transform (see src/index.js's require-based
- * workaround for the same constraint on utils.js/storage.js in G1) -- a
+ * workaround for the same constraint on storage.js) -- a
  * top-level `export function` here would make `require()` throw under Jest.
  * service_worker/background.js (an ES module) consumes this file via a
  * side-effect `import './dnr.js'` and then reads `globalThis.SpliceTapDnr`,
@@ -17,58 +17,15 @@
 
     const DNR_TYPES = ['headers', 'queryparams'];
 
-    // S-3: header names a 'headers' rule must never be allowed to touch. All of
-    // these are browser/network security controls; letting an imported rule
-    // set or remove them would let one JSON file strip CSP/HSTS/frame
-    // protections or force a permissive, credentialed CORS policy on every
-    // site the rule's URL pattern matches. Checked case-insensitively.
-    const FORBIDDEN_HEADER_NAMES = new Set([
-        'content-security-policy',
-        'content-security-policy-report-only',
-        'strict-transport-security',
-        'x-frame-options',
-        'x-content-type-options',
-        'cross-origin-opener-policy',
-        'cross-origin-embedder-policy',
-        'cross-origin-resource-policy',
-        'set-cookie',
-        'cookie',
-        'permissions-policy'
-    ]);
-
-    /**
-     * Validate a rule's headersMod against the denylist. Returns
-     * { valid, errors } — errors is a list of human-readable messages,
-     * suitable for surfacing back to whoever is saving/importing the rule.
-     */
-    function validateHeadersMod(headersMod) {
-        const errors = [];
-        const mod = headersMod || {};
-        const allOps = [].concat(mod.request || [], mod.response || []);
-
-        for (const op of allOps) {
-            const name = op && op.name ? String(op.name).toLowerCase() : '';
-            if (FORBIDDEN_HEADER_NAMES.has(name)) {
-                errors.push(`Header "${op.name}" cannot be modified — it is a security-sensitive header.`);
-            }
-            // Forcing a wildcard, credentialed CORS response is a common
-            // real-world foot-gun (browsers reject it at fetch time anyway,
-            // but it's worth flagging at save time rather than silently
-            // shipping a rule that can never actually work as intended).
-            if (name === 'access-control-allow-origin' && op.op === 'set' && op.value === '*') {
-                const hasCredentialsTrue = allOps.some((o) =>
-                    o !== op &&
-                    o.name && String(o.name).toLowerCase() === 'access-control-allow-credentials' &&
-                    o.op === 'set' && String(o.value).toLowerCase() === 'true'
-                );
-                if (hasCredentialsTrue) {
-                    errors.push('Access-Control-Allow-Origin: * cannot be combined with Access-Control-Allow-Credentials: true.');
-                }
-            }
-        }
-
-        return { valid: errors.length === 0, errors };
-    }
+    // S-3's forbidden-header list and the header-op validator now live in
+    // src/rule-schema.js, shared with the editors and the save boundary. They
+    // are re-exported below so existing callers keep working, and this file
+    // still applies the list itself as the last line of defence before the
+    // browser (see buildHeadersAction).
+    const schema = global.SpliceTapRuleSchema
+        || (typeof require === 'function' ? require('../src/rule-schema.js') : null);
+    const FORBIDDEN_HEADER_NAMES = schema.FORBIDDEN_HEADER_NAMES;
+    const validateHeadersMod = schema.validateHeadersMod;
 
     /**
      * Build a DNR `condition` object from a rule's match block.
@@ -115,6 +72,14 @@
         return { header: op.name, operation: 'set', value: op.value };
     }
 
+    // Anything but a well-formed set/remove is dropped rather than coerced:
+    // an unknown op used to be mapped to 'set', and a 'set' without a value is
+    // a rule Chrome rejects. The save boundary rejects both now; this keeps a
+    // rule stored before that from reaching the browser malformed.
+    const isApplicableOp = (op) => op && typeof op.name === 'string' && op.name
+        && !FORBIDDEN_HEADER_NAMES.has(op.name.toLowerCase())
+        && (op.op === 'remove' || (op.op === 'set' && typeof op.value === 'string'));
+
     /**
      * Build the `action` object for a 'headers' rule: modifyHeaders with
      * requestHeaders/responseHeaders arrays. Empty arrays are omitted.
@@ -127,10 +92,8 @@
         const mod = rule.headersMod || {};
         const action = { type: 'modifyHeaders' };
 
-        const isAllowed = (op) => op && op.name && !FORBIDDEN_HEADER_NAMES.has(String(op.name).toLowerCase());
-
-        const requestHeaders = (mod.request || []).filter(isAllowed).map(mapHeaderOp);
-        const responseHeaders = (mod.response || []).filter(isAllowed).map(mapHeaderOp);
+        const requestHeaders = (Array.isArray(mod.request) ? mod.request : []).filter(isApplicableOp).map(mapHeaderOp);
+        const responseHeaders = (Array.isArray(mod.response) ? mod.response : []).filter(isApplicableOp).map(mapHeaderOp);
 
         if (requestHeaders.length > 0) action.requestHeaders = requestHeaders;
         if (responseHeaders.length > 0) action.responseHeaders = responseHeaders;
@@ -178,66 +141,110 @@
         };
     }
 
+    // DNR rules Chrome has already refused, keyed by their exact JSON. A
+    // refused rule is excluded up front on later syncs instead of being
+    // retried — which would otherwise re-run the isolation pass below on every
+    // save. Editing the rule changes its JSON, so the fixed version is tried.
+    const knownRejected = new Map();
+
     /**
      * Diff the desired DNR ruleset (enabled headers/queryparams rules, only
      * when the extension isActive) against chrome.declarativeNetRequest's
-     * current dynamic rules and issue one full-replace updateDynamicRules
-     * call. Idempotent; safe to call after every rules/active mutation.
+     * current dynamic rules and apply the difference. Idempotent; safe to
+     * call after every rules/active mutation.
      *
-     * Returns { success, error?, skipped? } instead of swallowing every
-     * failure silently (C-10) — callers can surface `error`/`skipped` back to
-     * the user (e.g. "N rules exceeded the DNR quota and were not applied")
-     * rather than a rule that silently never took effect.
+     * Returns { success, skipped, rejected, error? }. `rejected` lists the
+     * rules Chrome refused — [{ id, name, error }] — so callers can tell the
+     * user which rule is not being applied (C-10, CQ-3).
+     *
+     * One bad rule must not freeze the rest. updateDynamicRules is atomic: if
+     * Chrome rejects any rule in the batch it applies none of the change, and
+     * the previous ruleset stays registered. Before this, a single malformed
+     * rule (imported, or stored before the save boundary checked op shape)
+     * froze the network layer at its old state — verified headless: disabling
+     * a rule then reported success, the popup showed it off, and it kept
+     * rewriting real traffic, while newly added rules never applied. Now a
+     * rejected batch is retried one rule at a time, every acceptable rule is
+     * applied, and the refused ones are reported by name.
      */
     async function syncDnrRules(rules, isActive) {
         try {
-            const desired = isActive
-                ? (rules || [])
-                    .filter((rule) => rule && rule.enabled && DNR_TYPES.indexOf(rule.type) !== -1)
-                    .map(ruleToDnr)
-                    .filter(Boolean)
+            const candidates = isActive
+                ? (rules || []).filter((rule) => rule && rule.enabled && DNR_TYPES.indexOf(rule.type) !== -1)
                 : [];
 
+            const rejected = [];
+            let entries = [];
+            for (const rule of candidates) {
+                const dnr = ruleToDnr(rule);
+                if (!dnr) continue;
+                const signature = JSON.stringify(dnr);
+                if (knownRejected.has(signature)) {
+                    rejected.push({ id: rule.id, name: rule.name, error: knownRejected.get(signature) });
+                    continue;
+                }
+                entries.push({ rule, dnr, signature });
+            }
+
             // C-10: Chrome caps the number of dynamic (+ session) rules an
-            // extension may register. Exceeding it makes the whole
-            // updateDynamicRules call reject, which — before this check —
-            // meant EVERY DNR-backed rule silently stopped working the moment
-            // the count crept over the limit, with only a console.error to
-            // show for it. Truncate to the documented cap and report how many
-            // were dropped instead.
+            // extension may register; exceeding it rejects the whole call.
+            // Truncate to the documented cap and report how many were dropped.
             const maxRules = (typeof chrome.declarativeNetRequest.MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES === 'number')
                 ? chrome.declarativeNetRequest.MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES
                 : 5000; // conservative fallback for older Chrome versions without this constant
             let skipped = 0;
-            let finalDesired = desired;
-            if (desired.length > maxRules) {
-                skipped = desired.length - maxRules;
-                finalDesired = desired.slice(0, maxRules);
+            if (entries.length > maxRules) {
+                skipped = entries.length - maxRules;
+                entries = entries.slice(0, maxRules);
             }
 
+            const desired = entries.map((e) => e.dnr);
             const current = await chrome.declarativeNetRequest.getDynamicRules();
 
             // C-16: skip the update entirely when the desired ruleset is
-            // already what's registered — avoids a full remove+re-add on
-            // every single service-worker cold start (which otherwise pays
-            // this cost even when nothing about the rules actually changed
-            // since the last time this ran).
-            if (rulesetsEqual(current, finalDesired)) {
-                return { success: true, skipped };
+            // already what's registered — avoids a remove+re-add on every
+            // service-worker cold start.
+            if (rulesetsEqual(current, desired)) {
+                return result(skipped, rejected);
             }
 
             const removeRuleIds = current.map((r) => r.id);
-
-            await chrome.declarativeNetRequest.updateDynamicRules({
-                removeRuleIds,
-                addRules: finalDesired
-            });
-
-            return { success: true, skipped };
+            try {
+                await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules: desired });
+                return result(skipped, rejected);
+            } catch (batchError) {
+                // Isolate the rule(s) Chrome refuses: clear, then add one at a
+                // time. Only runs on the failure path, and refused rules are
+                // remembered, so a later sync goes back to one batched call.
+                await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules: [] });
+                for (const entry of entries) {
+                    try {
+                        await chrome.declarativeNetRequest.updateDynamicRules({ addRules: [entry.dnr] });
+                    } catch (error) {
+                        const message = String((error && error.message) || error);
+                        knownRejected.set(entry.signature, message);
+                        rejected.push({ id: entry.rule.id, name: entry.rule.name, error: message });
+                    }
+                }
+                return result(skipped, rejected);
+            }
         } catch (error) {
             console.error('Failed to sync DNR rules:', error);
-            return { success: false, error: error.message };
+            return { success: false, skipped: 0, rejected: [], error: error.message };
         }
+    }
+
+    function result(skipped, rejected) {
+        if (rejected.length === 0) return { success: true, skipped, rejected };
+        const names = rejected.map((r) => `"${r.name || r.id}"`).join(', ');
+        const noun = rejected.length === 1 ? 'rule was' : 'rules were';
+        // Everything else was applied; this names what was not, and why.
+        return {
+            success: false,
+            skipped,
+            rejected,
+            error: `${rejected.length} ${noun} refused by Chrome and is not being applied: ${names} — ${rejected[0].error}`
+        };
     }
 
     /**
