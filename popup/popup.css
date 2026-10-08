@@ -40,6 +40,9 @@
   --signal-text: #5fdcf0;
   --success: #22c55e;
   --danger: #ef4444;
+  /* Danger as small text on a tinted surface. --danger itself measured
+     4.48:1 on the red tint of .rule-error-chip in this theme. */
+  --danger-text: #fca5a5;
   --border: rgba(148, 163, 184, 0.12);
   --hairline: rgba(148, 163, 184, 0.09);
   --border-strong: rgba(148, 163, 184, 0.6);
@@ -70,7 +73,9 @@ body.theme-light {
   --signal: #0694aa;
   --signal-text: #03707f;
   --success: #15803d;
-  --danger: #dc2626;
+  /* #dc2626 measured 4.46:1 as text on --bg-card, just under 4.5:1. */
+  --danger: #b91c1c;
+  --danger-text: #b91c1c;
   --border: #e6ebf2;
   --hairline: #eef1f6;
   --border-strong: rgba(15, 23, 42, 0.5);
@@ -988,9 +993,35 @@ label.set-info {
   border-left-color: var(--accent-bright);
 }
 
-.rule-card:focus-visible {
+/* The rule's name is the row's real button (see getRuleCardHTML): it opens
+   the editor and is the row's keyboard entry point. Styled to read as the
+   plain title it replaces; the row-level focus ring moved onto it, since the
+   card itself is no longer focusable. */
+.rule-name-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 3px;
+}
+
+.rule-name-btn:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rule-name-btn:focus-visible {
   outline: 2px solid var(--accent-bright);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 
 /* A11Y-2: this used `opacity: 0.62` on the whole row, which dimmed the very
@@ -999,10 +1030,20 @@ label.set-info {
    against a 4.5:1 requirement (WCAG 2.1 SC 1.4.3). Dim through colour instead,
    the same approach `.set-row.is-disabled` already uses, so the contrast stays
    measurable. Only the non-text parts keep a visual fade. */
-.rule-card.disabled .rule-icon,
+.rule-card.disabled .rule-icon {
+  opacity: 0.62;
+}
+
+/* The type and method badges are text, so the fade above is not available to
+   them: axe measured a disabled "Block" badge at 3.0:1 light and 4.27:1 dark.
+   They go neutral instead — the colour coding is what says "this rule is
+   live", so dropping it is the disabled signal, and the text keeps the same
+   muted colour the rest of the row uses, which meets 4.5:1 in both themes. */
 .rule-card.disabled .method-badge,
 .rule-card.disabled .rule-type-badge {
-  opacity: 0.62;
+  background: var(--bg-chip);
+  color: var(--text-muted);
+  border-color: transparent;
 }
 
 .rule-card.disabled .rule-name,
@@ -1025,7 +1066,8 @@ label.set-info {
   white-space: nowrap;
 }
 
-.disabled-chip {
+.disabled-chip,
+.rule-error-chip {
   font-size: 9.5px;
   font-weight: 600;
   line-height: 1.35;
@@ -1036,6 +1078,14 @@ label.set-info {
   background: rgba(148, 163, 184, 0.14);
   color: var(--text-muted);
   flex-shrink: 0;
+}
+
+/* A rule Chrome's network layer refused (see getRuleCardHTML): danger text on
+   a faint red tint, checked against 4.5:1 in both themes by the e2e axe run. */
+.rule-error-chip {
+  background: rgba(239, 68, 68, 0.14);
+  color: var(--danger-text);
+  cursor: help;
 }
 
 .rule-header {
@@ -1410,6 +1460,7 @@ label.set-info {
 
 .toast {
   pointer-events: auto;
+  cursor: pointer; /* clicking dismisses it — see createToast */
   display: flex;
   align-items: center;
   gap: 10px;

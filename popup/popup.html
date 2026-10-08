@@ -39,9 +39,12 @@
       </div>
 
       <div class="top-actions">
-        <button type="button" class="status-badge" id="statusToggle" aria-pressed="true" aria-label="Toggle SpliceTap">
+        <!-- Named by its visible text (WCAG 2.5.3, Label in Name): an
+             aria-label of "Toggle SpliceTap" replaced the visible "Active", so
+             a voice-control user saying what they could see did nothing. -->
+        <button type="button" class="status-badge" id="statusToggle" aria-pressed="true">
           <span class="status-dot" id="statusDot" aria-hidden="true"></span>
-          <span id="statusText">Active</span>
+          <span class="visually-hidden">Interception: </span><span id="statusText">Active</span>
         </button>
       </div>
     </header>

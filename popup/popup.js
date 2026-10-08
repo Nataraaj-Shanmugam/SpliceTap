@@ -97,6 +97,8 @@ class SpliceTapPopup {
                 this.isActive = response.active !== false;
                 this.stats = response.stats || { intercepted: 0, rulesCount: this.rules.length };
                 this.settings = response.settings || {};
+                // Rules Chrome's network layer refused (ruleId -> reason).
+                this.dnrErrors = response.dnrErrors || {};
                 this.filteredRules = [...this.rules];
                 return;
             }
@@ -239,9 +241,7 @@ class SpliceTapPopup {
         // differently from how its role tells assistive tech it behaves.
         const tabStrip = document.querySelector('.tabs');
         if (tabStrip) {
-            const handler = (e) => this.handleTabKeydown(e);
-            tabStrip.addEventListener('keydown', handler);
-            this.listeners.push({ element: tabStrip, event: 'keydown', handler });
+            tabStrip.addEventListener('keydown', (e) => this.handleTabKeydown(e));
         }
 
         // Settings pane — each control persists immediately (there is no
@@ -446,20 +446,26 @@ class SpliceTapPopup {
         // blank with no way to recover except deleting all rules via
         // devtools. Render each card independently so one bad rule becomes
         // an inline error placeholder instead of an empty popup.
-        container.innerHTML = this.filteredRules
+        // A real list again: each row is a listitem holding its own controls,
+        // so assistive tech announces "list, N items" and can reach every
+        // button in a row (see getRuleCardHTML for why rows stopped being
+        // buttons). The empty and loading states render outside the list, so
+        // it only ever contains listitems.
+        const cards = this.filteredRules
             .map(rule => {
                 try {
                     return this.getRuleCardHTML(rule);
                 } catch (error) {
                     console.error('Failed to render rule card:', rule && rule.id, error);
                     const safeId = this.escapeHtml((rule && rule.id) || '');
-                    return `<div class="rule-card rule-card-error" data-rule-id="${safeId}">
+                    return `<div class="rule-card rule-card-error" role="listitem" data-rule-id="${safeId}">
                         <div class="rule-details">⚠ This rule could not be displayed (${this.escapeHtml(error.message)}).
                         <button class="rule-action" data-action="delete" data-rule-id="${safeId}">Delete it</button></div>
                     </div>`;
                 }
             })
             .join('');
+        container.innerHTML = `<div class="rule-list" role="list" aria-label="Rules">${cards}</div>`;
 
         // Attach event listeners to newly rendered cards
         this.attachRuleEventListeners();
@@ -509,17 +515,30 @@ class SpliceTapPopup {
         // + `grayscale()`, which dropped several text pairs under 4.5:1.
         // Add an explicit "Disabled" chip instead of relying on dimming.
         const disabledChip = rule.enabled ? '' : '<span class="disabled-chip">Disabled</span>';
+        // A headers/queryparams rule Chrome's network layer refused. Shown on
+        // the row itself — a toast is gone in seconds, and the rule keeps
+        // silently not applying until someone fixes it.
+        const dnrError = this.dnrErrors && this.dnrErrors[rule.id];
+        const notAppliedChip = dnrError
+            ? `<span class="rule-error-chip" title="Chrome refused this rule: ${this.escapeHtml(dnrError)}">Not applied<span class="visually-hidden"> — Chrome refused this rule: ${this.escapeHtml(dnrError)}</span></span>`
+            : '';
 
         return `
-            <!-- A11Y-10: the row is focusable and Enter/Space opens the editor
-                 (A-16), but it was role="listitem" — a structural role AT need
-                 not announce as activatable, so a keyboard user heard "list
-                 item" with no hint that Enter did anything. It is a button, so
-                 it says so. role="list" was dropped from the container to make
-                 that valid, since a list may only contain listitems; for a set
-                 of activatable rows, announcing each one correctly is worth
-                 more than the "list of N" count. -->
-            <div class="rule-card ${enabledClass}" data-rule-id="${safeId}" role="button" tabindex="0" aria-label="Edit ${safeName}">
+            <!-- A11Y-10, revised. Making the whole row role="button" let a
+                 keyboard user hear that it was activatable, but a button may
+                 not contain other controls, and this row contains a checkbox
+                 and six buttons: assistive tech flattens a button's contents,
+                 so those controls became unreachable or unnamed for screen
+                 reader users (axe: nested-interactive). Its aria-label also
+                 replaced the visible text, so a voice-control user saying the
+                 rule's name could not activate it (WCAG 2.5.3).
+
+                 The row is a listitem again, and the rule's name is the real
+                 button that opens the editor — named by its visible text, so
+                 both problems go. Clicking anywhere else on the row still
+                 opens the editor for mouse users; that is a convenience the
+                 card's click handler provides, not a role it claims. -->
+            <div class="rule-card ${enabledClass}" data-rule-id="${safeId}" role="listitem">
                 <div class="rule-header">
                     <div class="rule-info">
                         <div class="rule-name">
@@ -528,9 +547,10 @@ class SpliceTapPopup {
                                  role="checkbox"
                                  aria-checked="${rule.enabled ? 'true' : 'false'}"
                                  tabindex="0"
-                                 aria-label="${safeName}"></div>
-                            ${safeName}
+                                 aria-label="Enable ${safeName}"></div>
+                            <button type="button" class="rule-name-btn" data-rule-id="${safeId}" title="Edit rule">${safeName}<span class="visually-hidden">, edit rule</span></button>
                             ${disabledChip}
+                            ${notAppliedChip}
                             ${this.getRuleTypeBadgeHTML(rule)}
                         </div>
                         <div class="rule-details">
@@ -542,17 +562,17 @@ class SpliceTapPopup {
                     <div class="status-indicator" role="img" aria-label="${statusTooltip}" title="${statusTooltip}">${statusIcon}</div>
                 </div>
                 <div class="rule-actions">
-                    ${this.getReorderHTML(safeId)}
-                    <button class="rule-action" title="Edit" data-action="edit" data-rule-id="${safeId}" aria-label="Edit rule">
+                    ${this.getReorderHTML(safeId, safeName)}
+                    <button class="rule-action" title="Edit" data-action="edit" data-rule-id="${safeId}" aria-label="Edit ${safeName}">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                     </button>
-                    <button class="rule-action" title="Duplicate" data-action="copy" data-rule-id="${safeId}" aria-label="Duplicate rule">
+                    <button class="rule-action" title="Duplicate" data-action="copy" data-rule-id="${safeId}" aria-label="Duplicate ${safeName}">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                     </button>
-                    <button class="rule-action" title="Test" data-action="test" data-rule-id="${safeId}" aria-label="Test rule">
+                    <button class="rule-action" title="Test" data-action="test" data-rule-id="${safeId}" aria-label="Test ${safeName}">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
                     </button>
-                    <button class="rule-action" title="Delete" data-action="delete" data-rule-id="${safeId}" aria-label="Delete rule">
+                    <button class="rule-action" title="Delete" data-action="delete" data-rule-id="${safeId}" aria-label="Delete ${safeName}">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
                     </button>
                 </div>
@@ -595,9 +615,11 @@ class SpliceTapPopup {
      * Prefers the first remaining rule card, then the New rule button.
      */
     restoreListFocus() {
-        const firstCard = document.querySelector('.rule-card');
-        if (firstCard) {
-            firstCard.focus();
+        // The row's focusable entry point is its name button (see
+        // getRuleCardHTML); the card itself is no longer focusable.
+        const firstRule = document.querySelector('.rule-name-btn');
+        if (firstRule) {
+            firstRule.focus();
             return;
         }
         const newRule = document.getElementById('newRuleBtn');
@@ -613,13 +635,13 @@ class SpliceTapPopup {
      * Rather than reorder within a filtered view (which cannot express the
      * real array), the controls only appear on the unfiltered list.
      */
-    getReorderHTML(safeId) {
+    getReorderHTML(safeId, safeName) {
         if (this.searchTerm) return '';
         return `
-                    <button class="rule-action" title="Move up — matched before the rules below it" data-action="move-up" data-rule-id="${safeId}" aria-label="Move rule up">
+                    <button class="rule-action" title="Move up — matched before the rules below it" data-action="move-up" data-rule-id="${safeId}" aria-label="Move ${safeName} up">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m18 15-6-6-6 6"/></svg>
                     </button>
-                    <button class="rule-action" title="Move down — matched after the rules above it" data-action="move-down" data-rule-id="${safeId}" aria-label="Move rule down">
+                    <button class="rule-action" title="Move down — matched after the rules above it" data-action="move-down" data-rule-id="${safeId}" aria-label="Move ${safeName} down">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
                     </button>`;
     }
@@ -852,19 +874,9 @@ class SpliceTapPopup {
                 }
             });
 
-            // A-16: the card is a mouse-only click-to-edit target — it's
-            // now focusable (tabindex="0" in getRuleCardHTML) with a matching
-            // keyboard path. Only fires when the card itself is the event
-            // target: the checkbox's own keydown handler stops propagation,
-            // and the nested <button>s turn Enter/Space into native click
-            // events targeted at the button, not at the card, so there's no
-            // double-handling.
-            card.addEventListener('keydown', (e) => {
-                if ((e.key === 'Enter' || e.key === ' ') && e.target === card) {
-                    e.preventDefault();
-                    this.editRule(card.dataset.ruleId);
-                }
-            });
+            // A-16's keyboard path now comes from the rule-name <button>: a
+            // native button turns Enter/Space into a click, which bubbles to
+            // this handler like a mouse click does. No separate keydown path.
         });
 
         // Rule action buttons
@@ -907,7 +919,13 @@ class SpliceTapPopup {
                 }
 
                 this.updateStatus();
-                this.showNotification(`Rule ${rule.enabled ? 'enabled' : 'disabled'}`);
+                if (response.dnrWarning) {
+                    // The toggle is stored, but Chrome did not apply part of
+                    // the network ruleset — say so rather than "enabled".
+                    this.showError(`Rule ${rule.enabled ? 'enabled' : 'disabled'}, but ${response.dnrWarning}`);
+                } else {
+                    this.showNotification(`Rule ${rule.enabled ? 'enabled' : 'disabled'}`);
+                }
             } else {
                 this.showError('Failed to update rule');
             }
@@ -1522,10 +1540,13 @@ class SpliceTapPopup {
                 </div>`;
         }).join('');
 
+        // Listeners die with the buttons: renderCaptures replaces this list's
+        // markup wholesale, so there is nothing to track for later removal.
+        // An earlier version recorded them in a registry copied from
+        // options.js that the popup never declared — the push threw on every
+        // popup open and stopped init() before the rules were ever loaded.
         list.querySelectorAll('[data-capture-action]').forEach((btn) => {
-            const handler = () => this.createRuleFromCapture(btn.dataset.captureId, btn.dataset.captureAction);
-            btn.addEventListener('click', handler);
-            this.listeners.push({ element: btn, event: 'click', handler });
+            btn.addEventListener('click', () => this.createRuleFromCapture(btn.dataset.captureId, btn.dataset.captureAction));
         });
     }
 
@@ -1991,6 +2012,21 @@ class SpliceTapPopup {
             });
             toast.appendChild(actionBtn);
         }
+
+        // A toast overlays the bottom of the pane, so whatever control sits
+        // there — the Import button, the last rule's actions — is under it
+        // for the toast's lifetime. Clicks on the toast used to go nowhere,
+        // and because hovering pauses the auto-dismiss (U-18, below), a
+        // pointer resting where that control had been kept the toast — and
+        // the dead zone — alive indefinitely. Clicking the toast now
+        // dismisses it at once, so the control beneath is one visible click
+        // away. Its action button handles its own click and is unaffected.
+        toast.title = 'Click to dismiss';
+        toast.addEventListener('click', (e) => {
+            if (e.target.closest('.toast-action')) return;
+            clearTimeout(dismissTimer);
+            dismissToast();
+        });
 
         // U-18: pause the auto-dismiss while the user is reading/reaching
         // for the action button.
