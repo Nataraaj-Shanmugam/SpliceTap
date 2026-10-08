@@ -7,5 +7,8 @@
 // "@jest-environment jsdom" docblock at the top of that file, rather than
 // paying jsdom's setup cost on every suite.
 module.exports = {
-    testEnvironment: 'node'
+    testEnvironment: 'node',
+    // The headless browser suite launches Chrome; it runs separately via
+    // `npm run test:e2e` (jest.e2e.config.js) so `npm test` stays fast.
+    testPathIgnorePatterns: ['/node_modules/', '/tests/e2e/']
 };

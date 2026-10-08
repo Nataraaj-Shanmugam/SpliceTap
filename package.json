@@ -4,12 +4,13 @@
   "description": "Mock, block, delay, redirect and rewrite API requests directly in your browser. Six rule types, GraphQL matching, no proxy needed.",
   "main": "manifest.json",
   "scripts": {
-    "build": "npm run validate && npm run test && npm run package",
+    "build": "npm run validate && npm run lint && npm run test && npm run package && npm run test:e2e",
     "test": "jest",
     "package": "node scripts/package-extension.js",
     "dev": "echo 'Load unpacked extension in Chrome from this directory'",
-    "lint": "eslint . --ext .js",
-    "validate": "node scripts/validate-manifest.js"
+    "lint": "eslint .",
+    "validate": "node scripts/validate-manifest.js",
+    "test:e2e": "jest --config jest.e2e.config.js"
   },
   "keywords": [
     "chrome-extension",
@@ -34,9 +35,11 @@
     "url": "https://github.com/Nataraaj-Shanmugam/SpliceTap/issues"
   },
   "devDependencies": {
+    "axe-core": "^4.14.0",
     "eslint": "^10.7.0",
     "jest": "^30.2.0",
-    "jest-environment-jsdom": "^30.2.0"
+    "jest-environment-jsdom": "^30.2.0",
+    "puppeteer": "^24.43.1"
   },
   "engines": {
     "node": ">=16.0.0"
