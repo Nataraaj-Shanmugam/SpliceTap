@@ -506,6 +506,46 @@ class SpliceTapBackground {
                     return { success: true, dnrWarning: await this._syncNetworkRules() };
                 }
 
+                case 'resetAll': {
+                    // "Delete all SpliceTap data". The popup used to do this
+                    // itself — clearRules plus removing a list of local keys —
+                    // and announced "All SpliceTap data deleted" while leaving
+                    // session storage untouched: captured response BODIES and
+                    // the interception log survived. Worse, it removed the
+                    // stored settings but not this worker's in-memory copy, so
+                    // an armed Capture kept recording response bodies after the
+                    // user had been told everything was wiped. Verified
+                    // headless. Only this worker holds the in-memory state, so
+                    // the reset lives here.
+                    if (this._trailingFlushTimer) {
+                        clearTimeout(this._trailingFlushTimer);
+                        this._trailingFlushTimer = null;
+                    }
+                    this._rulesDirty = false;
+                    this.rules = [];
+                    this.captures = [];
+                    this.interceptionLog = [];
+                    this.settings = {};
+                    this.isActive = true;
+                    this.stats = { intercepted: 0, lastReset: new Date().toISOString() };
+                    this.dnrRejected = new Map();
+                    this._logClearedAt = Date.now();
+
+                    const cleared = await this.storage.clearAll();
+                    try {
+                        await chrome.storage.session.clear();
+                    } catch (e) {
+                        // session storage unavailable — nothing was stored there
+                    }
+                    if (!cleared || !cleared.success) {
+                        return { success: false, error: (cleared && cleared.error) || 'Failed to delete stored data' };
+                    }
+
+                    // Tell every tab: no rules, nothing armed, interception on.
+                    await this.broadcastState();
+                    return { success: true, dnrWarning: await this._syncNetworkRules() };
+                }
+
                 case 'testRule':
                     if (!request.rule) {
                         throw new Error('Rule data is required');

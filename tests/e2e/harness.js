@@ -59,6 +59,29 @@ function startServer() {
             return;
         }
 
+        if (url.pathname === '/csp-page') {
+            // A page that locks itself down hard. MAIN-world content scripts
+            // are injected by the browser, not by the page, so its CSP must
+            // not stop interception — this is what proves that.
+            res.writeHead(200, {
+                'Content-Type': 'text/html',
+                'Content-Security-Policy': "default-src 'none'; script-src 'none'; connect-src 'self'; style-src 'none'"
+            });
+            res.end('<!doctype html><html><head><meta charset="utf-8"><title>Strict CSP</title></head><body>locked down</body></html>');
+            return;
+        }
+
+        if (url.pathname === '/frames') {
+            // One same-origin and one cross-origin child (127.0.0.1 vs
+            // localhost on the same port), for all_frames interception.
+            const port = req.socket.localPort;
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end('<!doctype html><html><head><meta charset="utf-8"><title>Frames</title></head><body>' +
+                '<iframe id="same" src="http://127.0.0.1:' + port + '/page"></iframe>' +
+                '<iframe id="cross" src="http://localhost:' + port + '/page"></iframe></body></html>');
+            return;
+        }
+
         if (url.pathname === '/echo') {
             // Everything the network stack actually delivered: lets a test see
             // a header DNR added or a query param DNR rewrote.
@@ -93,7 +116,7 @@ function startServer() {
     });
 
     return new Promise((resolve) => {
-        server.listen(0, '127.0.0.1', () => {
+        server.listen(0, () => {
             const { port } = server.address();
             resolve({ server, requests, baseUrl: `http://127.0.0.1:${port}` });
         });
@@ -116,7 +139,13 @@ async function launch(options = {}) {
         { timeout: 20000 }
     );
     const extensionId = new URL(swTarget.url()).host;
-    const worker = await swTarget.worker();
+    // Attaching a DevTools session to the worker (to collect its console)
+    // also changes its lifecycle: an attached worker is never idled out, and
+    // one stopped through DevTools can restart paused for the debugger. A
+    // test of service-worker termination therefore launches with
+    // attachWorker:false and lets Chrome idle the worker out for real.
+    const attachWorker = options.attachWorker !== false;
+    const worker = attachWorker ? await swTarget.worker() : null;
 
     // Everything the extension logs at error level, across every context, is
     // collected so a test can assert a flow ran clean — not merely that it
@@ -129,9 +158,11 @@ async function launch(options = {}) {
     const errors = [];
     const allErrors = [];
     const record = (entry) => { errors.push(entry); allErrors.push(entry); };
-    worker.on('console', (msg) => {
-        if (msg.type() === 'error') record({ where: 'service_worker', text: msg.text() });
-    });
+    if (worker) {
+        worker.on('console', (msg) => {
+            if (msg.type() === 'error') record({ where: 'service_worker', text: msg.text() });
+        });
+    }
 
     const extUrl = (p) => `chrome-extension://${extensionId}/${p}`;
 
@@ -204,6 +235,17 @@ async function launch(options = {}) {
         return page;
     }
 
+    const workerRunning = () => browser.targets()
+        .some((t) => t.type() === 'service_worker' && t.url().includes(extensionId));
+
+    /** Wait for Chrome's own idle termination (~30s). Needs attachWorker:false. */
+    async function waitForWorkerIdleExit(timeout = 60000) {
+        if (attachWorker) throw new Error('waitForWorkerIdleExit needs launch({ attachWorker: false })');
+        const deadline = Date.now() + timeout;
+        while (workerRunning() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 500));
+        return !workerRunning();
+    }
+
     async function close() {
         await browser.close();
         await new Promise((resolve) => server.close(resolve));
@@ -211,7 +253,8 @@ async function launch(options = {}) {
 
     return {
         browser, worker, control, extensionId, extUrl, baseUrl, requests, errors, allErrors, startupErrors, initialPages, record,
-        bg, extensionEval, reset, saveRule, openPage, openOverlay, close
+        bg, extensionEval, reset, saveRule, openPage, openOverlay, close,
+        workerRunning, waitForWorkerIdleExit
     };
 }
 

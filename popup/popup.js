@@ -1795,11 +1795,19 @@ class SpliceTapPopup {
      */
     async confirmReset() {
         try {
-            await this.sendMessage({ type: 'clearRules' });
-            await chrome.storage.local.remove([
-                'spliceTapSettings', 'spliceTapStats', 'spliceTapMetrics',
-                'spliceTapChaos', 'spliceTapDnrCounter'
-            ]);
+            // The background owns the reset: it is the only place holding the
+            // in-memory state (an armed Capture, the log, captured bodies), so
+            // removing storage keys from here left those alive — see the
+            // resetAll handler for what that used to miss.
+            const response = await this.sendMessage({ type: 'resetAll' });
+            if (!response || !response.success) {
+                throw new Error((response && response.error) || 'reset failed');
+            }
+            try {
+                window.localStorage.removeItem('tm-theme'); // cached theme for first paint
+            } catch (e) {
+                // localStorage unavailable — nothing cached
+            }
             this.togglePanel('resetPanel', 'resetAllBtn', false);
             this.showNotification('All SpliceTap data deleted');
             setTimeout(() => window.location.reload(), 600);

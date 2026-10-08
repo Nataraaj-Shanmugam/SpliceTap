@@ -491,10 +491,13 @@
     function setupClearButton() {
         const btn = byId('clearRequestsBtn');
         if (!btn) return;
+        // No confirmation. This blocked on a native window.confirm(): a
+        // DevTools extension panel is a cross-origin frame inside DevTools,
+        // not a place to depend on native dialogs, and the popup already
+        // retired them for the same reason (U-11). Clearing a session's
+        // diagnostic log destroys no rules or settings, and new traffic
+        // refills it — Chrome's own Network panel clears without asking.
         btn.addEventListener('click', async () => {
-            if (!window.confirm('Clear all intercepted request logs? This cannot be undone.')) {
-                return;
-            }
             await sendMessage({ type: 'clearInterceptionLog' });
             dismissedKeys.clear();
             revealedKeys.clear();
