@@ -248,7 +248,13 @@
             patch: r.patch !== undefined ? r.patch : {},
             delay: r.delay || 0,
             statusCode: r.statusCode || 200,
-            statusText: r.statusText || 'OK',
+            // The background fills a missing reason phrase from the status
+            // code when it normalises stored rules (storage.normalizeRule), so
+            // this fallback only covers a rule that somehow lacks one. It used
+            // to be 'OK' whatever the code — a 404 mock reported "OK".
+            // An explicit '' is kept: HTTP/2 responses have no reason phrase,
+            // so a rule captured from one is faithful with an empty string.
+            statusText: r.statusText !== undefined ? r.statusText : ((r.statusCode || 200) === 200 ? 'OK' : ''),
             headers: r.headers
         };
     }
@@ -546,7 +552,17 @@
 
             logInterception(rule, url, method, cfg.statusCode);
 
-            return buildMockResponse(responseBody, cfg.statusCode, cfg.statusText, headerObj);
+            const mocked = buildMockResponse(responseBody, cfg.statusCode, cfg.statusText, headerObj);
+            // A constructed Response has an empty `url`. Real ones report the
+            // URL that was fetched, and code that logs it or resolves relative
+            // links against it saw "" from a mock. Patch mode already restores
+            // this (Q-28); static mocks now match.
+            try {
+                Object.defineProperty(mocked, 'url', { value: new URL(url, window.location.href).href, configurable: true });
+            } catch (e) {
+                // Environment won't allow the override — leave it empty.
+            }
+            return mocked;
         }
     }
 
@@ -607,9 +623,30 @@
             // 'readystatechange' before their terminal event, matching load/
             // error/abort, so `onreadystatechange`-only code (readyState ===
             // 4 checks) sees those outcomes too.
+            /**
+             * Walk readyState up to `state` the way a real response does —
+             * HEADERS_RECEIVED (2), then LOADING (3) — with status and headers
+             * readable from 2 on. Mocks used to jump straight to 3 (static) or
+             * 4 (patch) and set status only at 4, so code that reads status or
+             * headers at HEADERS_RECEIVED, as the spec allows, saw 0 and none.
+             * Async only: a synchronous XHR reports just the final state.
+             */
+            function advanceTo(state, status, statusText, headers) {
+                if (!requestIsAsync) return;
+                mockResponseHeaders = headers || {};
+                Object.defineProperty(xhr, 'status', { value: status, writable: false, configurable: true });
+                Object.defineProperty(xhr, 'statusText', { value: statusText, writable: false, configurable: true });
+                for (let next = 2; next <= state; next++) {
+                    if (xhr.readyState >= next) continue;
+                    Object.defineProperty(xhr, 'readyState', { value: next, writable: true, configurable: true });
+                    xhr.dispatchEvent(new Event('readystatechange'));
+                }
+            }
+
             function finishMock(responseText, status, statusText, headers) {
                 if (isAborted) return;
                 try {
+                    advanceTo(3, status, statusText, headers);
                     mockResponseHeaders = headers || {};
 
                     // Q-7: respect responseType instead of always returning text.
@@ -699,9 +736,8 @@
                 const delay = cfg.delay;
                 const headers = buildMockHeaders(cfg.headers, rule);
 
-                // Update readyState to LOADING
-                Object.defineProperty(xhr, 'readyState', { value: 3, writable: true, configurable: true });
-                xhr.dispatchEvent(new Event('readystatechange'));
+                // HEADERS_RECEIVED then LOADING, status and headers visible.
+                advanceTo(3, status, statusText, headers);
 
                 if (delay > 50) {
                     // Genuinely delayed mocks: emit a few incremental progress
