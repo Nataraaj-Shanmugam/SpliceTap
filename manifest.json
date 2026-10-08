@@ -47,6 +47,8 @@
       "js": [
         "src/common.js",
         "src/templates.js",
+        "src/rule-schema.js",
+        "src/rule-editor.js",
         "content/overlay.js"
       ],
       "run_at": "document_idle",

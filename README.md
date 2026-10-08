@@ -335,11 +335,14 @@ release by accident. Upload the result at the
 splicetap-extension/
 ├── manifest.json              # Extension manifest (MV3)
 ├── assets/                    # Icons and static assets
-├── src/                       # Shared utilities (UMD — load everywhere, no divergence)
+├── src/                       # Shared modules (UMD — one copy, loaded everywhere)
+│   ├── rule-schema.js         # The one definition of a valid rule (editors + save boundary)
+│   ├── rule-editor.js         # The one rule editor (in-page overlay + options page)
 │   ├── placeholders.js        # Dynamic-response placeholder engine
 │   ├── matcher.js             # URL / header / GraphQL / rule matching
 │   ├── patch.js               # RFC 7386 JSON Merge Patch
-│   ├── utils.js               # Validation, import/export, templates
+│   ├── templates.js           # Rule templates + HTTP status reason phrases
+│   ├── common.js              # escapeHtml, id generation, shared limits
 │   ├── storage.js             # chrome.storage wrapper + rule migration
 │   └── index.js               # CommonJS entry for tests
 ├── service_worker/
@@ -347,19 +350,21 @@ splicetap-extension/
 │   └── dnr.js                 # declarativeNetRequest rule mapping/sync
 ├── content/
 │   ├── injected.js            # MAIN-world fetch/XHR interceptor
-│   └── content.js             # ISOLATED-world state relay
-├── popup/                     # Toolbar popup (rule list, toggle, test)
-├── options/                   # Settings page + rule-type editor
+│   ├── content.js             # ISOLATED-world state relay
+│   └── overlay.js             # Mounts the rule editor over the current page
+├── popup/                     # Toolbar popup (rules, data, settings)
+├── options/                   # Fallback host for the rule editor
 ├── devtools/
 │   ├── devtools.js            # Panel registration
 │   ├── panel.html             # DevTools panel markup
 │   └── panel.js               # Interception-log polling + rendering
 ├── scripts/
-│   ├── validate-manifest.js   # Manifest validation
-│   └── package-extension.js   # Allowlist ZIP packager
+│   ├── validate-manifest.js   # Manifest + shipped-file validation
+│   ├── package-extension.js   # Allowlist ZIP packager
+│   └── chromium-text.js       # Chrome's stricter UTF-8 check for shipped files
 ├── docs/                      # GitHub Pages site (landing page + privacy policy)
 ├── build.sh                   # One-command store build → dist/
-└── tests/                     # Jest test suites
+└── tests/                     # Jest unit suites; tests/e2e/ runs headless Chrome
 ```
 
 ## License

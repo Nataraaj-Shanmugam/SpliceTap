@@ -79,6 +79,8 @@ module.exports = [
                 expect: 'readonly',
                 beforeEach: 'readonly',
                 afterEach: 'readonly',
+                beforeAll: 'readonly',
+                afterAll: 'readonly',
                 jest: 'readonly',
                 __dirname: 'readonly',
                 __filename: 'readonly',
@@ -96,7 +98,7 @@ module.exports = [
         // in the repo is a classic script or UMD (checked at runtime via
         // `typeof module !== 'undefined'`), so parsing them as sourceType
         // 'module' would misreport their top-level `this`/strict-mode rules.
-        files: ['src/storage.js', 'src/utils.js', 'service_worker/background.js'],
+        files: ['src/storage.js', 'service_worker/background.js'],
         languageOptions: { sourceType: 'module' }
     },
     {

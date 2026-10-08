@@ -4,263 +4,67 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SpliceTap Settings</title>
+    <title>SpliceTap — Rule editor</title>
     <link rel="stylesheet" href="options.css">
 </head>
 
+<!-- This page has one job: host the rule editor where the in-page editor
+     cannot run (chrome:// pages, the Web Store, PDFs), or when a rule is
+     opened here directly. The editor itself is src/rule-editor.js, the same
+     module the in-page overlay mounts (R1 / CQ-1). Everything else — the rule
+     list, settings, import and export — lives in the toolbar popup. -->
 <body class="theme-dark">
-    <div class="app-container">
-        <!-- Sidebar Navigation -->
-        <aside class="sidebar">
-            <div class="brand">
-                <div class="logo">
-                    <svg viewBox="0 0 128 128" aria-hidden="true" focusable="false">
-                        <defs>
-                            <linearGradient id="tmLogo" x1="0" y1="0" x2="1" y2="1">
-                                <stop offset="0%" stop-color="#1e63f5" />
-                                <stop offset="100%" stop-color="#0bbcd4" />
-                            </linearGradient>
-                        </defs>
-                        <rect x="0" y="0" width="128" height="128" rx="30" fill="url(#tmLogo)" />
-                        <circle cx="28" cy="44" r="6.5" fill="#fff" opacity="0.5" />
-                        <circle cx="52" cy="44" r="6.5" fill="#fff" opacity="0.5" />
-                        <circle cx="76" cy="44" r="6.5" fill="#fff" opacity="0.5" />
-                        <path d="M88 32 L100 44 L88 56" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" opacity="0.5" />
-                        <path d="M100 86 L44 86" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" />
-                        <path d="M42 72 L28 86 L42 100" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
-                    </svg>
-                </div>
-                <h1>SpliceTap</h1>
+    <main class="page">
+        <header class="brand">
+            <div class="logo">
+                <svg viewBox="0 0 128 128" aria-hidden="true" focusable="false">
+                    <defs>
+                        <linearGradient id="pageLogo" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#1e63f5" />
+                            <stop offset="100%" stop-color="#0bbcd4" />
+                        </linearGradient>
+                    </defs>
+                    <rect x="0" y="0" width="128" height="128" rx="30" fill="url(#pageLogo)" />
+                    <circle cx="28" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <circle cx="52" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <circle cx="76" cy="44" r="6.5" fill="#fff" opacity="0.5" />
+                    <path d="M88 32 L100 44 L88 56" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" opacity="0.5" />
+                    <path d="M100 86 L44 86" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" />
+                    <path d="M42 72 L28 86 L42 100" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            </div>
+            <h1>SpliceTap <span class="version" id="version"></span></h1>
+        </header>
+
+        <section class="card" aria-labelledby="pageHeading">
+            <h2 id="pageHeading">Rule editor</h2>
+
+            <!-- Outcome of the last editor session, announced politely. -->
+            <p class="status" id="status" role="status" aria-live="polite"></p>
+
+            <p class="lead">
+                Rules are usually created and edited in place, over the page you are
+                testing. This page hosts the same editor where that cannot run &mdash;
+                on <code>chrome://</code> pages and the Web Store, for example.
+            </p>
+
+            <div class="actions">
+                <button type="button" class="btn btn-primary" id="newRuleBtn">New rule</button>
+                <button type="button" class="btn btn-secondary" id="closeTabBtn">Close this tab</button>
             </div>
 
-
-            <div class="sidebar-footer">
-                <div class="version">v0.0.1</div>
-            </div>
-        </aside>
-
-        <!-- Main Content Area -->
-        <main class="main-content">
-            <header class="top-bar">
-                <h2 id="pageTitle">Rules Management</h2>
-                <div class="header-actions">
-                    <button class="btn-primary" id="newRuleBtn">New rule</button>
-                </div>
-            </header>
-
-            <div class="content-scroll">
-                <!-- A-6: persistent live region so validation errors/success toasts are
-                     announced - must exist before text is inserted to fire reliably. -->
-                <div class="message-container" id="messageContainer" role="status" aria-live="polite" aria-atomic="true"></div>
-                <div class="settings-section">
-                    <h2>Rule editor</h2>
-                    <p class="section-description">
-                        This page hosts the full rule editor. It opens automatically when you edit a
-                        rule, or when the in-page editor cannot run &mdash; on <code>chrome://</code>
-                        pages and the Web Store, for example.
-                    </p>
-                    <p class="section-description">
-                        Everything else &mdash; your rule list, theme, chaos mode, debug logging,
-                        import, export and stored data &mdash; now lives in the toolbar popup, so
-                        there is only one place to look for it.
-                    </p>
-                </div>
-            </div>
-        </main>
-        <!-- A-20: closes the main-content element opened above; it was previously never closed. -->
-    </div>
-
-    <!-- Data Viewer Modal -->
-            <!-- Rule Editor Modal -->
-    <div class="modal" id="ruleEditorModal" role="dialog" aria-modal="true" aria-labelledby="ruleEditorTitle">
-        <div class="modal-content large" tabindex="-1">
-            <div class="modal-header">
-                <h3 id="ruleEditorTitle">Edit Rule</h3>
-                <button class="modal-close" data-action="close-modal" data-modal="ruleEditorModal" aria-label="Close dialog"><span aria-hidden="true">×</span></button>
-            </div>
-            <div class="modal-body">
-                <form id="ruleForm">
-                    <input type="hidden" id="ruleId">
-                    <input type="hidden" id="ruleDnrId">
-
-                    <div class="form-row">
-                        <div class="form-group" style="flex: 1;">
-                            <label for="ruleType">Rule Type</label>
-                            <select id="ruleType">
-                                <option value="mock">Mock Response</option>
-                                <option value="block">Block</option>
-                                <option value="delay">Delay</option>
-                                <option value="redirect">Redirect</option>
-                                <option value="headers">Modify Headers</option>
-                                <option value="queryparams">Query Params</option>
-                            </select>
-                        </div>
-                        <div class="form-group" style="flex: 1;">
-                            <label for="ruleTemplateSelect">Quick Template</label>
-                            <select id="ruleTemplateSelect">
-                                <option value="">Choose a template…</option>
-                                <option value="graphqlMock">GraphQL Mock</option>
-                                <option value="patchResponse">Patch Response</option>
-                                <option value="blockRequest">Block Request</option>
-                                <option value="redirectLocalhost">Redirect to localhost</option>
-                                <option value="corsUnblock">CORS Unblock</option>
-                                <option value="customUserAgent">Custom User-Agent</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div class="form-row">
-                        <div class="form-group" style="flex: 2;">
-                            <label for="ruleName">Rule Name <span class="required-mark" aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-                            <input type="text" id="ruleName" placeholder="e.g. User Profile API" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="ruleEnabled">Status</label>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="ruleEnabled" checked>
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <div class="form-row">
-                        <div class="form-group" style="flex: 1;">
-                            <label for="ruleMethod">Method</label>
-                            <select id="ruleMethod">
-                                <option value="GET">GET</option>
-                                <option value="POST">POST</option>
-                                <option value="PUT">PUT</option>
-                                <option value="DELETE">DELETE</option>
-                                <option value="PATCH">PATCH</option>
-                                <option value="OPTIONS">OPTIONS</option>
-                                <option value="*">Any (*)</option>
-                            </select>
-                        </div>
-                        <div class="form-group" style="flex: 3;">
-                            <label for="ruleUrl">URL Pattern <span class="required-mark" aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-                            <input type="text" id="ruleUrl" placeholder="e.g. */api/users/*" required>
-                            <span class="help-text">Use * for wildcards, or wrap in /.../  for regex</span>
-                        </div>
-                    </div>
-
-                    <!-- mock-only fields -->
-                    <div class="form-row" data-rule-types="mock">
-                        <div class="form-group" id="ruleStatusGroup">
-                            <label for="ruleStatus">Status Code</label>
-                            <input type="number" id="ruleStatus" value="200" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="ruleDelay">Delay (ms)</label>
-                            <input type="number" id="ruleDelay" value="0" min="0">
-                        </div>
-                    </div>
-
-                    <div class="form-row" data-rule-types="mock">
-                        <div class="form-group" style="flex: 1;">
-                            <label for="responseMode">Response Mode</label>
-                            <select id="responseMode">
-                                <option value="static">Static</option>
-                                <option value="patch">Patch (merge into real response)</option>
-                            </select>
-                        </div>
-                        <div class="form-group" style="flex: 2;">
-                            <label for="graphqlOperation">GraphQL Operation Name (optional)</label>
-                            <input type="text" id="graphqlOperation" placeholder="e.g. getUsers">
-                        </div>
-                    </div>
-
-                    <div class="form-group" data-rule-types="mock">
-                        <label for="matchHeaders">Match Request Headers (JSON, optional)</label>
-                        <textarea id="matchHeaders" rows="2" class="code-font"
-                            placeholder='{"x-api-key": "abc"}'></textarea>
-                        <span class="help-text">All listed headers must match (case-insensitive name, substring
-                            value). Leave empty to match any.</span>
-                    </div>
-
-                    <div class="form-group" data-rule-types="mock">
-                        <label for="ruleHeaders">Response Headers (JSON)</label>
-                        <textarea id="ruleHeaders" rows="3"
-                            class="code-font">{"Content-Type": "application/json"}</textarea>
-                    </div>
-
-                    <div class="form-group" id="staticBodyGroup" data-rule-types="mock">
-                        <label for="ruleBody">Response Body (JSON or Text)</label>
-                        <textarea id="ruleBody" rows="8" class="code-font"
-                            placeholder='{"id": 1, "name": "Test User"}'></textarea>
-                        <div class="input-actions">
-                            <button type="button" class="btn-small" data-action="format-json"
-                                data-target="ruleBody">Format JSON</button>
-                            <button type="button" class="btn-small" data-action="insert-template"
-                                data-template="{{guid}}">Insert GUID</button>
-                            <button type="button" class="btn-small" data-action="insert-template"
-                                data-template="{{timestamp}}">Insert Timestamp</button>
-                        </div>
-                    </div>
-
-                    <div class="form-group" id="patchBodyGroup" data-rule-types="mock" style="display: none;">
-                        <label for="rulePatch">Response Patch (JSON Merge Patch)</label>
-                        <textarea id="rulePatch" rows="8" class="code-font" placeholder='{"data": null}'></textarea>
-                        <span class="help-text">Merged into the real response body (RFC 7386). Use null to delete a
-                            key. Status code is left unchanged.</span>
-                    </div>
-
-                    <!-- delay-only fields -->
-                    <div class="form-group" data-rule-types="delay">
-                        <label for="delayMs">Delay (ms)</label>
-                        <input type="number" id="delayMs" value="1000" min="1" max="30000">
-                        <span class="help-text">Request passes through to the network after this delay (1-30000
-                            ms).</span>
-                    </div>
-
-                    <!-- redirect-only fields -->
-                    <div class="form-group" data-rule-types="redirect">
-                        <label for="redirectDestination">Redirect Destination</label>
-                        <input type="text" id="redirectDestination" placeholder="https://example.com/new-path">
-                        <span class="help-text">If URL Pattern is a /regex/, use $1-$9 to reference capture
-                            groups.</span>
-                    </div>
-
-                    <!-- headers-only fields -->
-                    <div data-rule-types="headers">
-                        <div class="form-group">
-                            <label for="headersModRequest">Request Headers (JSON array of {op, name, value})</label>
-                            <textarea id="headersModRequest" rows="3" class="code-font"
-                                placeholder='[{"op": "set", "name": "User-Agent", "value": "MyAgent/1.0"}]'></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label for="headersModResponse">Response Headers (JSON array of {op, name, value})</label>
-                            <textarea id="headersModResponse" rows="3" class="code-font"
-                                placeholder='[{"op": "set", "name": "Access-Control-Allow-Origin", "value": "*"}]'></textarea>
-                        </div>
-                        <span class="help-text">Handled by declarativeNetRequest — cannot be combined with header or
-                            GraphQL match conditions.</span>
-                    </div>
-
-                    <!-- queryparams-only fields -->
-                    <div data-rule-types="queryparams">
-                        <div class="form-group">
-                            <label for="queryParamsAdd">Add Query Params (JSON array of {key, value})</label>
-                            <textarea id="queryParamsAdd" rows="2" class="code-font"
-                                placeholder='[{"key": "debug", "value": "1"}]'></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label for="queryParamsRemove">Remove Query Params (comma-separated keys)</label>
-                            <input type="text" id="queryParamsRemove" placeholder="token, session_id">
-                        </div>
-                        <span class="help-text">Handled by declarativeNetRequest — cannot be combined with header or
-                            GraphQL match conditions.</span>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-secondary" data-action="close-modal" data-modal="ruleEditorModal">Cancel</button>
-                <button class="btn-primary" data-action="save-rule">Save Rule</button>
-            </div>
-        </div>
-    </div>
+            <p class="note">
+                Your rule list, theme, chaos mode, import, export and stored data are in
+                the SpliceTap toolbar popup.
+            </p>
+        </section>
+    </main>
 
     <script src="../src/common.js"></script>
+    <script src="../src/matcher.js"></script>
     <script src="../src/templates.js"></script>
+    <script src="../src/rule-schema.js"></script>
+    <script src="../src/rule-editor.js"></script>
     <script src="options.js"></script>
 </body>
 
