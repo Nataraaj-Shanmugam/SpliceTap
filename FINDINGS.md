@@ -4,12 +4,16 @@
 **Date:** 2026-08-28
 **Scope:** Full codebase, docs and store-readiness, ahead of first Chrome Web Store submission.
 
-## Status — updated 3 September 2026
+## Status — updated 9 October 2026
 
-**54 of 57 closed.** Every Critical, High, Medium and Low is fixed and
-verified except three, each deliberately declined with reasons recorded
-below. The report below is the original audit and is kept as written; this
-section records what has changed since.
+**52 fixed, 4 declined, 1 open.** Every Critical is fixed, and every High,
+Medium and Low except the five accounted for below. The report after this
+section is the original audit and is kept as written; this section records
+what has changed since.
+
+An earlier revision of this section said "54 of 57 closed" and "still open:
+0". Both were wrong. Four items are declined, not three, and CQ-1 had been
+counted as closed when only its symptoms were — see **Still open**.
 
 Closed in the order the analysis recommended: SEC-1, QA-1, QA-2, A11Y-1 and
 A11Y-2 first (silent failure and data loss), then PROD-1, CQ-3/PROD-9,
@@ -100,13 +104,30 @@ page, including pages with no rules, to save allocation at construction. For
 The XHR path now has 23 tests, so if this is ever revisited for another
 reason, the refactor would be verifiable rather than a leap.
 
-### Still open (0)
+### Still open (1)
 
-Nothing outstanding. The three declined items above are decisions, not
-backlog; each records the measurement or trade-off behind it. What remains
-before submission is external: GitHub Pages must be enabled (`master` /
-`/docs`) so the privacy-policy URL resolves, and the store needs screenshots
-at 1280×800 or 640×400.
+**CQ-1 — two full rule editors (High).** `options/options.js` (1500 lines)
+and `content/overlay.js` (1107 lines) are still separate implementations of
+the same editor. What has been done is the shared-module work that removes
+the *reasons* they drift: rule templates and `getStatusText` now live in
+`src/templates.js`, and `escapeHtml`, `generateId` and `LIMITS` in
+`src/common.js`, so both read one definition. Every symptom the duplication
+caused — CQ-2, PROD-3, A11Y-6, A11Y-7 — is fixed in both places.
+
+The structural fix (R1, collapsing them into one editor) is not done, and the
+duplication is still there to drift again. It is deliberately last: it is a
+refactor of two large UI files that have **no test coverage** — the 242 tests
+cover the service worker, storage, matcher, interceptor and relay, none of
+them the editors. Doing it safely means building editor coverage first.
+
+The four declined items above are decisions, not backlog; each records the
+measurement or trade-off behind it.
+
+### Not code
+
+Submission is also gated on two things outside the repo: GitHub Pages must be
+enabled (`master` / `/docs`) so the privacy-policy URL resolves, and the store
+listing needs screenshots at 1280×800 or 640×400.
 
 ---
 
