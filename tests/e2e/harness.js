@@ -93,6 +93,38 @@ function startServer() {
             return;
         }
 
+        // Page resources (not fetch/XHR), for checking what rule types reach.
+        if (url.pathname === '/assets/app.js' || url.pathname === '/assets/app-local.js') {
+            res.writeHead(200, { 'Content-Type': 'application/javascript' });
+            res.end(`window.__assetFrom = ${JSON.stringify(url.pathname)};`);
+            return;
+        }
+        if (url.pathname === '/assets/pixel.png') {
+            // 1x1 transparent PNG.
+            res.writeHead(200, { 'Content-Type': 'image/png' });
+            res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'));
+            return;
+        }
+
+        // Fixed real responses for patch-mode and fidelity comparisons.
+        if (url.pathname === '/api/readme-user') {
+            json(200, { user: { name: 'Real', role: 'user' }, count: 3 });
+            return;
+        }
+        if (url.pathname === '/api/missing') {
+            json(404, { error: 'missing' });
+            return;
+        }
+        if (url.pathname === '/api/list') {
+            json(200, [1, 2, 3]);
+            return;
+        }
+        if (url.pathname === '/text/plain') {
+            res.writeHead(200, { 'Content-Type': 'text/plain', 'X-Origin-Server': 'yes' });
+            res.end('plain real text');
+            return;
+        }
+
         if (url.pathname === '/redirect-target') {
             json(200, { real: true, redirected: true });
             return;
@@ -260,7 +292,13 @@ async function launch(options = {}) {
 
 function watchPage(page, where, record) {
     page.on('console', (msg) => {
-        if (msg.type() === 'error') record({ where, text: msg.text() });
+        if (msg.type() !== 'error') return;
+        // On a web page under test, Chrome logs the test server's own 4xx/5xx
+        // responses as "Failed to load resource" — the server answering as
+        // asked, not the extension failing. On an extension page the same
+        // message would mean a missing file, so it is only skipped here.
+        if (where === 'page' && /^Failed to load resource/.test(msg.text())) return;
+        record({ where, text: msg.text() });
     });
     page.on('pageerror', (error) => record({ where, text: 'pageerror: ' + error.message }));
 }

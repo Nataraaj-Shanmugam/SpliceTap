@@ -143,6 +143,15 @@ describe.each(HOSTS)('rule editor — %s host', (hostKind) => {
         check(rules[0]);
     });
 
+    test('patch mode hides the Status Code field, which it ignores', async () => {
+        await openEditor();
+        expect(await ed.visibleFieldIds(page)).toContain('tmStatus');
+        await ed.fill(page, 'tmMode', 'patch');
+        expect(await ed.visibleFieldIds(page)).not.toContain('tmStatus');
+        await ed.fill(page, 'tmMode', 'static');
+        expect(await ed.visibleFieldIds(page)).toContain('tmStatus');
+    });
+
     test('switching type shows only that type\'s fields', async () => {
         await openEditor();
         await ed.fill(page, 'tmType', 'redirect');
