@@ -525,7 +525,7 @@
 
               <!-- mock -->
               <div class="tm-row" data-types="mock">
-                <div class="tm-field">
+                <div class="tm-field" id="tmStatusField">
                   <label for="tmStatus">Status Code</label>
                   <input type="number" id="tmStatus" value="200" min="${L().STATUS_MIN}" max="${L().STATUS_MAX}">
                 </div>
@@ -791,6 +791,11 @@
                 const patch = $('tmMode').value === 'patch';
                 $('tmBodyField').classList.toggle('tm-visible', !patch);
                 $('tmPatchField').classList.toggle('tm-visible', patch);
+                // Patch mode keeps the real response's status, so a Status Code
+                // field there was a control with no effect: set 503 and the
+                // page still got the real 200. Hidden while it cannot apply.
+                // (Inline style: the field's own display rule outranks [hidden].)
+                $('tmStatusField').style.display = patch ? 'none' : '';
             }
         }
 

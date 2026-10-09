@@ -189,14 +189,18 @@
         let safeUrl = rawUrl;
         try {
             const parsed = new URL(rawUrl, window.location.href);
-            let redacted = false;
             parsed.searchParams.forEach((value, key) => {
                 if (SENSITIVE_QUERY_KEY_RE.test(key)) {
                     parsed.searchParams.set(key, '[redacted]');
-                    redacted = true;
                 }
             });
-            safeUrl = redacted ? parsed.toString() : rawUrl;
+            // Always the absolute URL. A page calling fetch('/api/x') used to
+            // be logged — and captured — as the bare relative path, so the
+            // DevTools log lost the origin, and a rule built from a capture
+            // took the raw path as its pattern: including the query string,
+            // and for a path like '/api/' a pattern the matcher reads as the
+            // regex /api/, matching every URL that contains "api".
+            safeUrl = parsed.href;
         } catch (e) {
             safeUrl = rawUrl;
         }
@@ -363,6 +367,19 @@
     // resolving (Q-2), which XHR mocking of the same rule never suffered
     // from. We construct with a legal placeholder status when necessary and
     // override the visible `status`/`ok` afterwards.
+    /**
+     * A rule's response headers, with Content-Type defaulted to JSON unless
+     * the rule sets one in ANY letter case. The default used to be merged in
+     * by exact key, so a rule with `content-type: text/html` produced two keys
+     * that Headers joined into "application/json, text/html".
+     */
+    function withDefaultContentType(userHeaders) {
+        const headers = Object.assign({}, userHeaders || {});
+        const hasContentType = Object.keys(headers).some((name) => name.toLowerCase() === 'content-type');
+        if (!hasContentType) headers['Content-Type'] = 'application/json';
+        return headers;
+    }
+
     function buildMockResponse(bodyText, status, statusText, headersInit) {
         const numericStatus = Number.isFinite(status) ? status : 200;
         const inRange = numericStatus >= 200 && numericStatus <= 599;
@@ -546,7 +563,7 @@
             const body = window.SpliceTapPlaceholders.processDynamicResponse(cfg.body, { url, method });
             const responseBody = typeof body === 'string' ? body : JSON.stringify(body);
 
-            const headerObj = Object.assign({ 'Content-Type': 'application/json' }, cfg.headers || {});
+            const headerObj = withDefaultContentType(cfg.headers);
             headerObj['x-splicetap'] = 'true';
             headerObj['x-splicetap-rule'] = rule.name;
 
@@ -603,7 +620,7 @@
             // Build the header set exposed to the page for a mocked response —
             // user headers (defaulted) plus the x-splicetap markers (Q-7).
             function buildMockHeaders(userHeaders, rule) {
-                const merged = Object.assign({ 'Content-Type': 'application/json' }, userHeaders || {});
+                const merged = withDefaultContentType(userHeaders);
                 merged['x-splicetap'] = 'true';
                 merged['x-splicetap-rule'] = rule.name;
                 return merged;
@@ -643,10 +660,40 @@
                 }
             }
 
+            /**
+             * Take the request over from the native XHR. A real XHR fires
+             * `loadstart` from inside send() (async requests only), and every
+             * takeover path skipped it — so progress UIs and libraries keyed
+             * off loadstart saw a request that never started.
+             *
+             * Not used by the delay rule, which hands the request back to the
+             * native send() after waiting: that fires its own loadstart then.
+             * Announcing the start early as well would deliver it twice, and
+             * the native one cannot be suppressed — on an XHR, listeners run
+             * in registration order even when ours is capture-phase (verified
+             * in Chrome), so a page listener added before send() always sees
+             * it. One late loadstart is better than two.
+             */
+            function takeOver() {
+                isMocked = true;
+                if (!requestIsAsync) return;
+                xhr.dispatchEvent(new ProgressEvent('loadstart'));
+            }
+
             function finishMock(responseText, status, statusText, headers) {
                 if (isAborted) return;
                 try {
                     advanceTo(3, status, statusText, headers);
+                    // Real responses report the URL that was fetched; a mock
+                    // left it empty. (fetch mocks already set response.url.)
+                    try {
+                        Object.defineProperty(xhr, 'responseURL', {
+                            value: new URL(requestUrl, window.location.href).href,
+                            configurable: true
+                        });
+                    } catch (e) {
+                        // unparseable URL — leave responseURL as the browser has it
+                    }
                     mockResponseHeaders = headers || {};
 
                     // Q-7: respect responseType instead of always returning text.
@@ -912,7 +959,7 @@
                 if (tmState.settings?.chaosMode?.enabled &&
                     getSecureRandom() < (tmState.settings.chaosMode.failureRate || 0.1)) {
                     log(`Chaos Mode: Blocked XHR ${requestUrl}`);
-                    isMocked = true;
+                    takeOver();
 
                     setTimeout(() => {
                         if (isAborted) return;
@@ -1002,7 +1049,7 @@
                 // synchronous network call rather than silently doing nothing.
                 if (!requestIsAsync) {
                     if (effectiveType === 'block') {
-                        isMocked = true;
+                        takeOver();
                         logInterception(rule, requestUrl, requestMethod, 0);
                         Object.defineProperty(xhr, 'status', { value: 0, writable: true, configurable: true });
                         Object.defineProperty(xhr, 'readyState', { value: 4, writable: true, configurable: true });
@@ -1016,7 +1063,7 @@
                         const cfg = getResponseConfig(rule);
                         const bodyContent = window.SpliceTapPlaceholders.processDynamicResponse(cfg.body, { url: requestUrl, method: requestMethod });
                         const responseText = typeof bodyContent === 'string' ? bodyContent : JSON.stringify(bodyContent);
-                        isMocked = true;
+                        takeOver();
                         logInterception(rule, requestUrl, requestMethod, cfg.statusCode);
                         finishMock(responseText, cfg.statusCode, cfg.statusText, buildMockHeaders(cfg.headers, rule));
                         return;
@@ -1030,7 +1077,7 @@
 
                 if (effectiveType === 'block') {
                     log(`Blocked XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
-                    isMocked = true;
+                    takeOver();
                     logInterception(rule, requestUrl, requestMethod, 0);
 
                     setTimeout(() => {
@@ -1047,6 +1094,8 @@
 
                 if (effectiveType === 'delay') {
                     log(`Delaying XHR ${requestMethod} ${requestUrl} by ${rule.delayMs}ms (Rule: ${rule.name})`);
+                    // Not takeOver(): see its comment — the native send() below
+                    // fires this request's loadstart, once, when it leaves.
                     isMocked = true;
                     logInterception(rule, requestUrl, requestMethod, null);
 
@@ -1063,7 +1112,7 @@
                     const cfg = getResponseConfig(rule);
 
                     if (cfg.mode === 'patch') {
-                        isMocked = true;
+                        takeOver();
 
                         (async () => {
                             try {
@@ -1116,7 +1165,7 @@
 
                     // mode === 'static'
                     log(`Intercepted XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
-                    isMocked = true;
+                    takeOver();
                     logInterception(rule, requestUrl, requestMethod, cfg.statusCode);
                     runStaticMockFlow(rule);
                     return;

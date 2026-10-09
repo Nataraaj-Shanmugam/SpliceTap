@@ -1577,13 +1577,18 @@ class SpliceTapPopup {
 
         // Pattern the exact path, not the whole origin: capturing /api/users/42
         // should not produce a rule that swallows every request on the host.
-        let urlPattern = capture.url;
+        // Always a wildcard around the path. Captures now record absolute URLs,
+        // but one that still cannot be parsed must not fall back to the raw
+        // string: that kept the query string, and a path such as "/api/" is
+        // read by the matcher as the regex /api/ — a mock for every URL that
+        // contains "api".
+        let path;
         try {
-            const u = new URL(capture.url);
-            urlPattern = `*${u.pathname}*`;
+            path = new URL(capture.url).pathname;
         } catch (error) {
-            // Relative or already-redacted URL — match it as a substring.
+            path = String(capture.url || '').split(/[?#]/)[0] || '/';
         }
+        const urlPattern = `*${path.startsWith('/') ? path : '/' + path}*`;
 
         const isPatch = mode === 'patch';
         const rule = {
@@ -1718,6 +1723,17 @@ class SpliceTapPopup {
         }
         if (!Array.isArray(incoming) || !incoming.length) {
             this.showError('No rules found in that JSON');
+            return;
+        }
+
+        // A Requestly export (rules with `ruleType` and `pairs`, plus group
+        // objects) is well-formed — just not SpliceTap's schema. It used to be
+        // reported as "Imported 0 rules, skipped N invalid", which tells
+        // someone switching tools their file is broken. Say what it is.
+        const isRequestlyItem = (item) => item && typeof item === 'object'
+            && (Array.isArray(item.pairs) && typeof item.ruleType === 'string' || item.objectType === 'group');
+        if (incoming.some(isRequestlyItem)) {
+            this.showError('This looks like a Requestly export. SpliceTap uses its own rule format and cannot convert Requestly rules yet — nothing was imported.');
             return;
         }
 

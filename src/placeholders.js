@@ -18,6 +18,22 @@
      * to JSON.stringify the result anyway (e.g. content/injected.js) can call
      * this directly to avoid the redundant parse + re-stringify (P-7 #3).
      */
+    const ALPHANUMERIC = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const MAX_RANDOM_STRING = 4096;
+
+    /**
+     * Exactly `length` random [a-z0-9] characters. This used to slice
+     * Math.random().toString(36), which has only about 11 digits — so
+     * {{randomString:20}} returned 11 characters, and {{randomString}} was
+     * occasionally shorter than 10 when the float had trailing zeros.
+     */
+    function randomString(length) {
+        const n = Math.min(Math.max(0, length || 0), MAX_RANDOM_STRING);
+        let out = '';
+        for (let i = 0; i < n; i++) out += ALPHANUMERIC[Math.floor(Math.random() * ALPHANUMERIC.length)];
+        return out;
+    }
+
     function processDynamicResponseToString(bodyStr, requestDetails = {}, jsonContext = false) {
         // QA-4: for an object body the pipeline is stringify -> substitute into
         // the raw JSON text -> parse. Every generated placeholder above uses a
@@ -52,17 +68,17 @@
         bodyStr = bodyStr.replace(/{{randomInt}}/g, () =>
             Math.floor(Math.random() * 1000).toString()
         );
+        // Inclusive of max, as documented — and consistent with {{randomInt}},
+        // which is 0–999 inclusive. This returned 0..max-1.
         bodyStr = bodyStr.replace(/{{randomInt:(\d+)}}/g, (match, max) =>
-            Math.floor(Math.random() * parseInt(max, 10)).toString()
+            Math.floor(Math.random() * (parseInt(max, 10) + 1)).toString()
         );
         bodyStr = bodyStr.replace(/{{randomFloat}}/g, () =>
             (Math.random() * 100).toFixed(2)
         );
-        bodyStr = bodyStr.replace(/{{randomString}}/g, () =>
-            Math.random().toString(36).substring(2, 12)
-        );
+        bodyStr = bodyStr.replace(/{{randomString}}/g, () => randomString(10));
         bodyStr = bodyStr.replace(/{{randomString:(\d+)}}/g, (match, length) =>
-            Math.random().toString(36).substring(2, 2 + parseInt(length, 10))
+            randomString(parseInt(length, 10))
         );
 
         // Random email
