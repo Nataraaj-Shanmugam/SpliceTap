@@ -4,16 +4,24 @@
 **Date:** 2026-08-28
 **Scope:** Full codebase, docs and store-readiness, ahead of first Chrome Web Store submission.
 
-## Status — updated 9 October 2026
+## Status — updated 10 October 2026
 
-**52 fixed, 4 declined, 1 open.** Every Critical is fixed, and every High,
-Medium and Low except the five accounted for below. The report after this
-section is the original audit and is kept as written; this section records
-what has changed since.
+**Original audit: 53 fixed, 4 declined, 0 open.** Every Critical, High,
+Medium and Low is fixed except the four declined below, each with the
+trade-off or measurement behind it. CQ-1, the last open item, is closed.
+
+**Second pass: 14 further issues, all fixed.** A headless suite that loads
+the real extension into Chrome found problems no review or unit test had —
+including two that made the product unusable. See **Second pass** below.
+Three of the 14 were regressions introduced by this project's own remediation
+work, which is recorded against each.
+
+The report after this section is the original audit and is kept as written;
+this section records what has changed since.
 
 An earlier revision of this section said "54 of 57 closed" and "still open:
-0". Both were wrong. Four items are declined, not three, and CQ-1 had been
-counted as closed when only its symptoms were — see **Still open**.
+0" while CQ-1 was still open. Both were wrong; CQ-1 had been counted as
+closed when only its symptoms were.
 
 Closed in the order the analysis recommended: SEC-1, QA-1, QA-2, A11Y-1 and
 A11Y-2 first (silent failure and data loss), then PROD-1, CQ-3/PROD-9,
@@ -55,6 +63,12 @@ Two things surfaced while writing them:
 ### Deliberately not fixed
 
 **PERF-1 — content scripts ship unminified (~86 KB parsed per frame).**
+*Sizes as of 10 October:* 92 KB in every frame (the interceptor and the
+relay), plus 80 KB in each top frame for the editor host. The top-frame figure
+rose from ~55 KB when the overlay began loading the shared rule schema
+(src/rule-schema.js, 21 KB), which gives the in-page editor the same
+validation as the save boundary instead of an approximation of it — a
+deliberate trade, measured, and the reasoning below still applies.
 Real, and the largest remaining performance item. Both available fixes cost
 more than they save:
 
@@ -104,24 +118,82 @@ page, including pages with no rules, to save allocation at construction. For
 The XHR path now has 23 tests, so if this is ever revisited for another
 reason, the refactor would be verifiable rather than a leap.
 
-### Still open (1)
+### CQ-1 — closed
 
-**CQ-1 — two full rule editors (High).** `options/options.js` (1500 lines)
-and `content/overlay.js` (1107 lines) are still separate implementations of
-the same editor. What has been done is the shared-module work that removes
-the *reasons* they drift: rule templates and `getStatusText` now live in
-`src/templates.js`, and `escapeHtml`, `generateId` and `LIMITS` in
-`src/common.js`, so both read one definition. Every symptom the duplication
-caused — CQ-2, PROD-3, A11Y-6, A11Y-7 — is fixed in both places.
+The two editors are now one: `src/rule-editor.js`, mounted by
+`content/overlay.js` (a ~40-line host, closed shadow root) and by the options
+page (a ~120-line host, open shadow root). The order was as planned —
+coverage first: 19 end-to-end editor assertions were written and run against
+the old overlay before the refactor, then run against both hosts after it.
 
-The structural fix (R1, collapsing them into one editor) is not done, and the
-duplication is still there to drift again. It is deliberately last: it is a
-refactor of two large UI files that have **no test coverage** — the 242 tests
-cover the service worker, storage, matcher, interceptor and relay, none of
-them the editors. Doing it safely means building editor coverage first.
+That coverage also showed the drift had already caused data loss, in both
+editors: saving an edit dropped every field the form did not display (an
+imported rule's provenance, its notes), and editing a block or delay rule
+silently removed its header conditions, widening it to every request on the
+URL. Both are fixed, by construction, in the one editor. `options.js` went
+from 1,500 lines to ~120.
 
-The four declined items above are decisions, not backlog; each records the
-measurement or trade-off behind it.
+### Still open (0)
+
+Nothing in the codebase. The four declined items above are decisions, not
+backlog.
+
+### Second pass — the headless suite (10 October 2026)
+
+Every finding above came from reading the code, and every fix was checked by
+unit tests that run the shipped files under Node. Neither ever loaded the
+extension into Chrome. `tests/e2e/` now does: Chrome for Testing, new headless
+mode, the real unpacked extension and the packaged Web Store zip, with a
+local server reporting what actually reached the network. Its first run found
+that the extension could not be installed at all.
+
+| # | Severity | Issue | Origin |
+|---|---|---|---|
+| E2E-1 | **Critical** | Chrome refused to install the extension: a literal U+FFFF (a Unicode noncharacter) in `src/matcher.js` failed Chrome's stricter UTF-8 check. | Regression from the SEC-1 fix (195c47c) |
+| E2E-2 | **Critical** | The popup crashed on every open and never showed the rules: a push onto an undeclared `this.listeners`. | Regression from 659aa10 |
+| E2E-3 | **High** | One malformed imported header rule froze the network ruleset: Chrome rejects the whole batch, so a rule switched off kept rewriting traffic while the popup showed it off and said it had worked. | Pre-existing |
+| E2E-4 | **High** | Reset reported "All SpliceTap data deleted" but left captured response bodies and the log in session storage, and an armed Capture kept recording afterwards. | Pre-existing |
+| E2E-5 | **High** | Editing dropped fields the form did not show, and dropped header conditions from block/delay rules (see CQ-1). | Pre-existing (CQ-1 drift) |
+| E2E-6 | Medium | A regex pattern containing `*` was validated as a wildcard, skipping the syntax check and the ReDoS probe; the matcher then silently never ran it. | Pre-existing |
+| E2E-7 | Medium | Toasts swallowed clicks on the controls beneath them, indefinitely while hovered — the Import button was unusable right after an export. | Pre-existing |
+| E2E-8 | Medium | Popup accessibility (axe): rule rows were buttons containing buttons; two accessible names replaced their visible text; disabled badges and the Reset button failed contrast; every row's actions had identical names. | Partly a regression from A11Y-10; A11Y-2 was incomplete |
+| E2E-9 | Medium | Undo reset a restored rule's creation date. | Pre-existing |
+| E2E-10 | Low | Mocks were distinguishable from real responses: XHR skipped readyState 2 with status unset until 4, a fetch mock's `url` was empty, and a 404 without a reason phrase reported "OK". | Pre-existing |
+| E2E-11 | Low | A cleared interception log refilled with requests still in a tab's 250 ms batch. | Introduced by PERF-4 |
+| E2E-12 | Low | The DevTools panel's Clear depended on a native `confirm()`. | Pre-existing |
+| E2E-13 | Low | The privacy policy sent users to a reset path that no longer existed, and its storage list omitted the cached theme. | Pre-existing |
+| E2E-14 | Low | The editor's close button was announced as "times". | Pre-existing |
+
+Every code fix (E2E-1 to E2E-12, and E2E-14) is covered by a test. Most were
+first seen as those tests failing; for E2E-3's stored-rule case and E2E-7 the
+failure was shown with a one-off script before the permanent test was
+written. E2E-13 is documentation and has no test. Three safeguards came out
+of it as well: the packager, `npm run validate` and a unit
+test now all refuse a shipped file Chrome would reject (E2E-1);
+`declarativeNetRequest` sync isolates a rule Chrome refuses instead of
+freezing, and the popup marks that rule "Not applied" (E2E-3); and one shared
+rule schema now governs every editor and the save boundary (E2E-3, E2E-6).
+
+The suite also verified, rather than assumed: survival of Chrome's own
+service-worker idle shutdown (a message wakes it in ~11 ms with state
+intact), interception in same- and cross-origin iframes and on a page whose
+CSP forbids all script, broadcast to several open tabs, rapid toggling,
+340 rules, rules written by an older schema version, that no surface renders
+a hostile rule name or URL as markup, and axe WCAG 2.1/2.2 A+AA audits of
+every popup tab, the editor (every rule type) and the DevTools panel, in both
+themes.
+
+`npm test` runs the unit suites; `npm run test:e2e` runs the headless suite;
+`npm run build` gates on both.
+
+**Dependencies.** `npm audit --omit=dev` reports 0 vulnerabilities: the
+extension has no runtime dependencies, and the Web Store zip is built from an
+allowlist derived from the manifest, so nothing from `node_modules` can ship.
+`npm audit fix` took the dev tooling from 46 advisories to 27. The rest are
+deep transitive dependencies of Puppeteer (its FTP/proxy browser-download
+path, unused here) and of Jest's coverage instrumentation, and clearing them
+needs `npm audit fix --force`, which changes those tools' major versions. For
+test-only code that never ships, that breakage risk is not worth taking.
 
 ### Not code
 

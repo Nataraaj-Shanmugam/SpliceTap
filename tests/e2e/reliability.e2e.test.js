@@ -5,7 +5,7 @@
  * state changes, hundreds of rules, and rules written by an older version.
  */
 
-const { launch, pageFetch, waitFor, sleep } = require('./harness');
+const { launch, pageFetch, waitFor } = require('./harness');
 
 const mock = (id, overrides = {}) => ({
     id,

@@ -291,6 +291,44 @@ describe('popup', () => {
         expect(await auditA11y(popup, { include: '.rule-list' })).toEqual([]);
     });
 
+    test('Reset deletes everything — including captured bodies — and stops capturing', async () => {
+        // Regression: Reset said "All SpliceTap data deleted" but left session
+        // storage alone (captured response bodies, the log), and the worker's
+        // in-memory settings kept an armed Capture recording afterwards.
+        await openPopup([rule('a')]);
+        await h.bg({ type: 'setCaptureArmed', armed: true });
+        const target = await h.openPage();
+        await waitFor(async () => {
+            await target.evaluate(() => fetch('/api/secret-before-reset').then((r) => r.text()));
+            return (await h.bg({ type: 'getCaptures' })).captures.length > 0;
+        }, { label: 'a capture' });
+
+        // Opening the target page sent the popup to the background, and a
+        // background tab does no rendering work — Puppeteer's click waits on
+        // that and hangs. Bring it forward, as a user would by opening it.
+        await popup.bringToFront();
+        await popup.click('#tabData');
+        await popup.click('#resetAllBtn');
+        await popup.click('#resetConfirmBtn');
+        await waitFor(async () => (await h.bg({ type: 'getRules' })).rules.length === 0, { label: 'reset to finish' });
+
+        const stored = await h.extensionEval(async () => ({
+            local: Object.keys(await chrome.storage.local.get(null)),
+            session: Object.keys(await chrome.storage.session.get(null))
+        }));
+        expect(stored).toEqual({ local: [], session: [] });
+        const caps = await h.bg({ type: 'getCaptures' });
+        expect(caps.captures).toEqual([]);
+        expect(caps.armed).toBe(false);
+        expect((await h.bg({ type: 'getInterceptionLog' })).entries).toEqual([]);
+
+        // The open tab was told too: it no longer records response bodies.
+        await target.evaluate(() => fetch('/api/secret-after-reset').then((r) => r.text()));
+        await sleep(500);
+        expect((await h.bg({ type: 'getCaptures' })).captures).toEqual([]);
+        await target.close();
+    });
+
     // ---- settings ------------------------------------------------------------
 
     test('theme choice persists across popup openings', async () => {

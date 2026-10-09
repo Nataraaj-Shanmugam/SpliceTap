@@ -71,6 +71,21 @@ describe.each(HOSTS)('rule editor — %s host', (hostKind) => {
         expect(await ed.inShadow(page, (root) => root.getElementById('tmTitle').textContent)).toMatch(/New Rule/i);
     });
 
+    test('every editor button has a spoken name, not just a glyph', async () => {
+        // The close button's only content is "×", which screen readers read
+        // as "times" or "multiplication sign". axe accepts that as a name, so
+        // it is checked here directly.
+        await openEditor();
+        const names = await ed.inShadow(page, (root) => Array.from(root.querySelectorAll('button')).map((b) => ({
+            id: b.id,
+            name: (b.getAttribute('aria-label') || b.textContent).trim()
+        })));
+        for (const { id, name } of names) {
+            expect({ id, ok: /[a-z]{3,}/i.test(name) }).toEqual({ id, ok: true });
+        }
+        expect(names.find((b) => b.id === 'tmClose').name).toBe('Close editor');
+    });
+
     test('editing fills the form from the rule', async () => {
         await openEditor(existing());
         expect(await ed.value(page, 'tmName')).toBe('Existing rule');
