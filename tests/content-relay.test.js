@@ -183,6 +183,57 @@ describe('captures stay unbatched', () => {
     });
 });
 
+describe('state ordering', () => {
+    // State reaches the relay on two unordered channels (its own getRules
+    // reply, and pushed syncState messages). An older state arriving late must
+    // not overwrite a newer one — that left pages running stale rule sets.
+    function push(relay, message) {
+        const [listener] = relay.chrome.runtime.onMessage._listeners;
+        listener({ type: 'syncState', active: true, settings: {}, ...message }, {}, () => {});
+    }
+
+    function forwarded(relay) {
+        const seen = [];
+        relay.document.addEventListener(relay.channels.sync(), (e) => seen.push(e.detail.rules.map((r) => r.id)), true);
+        return seen;
+    }
+
+    const rules = (...ids) => ids.map((id) => ({ id, type: 'mock' }));
+
+    test('a state older than the one applied is dropped', async () => {
+        const relay = createRelay();
+        await relay.wait(20); // let the initial getRules reply land
+        const seen = forwarded(relay);
+
+        push(relay, { version: 10, rules: rules('a', 'b') });
+        push(relay, { version: 5, rules: rules('a') }); // stale, arrives late
+
+        expect(seen).toEqual([['a', 'b']]);
+    });
+
+    test('a state with the same or a newer version is applied', async () => {
+        const relay = createRelay();
+        await relay.wait(20);
+        const seen = forwarded(relay);
+
+        push(relay, { version: 10, rules: rules('a') });
+        push(relay, { version: 10, rules: rules('a', 'b') });
+        push(relay, { version: 11, rules: rules('a', 'b', 'c') });
+
+        expect(seen).toEqual([['a'], ['a', 'b'], ['a', 'b', 'c']]);
+    });
+
+    test('a state without a version is still applied (older background)', async () => {
+        const relay = createRelay();
+        await relay.wait(20);
+        const seen = forwarded(relay);
+
+        push(relay, { rules: rules('a') });
+
+        expect(seen).toEqual([['a']]);
+    });
+});
+
 describe('relay resilience', () => {
     test('a rejected sendMessage does not throw into the page', async () => {
         // The service worker may be asleep or the page closing; the relay must

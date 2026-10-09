@@ -31,6 +31,7 @@ class SpliceTapBackground {
             lastReset: new Date().toISOString()
         };
         this.settings = {};
+        this.stateVersion = Date.now(); // see _bumpStateVersion
         this.broadcastRetryCount = new Map(); // Track retry attempts per tab
         this.MAX_BROADCAST_RETRIES = 3;
 
@@ -354,6 +355,7 @@ class SpliceTapBackground {
                 case 'getRules':
                     return {
                         success: true,
+                        version: this.stateVersion,
                         rules: this.rules,
                         active: this.isActive,
                         stats: this.stats,
@@ -839,17 +841,47 @@ class SpliceTapBackground {
     /**
      * Broadcast current rules/settings to all content scripts with retry logic
      */
+    /**
+     * The state message tabs receive, built from the CURRENT state at the
+     * moment it is sent.
+     *
+     * Every delayed send used to carry a snapshot captured earlier: the
+     * load-complete push captured state and sent it 500ms later, and a failed
+     * broadcast retried 1-3s later with the state of its first attempt. Any
+     * change in between was overwritten in that tab by the older snapshot.
+     * Verified headless: saving rules while a page loaded left it running an
+     * older rule set in 29 of 30 trials — the newest rule silently missing.
+     *
+     * `version` lets the relay discard anything older than what it already
+     * applied, which also covers a reply to its own initial getRules arriving
+     * after a newer push: two channels, no ordering guarantee between them.
+     */
+    _stateMessage() {
+        return {
+            type: 'syncState',
+            rules: this.rules,
+            active: this.isActive,
+            settings: this.settings,
+            version: this.stateVersion
+        };
+    }
+
+    /**
+     * Advance the state version. Time-based so it keeps increasing across
+     * service-worker restarts without persisting anything (a restarted worker
+     * starting from 0 would have every open tab ignore it), and +1 so two
+     * changes in the same millisecond still order.
+     */
+    _bumpStateVersion() {
+        this.stateVersion = Math.max(Date.now(), (this.stateVersion || 0) + 1);
+        return this.stateVersion;
+    }
+
     async broadcastState() {
         // Every state change funnels through here, so this is the one place the
         // badge needs to be refreshed from.
         this.updateBadge();
-
-        const state = {
-            type: 'syncState',
-            rules: this.rules,
-            active: this.isActive,
-            settings: this.settings
-        };
+        this._bumpStateVersion();
 
         try {
             // PERF-6: this queried every tab in every window and sent the full
@@ -858,7 +890,7 @@ class SpliceTapBackground {
             // content script. The manifest only injects into http(s), so
             // filtering here removes work that could never have landed.
             const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
-            const broadcastPromises = tabs.map(tab => this.broadcastToTab(tab.id, state));
+            const broadcastPromises = tabs.map(tab => this.broadcastToTab(tab.id));
             
             // Wait for all broadcasts to complete (but don't fail if some tabs fail)
             await Promise.allSettled(broadcastPromises);
@@ -870,9 +902,9 @@ class SpliceTapBackground {
     /**
      * Broadcast to a specific tab with retry logic
      */
-    async broadcastToTab(tabId, state) {
+    async broadcastToTab(tabId) {
         try {
-            await chrome.tabs.sendMessage(tabId, state);
+            await chrome.tabs.sendMessage(tabId, this._stateMessage());
 
             // Reset retry count on success
             this.broadcastRetryCount.delete(tabId);
@@ -895,8 +927,9 @@ class SpliceTapBackground {
                 this.broadcastRetryCount.set(tabId, retries + 1);
                 console.warn(`Failed to sync state to tab ${tabId}, attempt ${retries + 1}/${this.MAX_BROADCAST_RETRIES}:`, error.message);
                 
+                // The retry sends the state as it is THEN, not this attempt's.
                 setTimeout(() => {
-                    this.broadcastToTab(tabId, state);
+                    this.broadcastToTab(tabId);
                 }, 1000 * (retries + 1)); // Exponential backoff
             } else {
                 // Max retries reached, give up and log
@@ -989,16 +1022,10 @@ class SpliceTapBackground {
                 // unrelated broadcast. Wait for the real state first.
                 await this.ready;
 
-                const state = {
-                    type: 'syncState',
-                    rules: this.rules,
-                    active: this.isActive,
-                    settings: this.settings
-                };
-
-                // Give content script time to load
+                // Give the content script time to load, then send the state as
+                // it is at that moment — not as it was when the load finished.
                 setTimeout(() => {
-                    this.broadcastToTab(tabId, state);
+                    this.broadcastToTab(tabId);
                 }, 500);
             }
         });

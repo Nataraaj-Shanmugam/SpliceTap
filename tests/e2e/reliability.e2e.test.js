@@ -118,6 +118,26 @@ describe('pages and frames', () => {
         for (const tab of tabs) await tab.close();
     });
 
+    test('rules saved while a page is loading all reach it — no stale state wins', async () => {
+        // Regression: the load-complete push sent a snapshot captured at load
+        // time 500ms later, and broadcast retries resent their first attempt's
+        // snapshot. A page loading while rules changed ended up running an
+        // OLDER rule set — the newest rule missing — in 29 of 30 trials.
+        const rule = (i) => mock(`race${i}`);
+        for (let trial = 0; trial < 8; trial++) {
+            await h.reset();
+            const page = await h.browser.newPage();
+            const loading = page.goto(h.baseUrl + '/page', { waitUntil: 'load' });
+            for (let i = 0; i < 5; i++) await h.saveRule(rule(i));
+            await loading;
+            // Past the 500ms load-complete push, when the stale overwrite landed.
+            await new Promise((r) => setTimeout(r, 900));
+            const newest = await pageFetch(page, '/api/race4');
+            expect({ trial, newestApplied: newest.marker === 'true' }).toEqual({ trial, newestApplied: true });
+            await page.close();
+        }
+    }, 60000);
+
     test('rapid on/off toggling settles in a consistent state', async () => {
         await h.saveRule(mock('toggled'));
         await h.saveRule(header('hdr', 'X-Toggled'));

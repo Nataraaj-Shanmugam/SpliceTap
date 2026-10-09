@@ -132,11 +132,23 @@
     /**
      * Forward state to injected script
      */
+    // Highest state version applied in this frame. State reaches the relay on
+    // two channels — the reply to its own getRules, and pushed syncState
+    // messages — with no ordering between them, and the background used to
+    // send delayed snapshots too. Anything older than what is already applied
+    // is dropped, so a late, stale state can never overwrite a newer one.
+    let appliedVersion = -1;
+
     function forwardStateToInjected(state) {
         // Validate state before forwarding
         if (!validateState(state)) {
             console.error('Invalid state received, not forwarding to injected script');
             return;
+        }
+
+        if (typeof state.version === 'number') {
+            if (state.version < appliedVersion) return;
+            appliedVersion = state.version;
         }
 
         const filteredRules = state.rules.filter((rule) =>
