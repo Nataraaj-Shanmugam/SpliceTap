@@ -16,6 +16,12 @@ including two that made the product unusable. See **Second pass** below.
 Three of the 14 were regressions introduced by this project's own remediation
 work, which is recorded against each.
 
+**Third pass: 12 further bugs, all fixed.** A feature-by-feature comparison
+with Requestly, tested headlessly, found them — including a page running a
+stale rule set when rules changed during load (29 of 30 trials), and two
+templates that never matched a local API on a port. They are recorded with
+the comparison in [PARITY.md](PARITY.md) (P-1 to P-12).
+
 The report after this section is the original audit and is kept as written;
 this section records what has changed since.
 

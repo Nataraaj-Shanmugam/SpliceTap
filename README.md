@@ -10,7 +10,7 @@ No proxy. No backend changes. No build step.
 
 [![Version](https://img.shields.io/badge/version-0.0.1-1e63f5?style=flat-square)](https://github.com/Nataraaj-Shanmugam/SpliceTap/releases)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-0bbcd4?style=flat-square)](https://developer.chrome.com/docs/extensions/mv3/intro/)
-[![Tests](https://img.shields.io/badge/tests-59%20passing-22c55e?style=flat-square)](#contributing)
+[![Tests](https://img.shields.io/badge/tests-312%20unit%20%C2%B7%20244%20headless-22c55e?style=flat-square)](#contributing)
 [![License](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
 
 [Website](https://nataraaj-shanmugam.github.io/SpliceTap/)&nbsp;·&nbsp;[Privacy Policy](https://nataraaj-shanmugam.github.io/SpliceTap/privacy.html)&nbsp;·&nbsp;[Report a bug](https://github.com/Nataraaj-Shanmugam/SpliceTap/issues)
@@ -35,6 +35,10 @@ reproduce, or the network is too fast to catch a loading state.
 - **Dark/Light Theme**: Automatic theme detection or manual selection
 - **Import/Export**: Backup and share your rules; v1 rule files migrate automatically
 - **Keyboard Shortcuts & Context Menu**: Fast rule creation from anywhere
+
+Coming from Requestly? [PARITY.md](PARITY.md) compares the two feature by
+feature — what SpliceTap matches, where it goes further, and what it does not
+do yet — with every claim backed by a headless test.
 
 ## Quick Start
 
@@ -105,6 +109,7 @@ Also handled by declarativeNetRequest. `queryParams.add` is an array of `{ key, 
   - Wrapped in `/.../` → treated as a regular expression
   - Otherwise → substring match
 - **Method** `*` matches any method.
+- **What they reach**: `mock`, `block`, `delay` and `redirect` act on requests the page makes with `fetch` or `XMLHttpRequest`. They do not reach scripts, stylesheets, images or page navigations — a `<script src>` is not redirected and an `<img>` is not blocked.
 - **Precedence**: For interceptor-handled types (`mock`, `block`, `delay`, `redirect`), enabled rules are evaluated in array order and the **first** rule whose URL + method + headers + GraphQL conditions all match wins — only that rule is applied.
 - `headers` / `queryparams` rules are applied independently by the browser's network layer via declarativeNetRequest and are not part of this first-match ordering.
 
@@ -165,7 +170,7 @@ produces `{ "user": { "name": "Real", "role": "admin" } }` — `role` is overwri
 ## Keyboard Shortcuts
 
 - `Alt+Shift+M`: Toggle extension on/off (global, works on any page)
-- `Alt+Shift+N`: Create new rule — opens the in-page overlay on the active tab, falling back to the options page where the overlay can't run (global, works on any page)
+- `Alt+Shift+E`: Create new rule (**E**ditor) — opens the in-page overlay on the active tab, falling back to the options page where the overlay can't run (global, works on any page). Either shortcut can be changed at `chrome://extensions/shortcuts`
 - `Ctrl+N`: Create new rule (in popup)
 - `Ctrl+F`: Focus search box (in popup)
 - `Ctrl+T`: Test all rules (in popup)
@@ -179,7 +184,7 @@ The rule editor — the same one whether it opens over your page or on the
 options page — offers seven presets: GraphQL Mock, Patch Response, Block Request, Slow Request,
 Redirect to localhost, CORS Unblock (headers), and Custom User-Agent (headers).
 
-The two header templates are deliberately scoped to `*://localhost/*` rather
+The two header templates are deliberately scoped to `localhost` and `127.0.0.1` (any port) rather
 than every site, because a CORS-disabling rule left on `*` is a real security
 downgrade, not just a mocking convenience. Widen them only when you mean to.
 
@@ -251,17 +256,22 @@ Supporting pieces:
 SpliceTap's single purpose is local API request mocking and modification for development/testing. It does not collect, transmit, or sell any data: every rule, setting, and log entry stays in `chrome.storage` on your device (see Privacy & Security below), and nothing in the codebase makes a network request on the extension's own behalf.
 
 ### Browser Compatibility
-- **Chrome / Edge**: 120+ (full support; `minimum_chrome_version` is 120)
+- **Chrome**: 120+ (`minimum_chrome_version` is 120), and what the test suites run against
+- **Other Chromium browsers** (Edge, Brave, …): expected to work, not yet tested
 - **Firefox / Safari**: not supported in this release (out of scope)
 
 ### Privacy & Security
 - **Local Storage Only**: All rules and settings are stored locally on your device
 - **No Data Collection**: No analytics, tracking, or remote data sharing
-- **Interception log**: The DevTools log holds only request metadata (URL, method, rule name/type, status) for the last 200 intercepted requests, in memory — response bodies are never stored
+- **Interception log**: The DevTools log holds only request metadata (URL, method, rule name/type, status) for the last 200 intercepted requests, in session storage that clears when the browser closes — never bodies
+- **Capture**: The one feature that stores response bodies, only while you switch it on, in the same session storage (see [PRIVACY.md](PRIVACY.md))
 - **CSP Compliant**: No inline scripts in extension pages; DevTools panel logic lives in `devtools/panel.js`
 
 ### Known Limitations
+- Rules act on **fetch and XHR only** — not scripts, styles, images or navigations (see Matching & Precedence).
 - Requests fired by the page **before the first state sync** arrives pass through unmocked.
+- A **delayed XHR** fires `loadstart` when the request actually leaves, after the delay, rather than immediately. `fetch` is unaffected.
+- Rules created from the *CORS Unblock* or *Custom User-Agent* templates before 10 October 2026 used a pattern that missed local ports; recreate them from the template.
 - XHR **patch mode** re-fetches the original response via `fetch(url, { method, body, credentials: 'include' })` — an approximation of the original XHR request.
 - `headers` / `queryparams` (declarativeNetRequest) rules **cannot** use `match.headers` or `match.graphql` conditions — the network layer can't express them, so the editor rejects those combinations.
 - **Firefox** support is out of scope for this release.
@@ -314,8 +324,9 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 git clone https://github.com/Nataraaj-Shanmugam/SpliceTap.git
 cd SpliceTap
 npm install
-npm test                              # Jest test suite
-node scripts/validate-manifest.js     # Manifest sanity check
+npm test                              # Unit suites (fast)
+npm run test:e2e                      # Headless Chrome suites (~3 min)
+npm run validate                      # Manifest + shipped-file checks
 # Then load unpacked in chrome://extensions/ (Developer mode)
 ```
 
