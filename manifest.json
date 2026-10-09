@@ -86,8 +86,8 @@
     },
     "new-rule": {
       "suggested_key": {
-        "default": "Alt+Shift+N",
-        "mac": "Alt+Shift+N"
+        "default": "Alt+Shift+E",
+        "mac": "Alt+Shift+E"
       },
       "description": "Create new mock rule"
     }

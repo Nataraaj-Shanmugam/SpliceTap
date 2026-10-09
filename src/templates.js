@@ -6,7 +6,7 @@
  *
  * These lived only in options/options.js, which meant the README advertised
  * six presets that the editor people actually use — the in-page overlay, opened
- * by the popup, the context menu and Alt+Shift+N — did not have (PROD-3).
+ * by the popup, the context menu and the new-rule shortcut — did not have (PROD-3).
  * Copying them into the overlay would have created a third place for the same
  * knowledge to drift, on top of the two rule editors that already have
  * (CQ-1), so they live here instead and both editors read from one definition.
@@ -16,6 +16,9 @@
  */
 (function (global) {
     'use strict';
+
+    // localhost or 127.0.0.1, any port or none, over http or https.
+    const LOCAL_API_PATTERN = '/^https?:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?\\//';
 
     const TEMPLATES = [
         {
@@ -85,9 +88,17 @@
                 // url '*', so one click applied Access-Control-Allow-Origin: *
                 // to every request on every site for as long as it stayed
                 // enabled. Widening it has to be a deliberate act.
+                //
+                // The scope was '*://localhost/*', which requires "localhost/"
+                // literally — so it never matched localhost:3000, i.e. almost
+                // every local API, and the template silently did nothing in its
+                // main use case (found headless). '*://localhost*' would fix
+                // that but also match localhost.attacker.com, undoing C-15.
+                // A regex pins the host exactly, port optional, and both the
+                // interceptor and declarativeNetRequest's RE2 read it the same.
                 type: 'headers',
                 method: '*',
-                url: '*://localhost/*',
+                url: LOCAL_API_PATTERN,
                 headersModResponse: [
                     { op: 'set', name: 'Access-Control-Allow-Origin', value: '*' },
                     { op: 'set', name: 'Access-Control-Allow-Headers', value: '*' }
@@ -99,10 +110,11 @@
             label: 'Custom User-Agent',
             description: 'Send a different User-Agent to your local API',
             rule: {
-                // C-15: same scoping reasoning as CORS Unblock above.
+                // C-15: same scoping reasoning, and the same pattern, as CORS
+                // Unblock above.
                 type: 'headers',
                 method: '*',
-                url: '*://localhost/*',
+                url: LOCAL_API_PATTERN,
                 headersModRequest: [
                     { op: 'set', name: 'User-Agent', value: 'Mozilla/5.0 (SpliceTap)' }
                 ]
