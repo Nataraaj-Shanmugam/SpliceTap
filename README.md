@@ -175,8 +175,8 @@ produces `{ "user": { "name": "Real", "role": "admin" } }` — `role` is overwri
 ## Advanced Features
 
 ### Rule Templates
-Both rule editors — the in-page overlay and the options page — offer the same
-seven presets: GraphQL Mock, Patch Response, Block Request, Slow Request,
+The rule editor — the same one whether it opens over your page or on the
+options page — offers seven presets: GraphQL Mock, Patch Response, Block Request, Slow Request,
 Redirect to localhost, CORS Unblock (headers), and Custom User-Agent (headers).
 
 The two header templates are deliberately scoped to `*://localhost/*` rather

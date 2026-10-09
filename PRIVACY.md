@@ -5,13 +5,15 @@ or share any data with the developer or any third party.
 
 ## What SpliceTap stores, and where
 
-Everything SpliceTap stores lives in `chrome.storage` on your own device —
-Chrome's built-in extension storage, never a remote server:
+Everything SpliceTap stores stays on your own device — in `chrome.storage`,
+Chrome's built-in extension storage, plus one cached theme setting. Never a
+remote server:
 
 - **Rules** (`chrome.storage.local`) — the mock/block/delay/redirect/headers/
   query-param rules you create: names, URL patterns, methods, response
-  bodies/headers, and the internal DNR rule id used to register
-  `headers`/`queryparams` rules with `chrome.declarativeNetRequest`.
+  bodies/headers, how many times each rule has matched, and the internal DNR
+  rule id used to register `headers`/`queryparams` rules with
+  `chrome.declarativeNetRequest`.
 - **Settings** (`chrome.storage.local`) — theme, debug mode, chaos mode
   configuration, keyboard shortcut preferences.
 - **Stats** (`chrome.storage.local`) — a running count of intercepted
@@ -32,6 +34,9 @@ Chrome's built-in extension storage, never a remote server:
   interception log — they live in session storage and are gone when the browser
   closes. You can clear them at any time from the same panel. Capture is off
   until you turn it on, and nothing captured is ever sent anywhere.
+- **Theme cache** (`localStorage` of the extension's own pages) — only the
+  word `light` or `dark`, so the popup and options page open in the right
+  theme without a flash. Never shared with the web pages you visit.
 
 None of the above ever leaves your device. SpliceTap has no backend, no
 analytics SDK, and no telemetry — a repo-wide search confirms the only
@@ -60,6 +65,18 @@ takes focus, which would discard the import mid-flow.
 
 Both operations are entirely local. Pasted JSON is validated and applied on
 your own device, and neither export nor import uploads anything anywhere.
+
+## Deleting your data
+
+All SpliceTap data lives on your device, so you control it completely:
+
+- Delete individual rules from the popup's **Rules** tab.
+- Clear the interception log with **Clear** in the SpliceTap DevTools panel,
+  and captured responses from the popup's **Data** tab.
+- Use **Reset** in the popup's **Data** tab to delete everything at once:
+  rules, settings, stats, the interception log, captured responses and the
+  theme cache. Reset also switches Capture off.
+- Uninstalling the extension removes everything Chrome has stored for it.
 
 ## Questions
 
