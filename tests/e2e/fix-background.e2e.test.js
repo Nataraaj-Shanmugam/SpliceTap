@@ -114,6 +114,83 @@ describe('fix group B1 (background)', () => {
         await other.close();
     }, 30000);
 
+    // ---- PER-21 / PER-33 / PER-37: the network layer ---------------------
+
+    /** Count updateDynamicRules calls the worker makes from now on. */
+    async function countDnrUpdates() {
+        await h.worker.evaluate(() => {
+            const api = chrome.declarativeNetRequest;
+            if (!globalThis.__b1RealUpdate) globalThis.__b1RealUpdate = api.updateDynamicRules.bind(api);
+            globalThis.__b1Updates = 0;
+            api.updateDynamicRules = (...args) => {
+                globalThis.__b1Updates++;
+                return globalThis.__b1RealUpdate(...args);
+            };
+        });
+        return () => h.worker.evaluate(() => globalThis.__b1Updates);
+    }
+
+    test('PER-21: */echo adds a header to /echo, but not to /echo?x=1 or /echo/sub', async () => {
+        await h.saveRule(header('anchored', '*/echo', 'X-B1-Anchored'));
+        const page = await h.openPage();
+        await waitFor(async () => (await pageFetch(page, '/echo')).body.headers['x-b1-anchored'] === 'on',
+            { label: 'anchored rule on /echo' });
+
+        expect((await pageFetch(page, '/echo?x=1')).body.headers['x-b1-anchored']).toBeUndefined();
+        await pageFetch(page, '/echo/sub');
+        const sub = h.requests.filter((r) => r.path === '/echo/sub').pop();
+        expect(sub.headers['x-b1-anchored']).toBeUndefined();
+        await page.close();
+    });
+
+    test('PER-21: a path pattern (/echo*) still applies on the wire', async () => {
+        await h.saveRule(header('from-path', '/echo*', 'X-B1-Path'));
+        const page = await h.openPage();
+        await waitFor(async () => (await pageFetch(page, '/echo?q=1')).body.headers['x-b1-path'] === 'on',
+            { label: 'path-anchored rule applied' });
+        await page.close();
+    });
+
+    test('PER-37: a sync with nothing to change makes no update call', async () => {
+        await h.saveRule(header('steady', '*/echo*', 'X-B1-Steady'));
+        await h.saveRule(header('steady-re', '/\\/echo\\/re/', 'X-B1-Re'));
+        await h.saveRule(mock('m', '*/api/m*'));
+        const updates = await countDnrUpdates();
+
+        // Toggling a mock rule re-syncs the network layer; nothing in it changed.
+        await h.bg({ type: 'toggleRule', ruleId: 'm', enabled: false });
+        expect(await updates()).toBe(0);
+
+        await h.bg({ type: 'toggleRule', ruleId: 'steady', enabled: false });
+        expect(await updates()).toBe(1);
+    });
+
+    test('PER-33: a rule Chrome refuses is isolated once, remembered, and costs nothing after', async () => {
+        for (let i = 0; i < 20; i++) await h.saveRule(header(`good${i}`, `*/echo/${i}*`, `X-B1-${i}`));
+        // Chrome refuses a modifyHeaders action with no headers; planted in
+        // storage as an older build could have stored it.
+        const stored = (await h.bg({ type: 'getRules' })).rules;
+        await h.extensionEval((rules) => chrome.storage.local.set({ spliceTapRules: rules }), [...stored, {
+            id: 'refused', name: 'Refused rule', enabled: true, type: 'headers', dnrRuleId: 9001,
+            match: { url: '*/echo*', method: '*' },
+            headersMod: { request: [{ op: 'set', name: 'X-No-Value' }], response: [] }
+        }]);
+        const updates = await countDnrUpdates();
+
+        const toggled = await h.bg({ type: 'toggleRule', ruleId: 'good0', enabled: true });
+        expect(toggled.dnrWarning).toMatch(/Refused rule/);
+        expect(await updates()).toBeLessThanOrEqual(3);
+        expect(await h.extensionEval(() => chrome.declarativeNetRequest.getDynamicRules())).toHaveLength(20);
+        const remembered = await h.extensionEval(() => chrome.storage.session.get('spliceTapDnrRejected'));
+        expect(Object.values(remembered.spliceTapDnrRejected)).toHaveLength(1);
+
+        // The next sync, as on the next worker wake, goes straight past it.
+        const before = await updates();
+        const again = await h.bg({ type: 'toggleRule', ruleId: 'good1', enabled: true });
+        expect(again.dnrWarning).toMatch(/Refused rule/);
+        expect(await updates()).toBe(before);
+    });
+
     test('ran without extension errors', () => {
         expect(h.allErrors).toEqual([]);
     });

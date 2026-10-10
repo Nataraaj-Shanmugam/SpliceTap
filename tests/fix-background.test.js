@@ -208,6 +208,215 @@ async function waitForCondition(fn, timeout = 2000) {
     }
 }
 
+// ---- service_worker/dnr.js ----------------------------------------------
+
+const dnr = require('../service_worker/dnr');
+const matcher = require('../src/matcher');
+
+/** A headers rule as stored, for the DNR tests. */
+const headersRule = (id, dnrRuleId, url = '*/api/*', value = 'on') => ({
+    id, name: id, type: 'headers', enabled: true, dnrRuleId,
+    match: { url, method: '*' },
+    headersMod: { request: [{ op: 'set', name: 'X-Test', value }] }
+});
+
+describe('PER-21: header and query-param URL patterns match what the interceptor matches', () => {
+    // A JS model of Chrome's urlFilter: '*' wildcard, '|' start/end anchor,
+    // case-insensitive (isUrlFilterCaseSensitive:false). The '||' and '^'
+    // forms are never emitted for these patterns.
+    function urlFilterMatches(filter, url) {
+        let body = filter;
+        const start = body.startsWith('|');
+        const end = body.endsWith('|');
+        if (start) body = body.slice(1);
+        if (end) body = body.slice(0, -1);
+        expect(body).not.toMatch(/[|^]/);
+        const source = body.split('*').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+        return new RegExp((start ? '^' : '') + source + (end ? '$' : ''), 'i').test(url);
+    }
+    const dnrMatches = (pattern, url) => {
+        const { condition } = dnr.ruleToDnr(headersRule('h', 1, pattern));
+        return condition.regexFilter !== undefined
+            ? new RegExp(condition.regexFilter, 'i').test(url)
+            : urlFilterMatches(condition.urlFilter, url);
+    };
+
+    const urls = [
+        'http://127.0.0.1:8080/echo',
+        'http://127.0.0.1:8080/echo?x=1',
+        'http://127.0.0.1:8080/echo/sub',
+        'http://127.0.0.1:8080/ECHO',
+        'http://127.0.0.1:8080/api/v1/users',
+        'https://api.example.com/v1/users?page=2',
+        'https://example.com/a|b/c',
+        'https://example.com/a^b'
+    ];
+    const patterns = [
+        '*/echo', '*/echo*', 'http://127.0.0.1:8080/echo*', 'http://127.0.0.1:8080/echo',
+        '*/api/*/users', 'https://*/users*', '*example.com*', 'echo', 'api/v1',
+        '*a|b*', '*/a^b', 'a|b', '*/v1/users?page=*'
+    ];
+
+    test.each(patterns)('%s', (pattern) => {
+        for (const url of urls) {
+            expect([url, dnrMatches(pattern, url)]).toEqual([url, matcher.matchUrl(url, pattern)]);
+        }
+    });
+
+    test('*/echo is anchored at the end, so /echo/sub and /echo?x=1 do not match', () => {
+        expect(dnr.ruleToDnr(headersRule('h', 1, '*/echo')).condition.urlFilter).toBe('*/echo|');
+    });
+
+    test('a pattern starting with / is anchored at the path, as the interceptor sees a relative URL', () => {
+        const { condition } = dnr.ruleToDnr(headersRule('h', 1, '/echo*'));
+        const re = new RegExp(condition.regexFilter, 'i');
+        expect(re.test('http://127.0.0.1:8080/echo?x=1')).toBe(true);
+        expect(re.test('http://127.0.0.1:8080/other/echo')).toBe(false);
+        expect(matcher.matchUrl('/echo?x=1', '/echo*')).toBe(true);
+    });
+
+    test('patterns without | or ^ keep using urlFilter', () => {
+        expect(dnr.ruleToDnr(headersRule('h', 1, '*/api/*')).condition).toMatchObject({ urlFilter: '*/api/*' });
+        expect(dnr.ruleToDnr(headersRule('h', 1, 'api/users')).condition).toMatchObject({ urlFilter: 'api/users' });
+        expect(dnr.ruleToDnr(headersRule('h', 1, 'a|b')).condition).toMatchObject({ regexFilter: 'a\\|b' });
+    });
+});
+
+describe('PER-37: an unchanged ruleset is recognised in the shape Chrome returns it', () => {
+    let mock;
+    beforeEach(() => {
+        mock = createChromeMock();
+        restoreChrome = installChrome(mock.chrome);
+    });
+
+    // Exactly what getDynamicRules returned in headless Chrome for this rule:
+    // keys sorted alphabetically at every level.
+    const asChromeReturnsIt = (id, urlFilter, value) => ({
+        action: { requestHeaders: [{ header: 'X-Test', operation: 'set', value }], type: 'modifyHeaders' },
+        condition: { isUrlFilterCaseSensitive: false, resourceTypes: ['xmlhttprequest', 'other'], urlFilter },
+        id,
+        priority: 1
+    });
+
+    test('no update call when Chrome already holds the same rules', async () => {
+        mock.setDynamicRules([asChromeReturnsIt(1, '*/api/*', 'on'), asChromeReturnsIt(2, '*/b/*', 'on')]);
+
+        const outcome = await dnr.syncDnrRules([headersRule('a', 1), headersRule('b', 2, '*/b/*')], true);
+
+        expect(outcome.success).toBe(true);
+        expect(mock.calls.updateDynamicRules).toBe(0);
+    });
+
+    test('a changed regexFilter is not mistaken for no change', async () => {
+        const regexRule = headersRule('r', 3, '/\\/new\\//');
+        const registered = dnr.ruleToDnr(regexRule);
+        mock.setDynamicRules([{ ...registered, condition: { ...registered.condition, regexFilter: '\\/old\\/' } }]);
+
+        await dnr.syncDnrRules([regexRule], true);
+
+        expect(mock.calls.updateDynamicRules).toBe(1);
+        expect(mock.getDynamicRules()[0].condition.regexFilter).toBe('\\/new\\/');
+    });
+
+    test('dnrRuleEqual ignores key order but not values', () => {
+        const ours = dnr.ruleToDnr(headersRule('a', 1));
+        expect(dnr.dnrRuleEqual(asChromeReturnsIt(1, '*/api/*', 'on'), ours)).toBe(true);
+        expect(dnr.dnrRuleEqual(asChromeReturnsIt(1, '*/api/*', 'off'), ours)).toBe(false);
+    });
+});
+
+describe('PER-33: one rule Chrome refuses', () => {
+    let mock;
+    let registeredLow;
+    beforeEach(() => {
+        mock = createChromeMock();
+        restoreChrome = installChrome(mock.chrome);
+        // Chrome refuses a rule whose header value is BAD, and (like Chrome)
+        // an update call is all-or-nothing.
+        const real = mock.chrome.declarativeNetRequest.updateDynamicRules;
+        registeredLow = Infinity;
+        mock.chrome.declarativeNetRequest.updateDynamicRules = async (options) => {
+            registeredLow = Math.min(registeredLow, mock.getDynamicRules().length);
+            const bad = (options.addRules || []).find((r) =>
+                r.action.requestHeaders && r.action.requestHeaders.some((h) => h.value === 'BAD'));
+            if (bad) {
+                mock.calls.updateDynamicRules++;
+                throw new Error(`Rule with id ${bad.id} is invalid.`);
+            }
+            await real(options);
+            registeredLow = Math.min(registeredLow, mock.getDynamicRules().length);
+        };
+    });
+
+    const manyRules = (n, badAt) => Array.from({ length: n }, (_, i) =>
+        headersRule(`r${i}`, i + 1, `*/api/${i}/*`, i === badAt ? 'BAD' : 'on'));
+
+    test('isolates it by bisection, without unregistering the acceptable rules', async () => {
+        const rules = manyRules(300, -1);
+        await dnr.syncDnrRules(rules, true);
+        mock.calls.updateDynamicRules = 0;
+        registeredLow = Infinity;
+
+        // One more rule, refused by Chrome.
+        const outcome = await dnr.syncDnrRules([...rules, headersRule('bad', 301, '*/bad/*', 'BAD')], true);
+
+        expect(outcome.rejected.map((r) => r.id)).toEqual(['bad']);
+        expect(mock.getDynamicRules()).toHaveLength(300);
+        expect(registeredLow).toBe(300);
+        expect(mock.calls.updateDynamicRules).toBeLessThanOrEqual(3);
+    });
+
+    test('a bad rule among 300 new ones costs a logarithmic number of calls', async () => {
+        const outcome = await dnr.syncDnrRules(manyRules(300, 150), true);
+
+        expect(outcome.rejected.map((r) => r.id)).toEqual(['r150']);
+        expect(mock.getDynamicRules()).toHaveLength(299);
+        expect(mock.calls.updateDynamicRules).toBeLessThanOrEqual(20);
+    });
+
+    test('the refusal is remembered across a worker restart, so the next wake is no update call', async () => {
+        const rules = manyRules(50, 10);
+        await dnr.syncDnrRules(rules, true);
+        expect(mock.rawSession.spliceTapDnrRejected).toBeDefined();
+        mock.calls.updateDynamicRules = 0;
+
+        // A fresh copy of the module, as a restarted worker would load it.
+        let fresh;
+        jest.isolateModules(() => { fresh = require('../service_worker/dnr'); });
+        const outcome = await fresh.syncDnrRules(rules, true);
+
+        expect(outcome.rejected.map((r) => r.id)).toEqual(['r10']);
+        expect(mock.calls.updateDynamicRules).toBe(0);
+    });
+
+    test('a regex Chrome cannot run is found with isRegexSupported, not by bisection', async () => {
+        mock.chrome.declarativeNetRequest.isRegexSupported = async ({ regex }) =>
+            (regex.includes('(?=') ? { isSupported: false, reason: 'syntaxError' } : { isSupported: true });
+        const real = mock.chrome.declarativeNetRequest.updateDynamicRules;
+        mock.chrome.declarativeNetRequest.updateDynamicRules = async (options) => {
+            if ((options.addRules || []).some((r) => (r.condition.regexFilter || '').includes('(?='))) {
+                mock.calls.updateDynamicRules++;
+                throw new Error('Rule with id 1 specified a non-supported regex.');
+            }
+            return real(options);
+        };
+        const rules = [headersRule('lookahead', 1, '/a(?=b)/'), ...manyRules(40, -1).map((r, i) => ({ ...r, dnrRuleId: i + 2 }))];
+
+        const outcome = await dnr.syncDnrRules(rules, true);
+
+        expect(outcome.rejected.map((r) => r.id)).toEqual(['lookahead']);
+        expect(mock.getDynamicRules()).toHaveLength(40);
+        expect(mock.calls.updateDynamicRules).toBe(2);
+    });
+
+    test('rules sharing one network id are reported without a round trip to Chrome', async () => {
+        const outcome = await dnr.syncDnrRules([headersRule('a', 7), headersRule('b', 7, '*/b/*')], true);
+
+        expect(outcome.rejected.map((r) => r.id)).toEqual(['b']);
+        expect(mock.calls.updateDynamicRules).toBe(1);
+    });
+});
+
 describe('PER-28: setRules re-issues duplicate ids', () => {
     test('a replace-mode import with a repeated id keeps both rules, distinctly', async () => {
         const { mock, send } = await setup();
