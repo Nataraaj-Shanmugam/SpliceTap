@@ -31,6 +31,14 @@ class SpliceTapPopup {
         this.searchTerm = '';
         this.searchClearBtn = null;
         this.siteAccessOrigin = null;
+        // PER-55: the per-rule "Test" is only a syntax check. Its outcome is
+        // kept here (ruleId -> { valid, message }) rather than written onto the
+        // rule objects, which are later saved back (Undo) and exported.
+        this.checks = new Map();
+        // PER-62: what the last import skipped, shown inline until dismissed.
+        this.importReport = null;
+        // PER-62: replace-mode import needs a second, confirming click.
+        this.replaceArmed = false;
 
         this.init();
     }
@@ -286,6 +294,10 @@ class SpliceTapPopup {
         this.addListener('importToggleBtn', 'click', () => this.togglePanel('importPanel', 'importToggleBtn'));
         this.addListener('importCancelBtn', 'click', () => this.togglePanel('importPanel', 'importToggleBtn', false));
         this.addListener('importConfirmBtn', 'click', () => this.confirmImport());
+        // PER-62: the confirm button's wording follows the mode, and changing
+        // the mode or the JSON cancels a pending replace confirmation.
+        this.addListener('importMerge', 'change', () => this.updateImportMode());
+        this.addListener('importJson', 'input', () => this.disarmReplace());
         this.addListener('resetAllBtn', 'click', () => this.togglePanel('resetPanel', 'resetAllBtn'));
         this.addListener('resetCancelBtn', 'click', () => this.togglePanel('resetPanel', 'resetAllBtn', false));
         this.addListener('resetConfirmBtn', 'click', () => this.confirmReset());
@@ -377,7 +389,8 @@ class SpliceTapPopup {
     addShortcutHints() {
         const hints = [
             ['newRuleBtn', 'New Rule (Ctrl+N)'],
-            ['testAllBtn', 'Test all rules (Ctrl+T)'],
+            // PER-55: it only checks syntax, so it no longer promises a "test".
+            ['testAllBtn', 'Check all rules (Ctrl+T)'],
             ['refreshBtn', 'Refresh rules (Ctrl+R)']
         ];
         hints.forEach(([id, label]) => {
@@ -437,6 +450,13 @@ class SpliceTapPopup {
 
         if (this.filteredRules.length === 0) {
             container.innerHTML = this.getEmptyStateHTML();
+            // PER-61: the first-run screen offers the two real ways in.
+            container.querySelectorAll('[data-empty-action]').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    if (btn.dataset.emptyAction === 'record') this.startRecording();
+                    else this.createNewRule();
+                });
+            });
             return;
         }
 
@@ -452,9 +472,9 @@ class SpliceTapPopup {
         // buttons). The empty and loading states render outside the list, so
         // it only ever contains listitems.
         const cards = this.filteredRules
-            .map(rule => {
+            .map((rule, index) => {
                 try {
-                    return this.getRuleCardHTML(rule);
+                    return this.getRuleCardHTML(rule, index);
                 } catch (error) {
                     console.error('Failed to render rule card:', rule && rule.id, error);
                     const safeId = this.escapeHtml((rule && rule.id) || '');
@@ -474,8 +494,11 @@ class SpliceTapPopup {
     /**
      * Get HTML for a rule card
      */
-    getRuleCardHTML(rule) {
-        const statusIcon = this.getStatusIcon(rule.testStatus || 'pending');
+    getRuleCardHTML(rule, index = 0) {
+        // PER-55: the glyph reports the syntax check ("Valid"/"Invalid"), not
+        // whether the rule works — hits (below) are the evidence of that.
+        const check = this.getCheckStatus(rule);
+        const statusIcon = this.getStatusIcon(check.key);
 
         // S-5/Q-22: an imported/hand-edited rule can set match.method or
         // rule.id to arbitrary strings. Deriving a CSS class name or an
@@ -509,12 +532,12 @@ class SpliceTapPopup {
         // readers and unreachable by keyboard. role="img" + aria-label makes
         // it a real accessible-name-bearing node; the inner SVG (from
         // getStatusIcon()) is aria-hidden so it isn't announced twice.
-        const statusTooltip = this.escapeHtml(this.getStatusTooltip(rule.testStatus || 'pending'));
+        const statusTooltip = this.escapeHtml(check.label);
 
         // A-12: disabled rules used to be signalled purely by `opacity: 0.5`
         // + `grayscale()`, which dropped several text pairs under 4.5:1.
         // Add an explicit "Disabled" chip instead of relying on dimming.
-        const disabledChip = rule.enabled ? '' : '<span class="disabled-chip">Disabled</span>';
+        const disabledChip = rule.enabled ? '' : this.getDisabledChipHTML();
         // A headers/queryparams rule Chrome's network layer refused. Shown on
         // the row itself — a toast is gone in seconds, and the rule keeps
         // silently not applying until someone fixes it.
@@ -541,35 +564,37 @@ class SpliceTapPopup {
             <div class="rule-card ${enabledClass}" data-rule-id="${safeId}" role="listitem">
                 <div class="rule-header">
                     <div class="rule-info">
-                        <div class="rule-name">
+                        <div class="rule-name" title="${safeName}">
                             <div class="rule-checkbox ${checkedClass}"
                                  data-rule-id="${safeId}"
                                  role="checkbox"
                                  aria-checked="${rule.enabled ? 'true' : 'false'}"
                                  tabindex="0"
                                  aria-label="Enable ${safeName}"></div>
-                            <button type="button" class="rule-name-btn" data-rule-id="${safeId}" title="Edit rule">${safeName}<span class="visually-hidden">, edit rule</span></button>
+                            <button type="button" class="rule-name-btn" data-rule-id="${safeId}">${safeName}<span class="visually-hidden">, edit rule</span></button>
                             ${disabledChip}
                             ${notAppliedChip}
                             ${this.getRuleTypeBadgeHTML(rule)}
-                        </div>
-                        <div class="rule-details">
-                            <span class="rule-method ${methodClass}">${safeMethod}</span>
-                            ${safeUrl} → ${this.getRuleSummaryText(rule)}
                             ${this.getHitCountHTML(rule)}
+                        </div>
+                        <!-- PER-70: the outcome comes before the URL so a long
+                             pattern is what gets truncated, and the full text
+                             is in the title. -->
+                        <div class="rule-details" title="${this.escapeHtml(this.getRuleDetailsTitle(rule))}">
+                            <span class="rule-method ${methodClass}">${safeMethod}</span><span class="rule-outcome">→ ${this.escapeHtml(this.getRuleSummaryText(rule))}</span> <span class="rule-url">${safeUrl}</span>${this.getRuleDestinationHTML(rule)}
                         </div>
                     </div>
                     <div class="status-indicator" role="img" aria-label="${statusTooltip}" title="${statusTooltip}">${statusIcon}</div>
                 </div>
                 <div class="rule-actions">
-                    ${this.getReorderHTML(safeId, safeName)}
+                    ${this.getReorderHTML(safeId, safeName, index)}
                     <button class="rule-action" title="Edit" data-action="edit" data-rule-id="${safeId}" aria-label="Edit ${safeName}">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                     </button>
                     <button class="rule-action" title="Duplicate" data-action="copy" data-rule-id="${safeId}" aria-label="Duplicate ${safeName}">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                     </button>
-                    <button class="rule-action" title="Test" data-action="test" data-rule-id="${safeId}" aria-label="Test ${safeName}">
+                    <button class="rule-action" title="Check syntax" data-action="test" data-rule-id="${safeId}" aria-label="Check syntax of ${safeName}">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
                     </button>
                     <button class="rule-action" title="Delete" data-action="delete" data-rule-id="${safeId}" aria-label="Delete ${safeName}">
@@ -613,13 +638,28 @@ class SpliceTapPopup {
      * A11Y-4: after a list-mutating action destroys the focused control,
      * move focus somewhere sensible rather than letting it fall to <body>.
      * Prefers the first remaining rule card, then the New rule button.
+     *
+     * PER-71: it used to always pick row 1, which left the acted-on row — and
+     * Undo, which sits after the footer — a screen's worth of Tab presses away.
+     * `target` is a rule id (focus that row, e.g. the copy a Duplicate just
+     * made) or the visible index the removed row had (focus whichever row now
+     * sits there, or the last one when it was the last). With neither it still
+     * falls back to the first row, then the New rule button.
      */
-    restoreListFocus() {
+    restoreListFocus(target) {
         // The row's focusable entry point is its name button (see
         // getRuleCardHTML); the card itself is no longer focusable.
-        const firstRule = document.querySelector('.rule-name-btn');
-        if (firstRule) {
-            firstRule.focus();
+        const buttons = Array.from(document.querySelectorAll('.rule-name-btn'));
+        let next = null;
+        if (typeof target === 'string') {
+            // Matched by dataset, not a selector string: a rule id is arbitrary.
+            next = buttons.find((el) => el.dataset.ruleId === target) || null;
+        } else if (typeof target === 'number' && buttons.length) {
+            next = buttons[Math.min(Math.max(target, 0), buttons.length - 1)];
+        }
+        if (!next) next = buttons[0] || null;
+        if (next) {
+            next.focus();
             return;
         }
         const newRule = document.getElementById('newRuleBtn');
@@ -635,9 +675,16 @@ class SpliceTapPopup {
      * Rather than reorder within a filtered view (which cannot express the
      * real array), the controls only appear on the unfiltered list.
      */
-    getReorderHTML(safeId, safeName) {
+    getReorderHTML(safeId, safeName, index = 0) {
         if (this.searchTerm) return '';
-        return `
+        // PER-59: precedence is position, and a new broad rule far down the list
+        // is shadowed by anything above it, so "Move to top" is one press
+        // instead of N. Pointless on the row that is already first.
+        const toTop = index > 0 ? `
+                    <button class="rule-action" title="Move to top — matched before every other rule" data-action="move-top" data-rule-id="${safeId}" aria-label="Move ${safeName} to top">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 3h14"/><path d="m18 13-6-6-6 6"/><path d="M12 7v14"/></svg>
+                    </button>` : '';
+        return `${toTop}
                     <button class="rule-action" title="Move up — matched before the rules below it" data-action="move-up" data-rule-id="${safeId}" aria-label="Move ${safeName} up">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m18 15-6-6-6 6"/></svg>
                     </button>
@@ -680,9 +727,17 @@ class SpliceTapPopup {
             this.applySearchFilter();
             this.updateStatus();
             this.updateTabCount();
-            this.showNotification(anyEnabled
-                ? `Disabled ${rules.length} rule${rules.length === 1 ? '' : 's'}`
-                : `Enabled ${rules.length} rule${rules.length === 1 ? '' : 's'}`);
+            // PER-27: setRules validates what it is given and answers with the
+            // rules it refused. This used to ignore that list and announce
+            // success for the whole set.
+            const rejected = this.normalizeRejected(response.rejected);
+            const done = Math.max(rules.length - rejected.length, 0);
+            const verb = anyEnabled ? 'Disabled' : 'Enabled';
+            if (rejected.length) {
+                this.showError(`${verb} ${done} of ${rules.length} — ${this.describeRejected(rejected)}`);
+            } else {
+                this.showNotification(`${verb} ${rules.length} rule${rules.length === 1 ? '' : 's'}`);
+            }
         } catch (error) {
             console.error('Failed to toggle all rules:', error);
             this.showError('Could not update rules');
@@ -690,7 +745,7 @@ class SpliceTapPopup {
     }
 
     /**
-     * PROD-4: move a rule one position earlier or later.
+     * PROD-4: move a rule one position earlier or later (PER-59: or to the top).
      *
      * For interceptor-handled types the FIRST matching rule in array order
      * wins, so array position is the precedence control — but there was no way
@@ -704,6 +759,7 @@ class SpliceTapPopup {
      * order is written atomically.
      */
     async moveRule(ruleId, delta) {
+        const toTop = delta === 'top';
         try {
             const fresh = await this.sendMessage({ type: 'getRules' });
             const rules = (fresh && fresh.success && Array.isArray(fresh.rules))
@@ -713,8 +769,8 @@ class SpliceTapPopup {
             const from = rules.findIndex((r) => r && r.id === ruleId);
             if (from < 0) return;
 
-            const to = from + delta;
-            if (to < 0 || to >= rules.length) return; // already at an end
+            const to = toTop ? 0 : from + delta;
+            if (to < 0 || to >= rules.length || to === from) return; // already at an end
 
             const reordered = rules.slice();
             const [moved] = reordered.splice(from, 1);
@@ -730,16 +786,26 @@ class SpliceTapPopup {
             this.applySearchFilter();
             this.updateTabCount();
 
+            // PER-27: surface what the background refused rather than leaving
+            // a rule missing from the list with no explanation.
+            const rejected = this.normalizeRejected(response.rejected);
+            if (rejected.length) {
+                this.showError(`Could not save ${rejected.length} rule${rejected.length === 1 ? '' : 's'} — ${this.describeRejected(rejected)}`);
+            }
+
             // Keep focus on the button that was pressed — renderRules() rebuilds
             // the list wholesale, which would otherwise drop focus to <body> and
             // make repeated presses impossible for keyboard users (A11Y-4).
             // Matched by dataset rather than built into a selector string: an
             // imported rule's id is arbitrary text and would need escaping to
             // be safe (and legal) inside an attribute selector.
-            const action = delta < 0 ? 'move-up' : 'move-down';
-            const btn = Array.from(document.querySelectorAll(`.rule-action[data-action="${action}"]`))
+            const action = toTop ? 'move-top' : (delta < 0 ? 'move-up' : 'move-down');
+            const find = (name) => Array.from(document.querySelectorAll(`.rule-action[data-action="${name}"]`))
                 .find((el) => el.dataset.ruleId === ruleId);
+            // The row that reached the top no longer has a "Move to top".
+            const btn = find(action) || (toTop ? find('move-down') : null);
             if (btn) btn.focus();
+            else this.restoreListFocus(ruleId);
         } catch (error) {
             console.error('Failed to reorder rule:', error);
             this.showError('Could not reorder rules');
@@ -747,17 +813,49 @@ class SpliceTapPopup {
     }
 
     /**
-     * PROD-7: hitCount was incremented and persisted but rendered nowhere, so
-     * the most basic question — "did my rule actually fire?" — could only be
-     * answered by discovering the custom DevTools panel. Show it on the card.
-     * Rendered only once a rule has fired, to keep untouched rows quiet.
+     * PER-27: `setRules` answers with the rules it refused, each as
+     * { name, errors }. Older builds sent bare strings; accept both.
+     */
+    normalizeRejected(list) {
+        return (Array.isArray(list) ? list : []).map((item) => {
+            if (item && typeof item === 'object') {
+                const errors = Array.isArray(item.errors) ? item.errors : (item.error ? [item.error] : []);
+                return { name: item.name ? String(item.name) : '', errors: errors.map(String) };
+            }
+            return { name: '', errors: [String(item)] };
+        });
+    }
+
+    /** One line naming the first few refused rules and why, for a toast. */
+    describeRejected(rejected, limit = 3) {
+        const shown = rejected.slice(0, limit).map((r) =>
+            `${r.name ? `"${r.name}"` : 'a rule'}: ${r.errors.join('; ') || 'not valid'}`);
+        const more = rejected.length > limit ? ` (+${rejected.length - limit} more)` : '';
+        return shown.join(' · ') + more;
+    }
+
+    /**
+     * PROD-7 / PER-55: the rule's hit count is the evidence that it works.
+     * hitCount was incremented and persisted but rendered nowhere, so the most
+     * basic question — "did my rule actually fire?" — could only be answered by
+     * discovering the custom DevTools panel. The old per-rule "Test" could not
+     * answer it either (it only re-ran the save-time validation, so it passed
+     * for a rule that never matched), so an untouched rule now says so
+     * explicitly instead of staying silent.
      */
     getHitCountHTML(rule) {
         const hits = Number(rule && rule.hitCount) || 0;
-        if (hits <= 0) return '';
+        if (hits <= 0) {
+            return '<span class="hit-count is-none" title="This rule has not matched a request yet">No hits yet</span>';
+        }
         const shown = hits > 999 ? '999+' : String(hits);
         const label = hits === 1 ? '1 hit' : `${shown} hits`;
         return `<span class="hit-count" title="Times this rule has been applied">${label}</span>`;
+    }
+
+    /** The "Disabled" chip markup, shared by the renderer and toggleRule. */
+    getDisabledChipHTML() {
+        return '<span class="disabled-chip">Disabled</span>';
     }
 
     /**
@@ -786,9 +884,10 @@ class SpliceTapPopup {
     }
 
     /**
-     * Get the short human-readable summary shown after the URL in a rule row.
-     * Guards on `rule.response` since only `type: 'mock'` rules have a response
-     * object in the v2 schema (block/delay/redirect/headers/queryparams do not).
+     * Get the short human-readable outcome shown at the start of a rule row's
+     * detail line. Plain text — callers escape it. Guards on `rule.response`
+     * since only `type: 'mock'` rules have a response object in the v2 schema
+     * (block/delay/redirect/headers/queryparams do not).
      */
     getRuleSummaryText(rule) {
         const type = rule.type || 'mock';
@@ -799,7 +898,7 @@ class SpliceTapPopup {
             case 'delay':
                 return `Delayed ${rule.delayMs || 0}ms`;
             case 'redirect':
-                return this.escapeHtml(rule.redirect?.destination || '(no destination)');
+                return 'Redirect';
             case 'headers':
                 return 'Modify headers';
             case 'queryparams':
@@ -811,6 +910,26 @@ class SpliceTapPopup {
                 return `${rule.response.statusCode || 200} ${rule.response.statusText || 'OK'}${delaySuffix}`;
             }
         }
+    }
+
+    /**
+     * PER-70: a redirect's destination follows the URL it replaces. It is what
+     * a long pattern would otherwise push out of the row, so it goes last.
+     */
+    getRuleDestinationHTML(rule) {
+        if ((rule.type || 'mock') !== 'redirect') return '';
+        const destination = (rule.redirect && rule.redirect.destination) || '(no destination)';
+        return ` <span class="rule-dest">→ ${this.escapeHtml(destination)}</span>`;
+    }
+
+    /** PER-70: the full, untruncated detail line, for the row's tooltip. */
+    getRuleDetailsTitle(rule) {
+        const method = (rule.match && rule.match.method) || 'GET';
+        const url = (rule.match && rule.match.url) || '';
+        const destination = (rule.type === 'redirect')
+            ? ` → ${(rule.redirect && rule.redirect.destination) || '(no destination)'}`
+            : '';
+        return `${method} ${url} → ${this.getRuleSummaryText(rule)}${destination}`;
     }
 
     /**
@@ -840,7 +959,13 @@ class SpliceTapPopup {
                     <svg viewBox="0 0 24 24" fill="none" stroke="url(#tmIconGrad)" stroke-width="1.5" aria-hidden="true" focusable="false"><defs><linearGradient id="tmIconGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1e63f5"/><stop offset="100%" stop-color="#0bbcd4"/></linearGradient></defs><path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/><path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M9 12h6"/></svg>
                 </div>
                 <h2>No rules yet</h2>
-                <p>Create your first mock rule to get started. Click the + button below.</p>
+                <p>Create a rule, or record a real response from your app and turn it into one.</p>
+                <!-- PER-61: the first-run screen had no buttons; the only
+                     way in was a footer control or an undocumented shortcut. -->
+                <div class="empty-actions">
+                    <button type="button" class="mini-btn is-primary empty-btn" data-empty-action="create">Create a rule</button>
+                    <button type="button" class="mini-btn empty-btn" data-empty-action="record">Record a real response</button>
+                </div>
             </div>
         `;
     }
@@ -916,6 +1041,15 @@ class SpliceTapPopup {
                 const card = e.target.closest('.rule-card');
                 if (card) {
                     card.classList.toggle('disabled', !rule.enabled);
+                    // PER-76: the chip is rendered once with the row, so it was
+                    // left behind (or never added) when the switch moved.
+                    const chip = card.querySelector('.disabled-chip');
+                    if (rule.enabled) {
+                        if (chip) chip.remove();
+                    } else if (!chip) {
+                        const nameBtn = card.querySelector('.rule-name-btn');
+                        if (nameBtn) nameBtn.insertAdjacentHTML('afterend', this.getDisabledChipHTML());
+                    }
                 }
 
                 this.updateStatus();
@@ -945,6 +1079,9 @@ class SpliceTapPopup {
         if (!action || !ruleId) return;
 
         switch (action) {
+            case 'move-top':
+                await this.moveRule(ruleId, 'top');
+                break;
             case 'move-up':
                 await this.moveRule(ruleId, -1);
                 break;
@@ -971,26 +1108,46 @@ class SpliceTapPopup {
      */
     async editRule(ruleId) {
         const rule = this.rules.find(r => r.id === ruleId);
-        const opened = await this.openRuleOverlay({ mode: 'edit', rule });
-        if (!opened) {
+        await this.openEditor(
+            { mode: 'edit', rule },
+            `options/options.html?editRule=${encodeURIComponent(ruleId)}`
+        );
+    }
+
+    /**
+     * Open the in-page editor on the active tab and close the popup — or, when
+     * that is not possible, say why (PER-32) or fall back to the full editor.
+     */
+    async openEditor(payload, optionsPath) {
+        const outcome = await this.openRuleOverlay(payload);
+        if (outcome.needsReload) {
+            // PER-32: an http(s) tab with no content script was open before
+            // SpliceTap was installed or updated. The editor cannot open there
+            // and, worse, rules would not apply until it reloads — so say so,
+            // instead of silently opening a different page and leaving the user
+            // to find out why their first rule does nothing.
+            this.renderReloadNotice(outcome.tabId);
+            return;
+        }
+        if (!outcome.opened) {
             // Overlay can't be injected here (chrome://, Web Store, PDF viewer,
             // etc.) — fall back to the full options editor in a tab.
-            await chrome.tabs.create({
-                url: chrome.runtime.getURL(`options/options.html?editRule=${ruleId}`)
-            });
+            await chrome.tabs.create({ url: chrome.runtime.getURL(optionsPath) });
         }
         window.close();
     }
 
     /**
      * Ask the active tab's content script to show the in-page rule editor.
-     * Returns false if the overlay could not be opened there.
+     * Resolves { opened } — or { needsReload, tabId } when the tab is an
+     * ordinary web page that has no content script to ask (PER-32).
      */
     async openRuleOverlay(payload) {
+        let tab = null;
         try {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (!tab || !tab.id || !/^https?:/i.test(tab.url || '')) {
-                return false;
+                return { opened: false };
             }
 
             let prefillUrl;
@@ -1006,11 +1163,75 @@ class SpliceTapPopup {
                 ...payload
             });
 
-            return !!(response && response.success);
+            return { opened: !!(response && response.success) };
         } catch (error) {
-            // No content script on this page (or it hasn't loaded yet).
+            // No content script on this page (or it hasn't loaded yet). On a
+            // page that could host one, a reload fixes it; on the Web Store and
+            // the like it never will, so those keep the options-page fallback.
+            const noReceiver = /Receiving end does not exist|Could not establish connection/i
+                .test(String(error && error.message));
+            if (noReceiver && tab && tab.id && this.canHostContentScript(tab.url)) {
+                return { opened: false, needsReload: true, tabId: tab.id };
+            }
+            return { opened: false };
+        }
+    }
+
+    /** http(s) pages Chrome lets extensions script — i.e. where a reload helps. */
+    canHostContentScript(url) {
+        try {
+            const u = new URL(url);
+            if (!/^https?:$/.test(u.protocol)) return false;
+            if (u.hostname === 'chromewebstore.google.com') return false;
+            if (u.hostname === 'chrome.google.com' && u.pathname.startsWith('/webstore')) return false;
+            return true;
+        } catch (error) {
             return false;
         }
+    }
+
+    /**
+     * PER-32: "Reload this tab to start intercepting" with a Reload button.
+     * Sits under the header so it shows on every tab.
+     */
+    renderReloadNotice(tabId) {
+        const existing = document.getElementById('reloadNotice');
+        if (existing) existing.remove();
+
+        const header = document.querySelector('.header');
+        if (!header || !header.parentNode) return;
+
+        const notice = document.createElement('div');
+        notice.id = 'reloadNotice';
+        notice.className = 'site-access-notice reload-notice';
+        notice.setAttribute('role', 'note');
+
+        const text = document.createElement('span');
+        text.textContent = 'Reload this tab to start intercepting.';
+        notice.appendChild(text);
+
+        const reloadBtn = document.createElement('button');
+        reloadBtn.type = 'button';
+        reloadBtn.id = 'reloadTabBtn';
+        reloadBtn.className = 'site-access-grant-btn';
+        reloadBtn.textContent = 'Reload';
+        reloadBtn.addEventListener('click', async () => {
+            try {
+                await chrome.tabs.reload(tabId);
+                notice.remove();
+                this.showNotification('Tab reloaded — click New rule again');
+                const newRule = document.getElementById('newRuleBtn');
+                if (newRule) newRule.focus();
+            } catch (error) {
+                console.error('Failed to reload the tab:', error);
+                this.showError('Could not reload the tab');
+            }
+        });
+        notice.appendChild(reloadBtn);
+
+        header.parentNode.insertBefore(notice, header.nextSibling);
+        this.announce('Reload this tab to start intercepting.', 'info');
+        reloadBtn.focus();
     }
 
     /**
@@ -1023,7 +1244,8 @@ class SpliceTapPopup {
         try {
             const newRule = this.deepClone(rule);
             newRule.id = this.generateId();
-            newRule.name = `${rule.name} (Copy)`;
+            const suffix = ' (Copy)';
+            newRule.name = `${String(rule.name || 'Unnamed Rule').slice(0, 100 - suffix.length)}${suffix}`;
             newRule.enabled = false;
             newRule.created = new Date().toISOString();
             // PROD-1: dnrRuleId identifies a declarativeNetRequest rule, and
@@ -1033,23 +1255,38 @@ class SpliceTapPopup {
             // queryparams rule silently stopped applying. Drop it so the copy
             // gets its own.
             delete newRule.dnrRuleId;
+            // The counter describes the original's traffic, not the copy's.
+            delete newRule.hitCount;
 
-            const response = await this.sendMessage({
-                type: 'saveRule',
-                rule: newRule
-            });
+            // PER-59: saveRule appends to the end of the list — below every
+            // rule that could shadow the copy, and far from the rule it copies.
+            // Insert it directly below its original instead, via the bulk path.
+            const fresh = await this.sendMessage({ type: 'getRules' });
+            const current = (fresh && fresh.success && Array.isArray(fresh.rules)) ? fresh.rules : (this.rules || []);
+            const at = current.findIndex((r) => r && r.id === ruleId);
+            const next = current.slice();
+            next.splice(at < 0 ? next.length : at + 1, 0, newRule);
 
-            if (response && response.success) {
+            const response = await this.sendMessage({ type: 'setRules', rules: next });
+            const rejected = this.normalizeRejected(response && response.rejected);
+            const saved = response && response.success
+                && (!Array.isArray(response.rules) || response.rules.some((r) => r.id === newRule.id));
+
+            if (saved) {
                 await this.loadData();
                 // U-15: loadData() resets filteredRules to the full list —
                 // re-apply whatever search is active instead of dropping it.
                 this.applySearchFilter();
                 this.updateStatus();
-                // A11Y-4: same rebuild-destroys-focus problem as delete.
-                this.restoreListFocus();
+                this.updateTabCount();
+                // A11Y-4 / PER-71: same rebuild-destroys-focus problem as
+                // delete; land on the new copy, which sits just below.
+                this.restoreListFocus(newRule.id);
                 this.showNotification('Rule duplicated');
+            } else if (rejected.length) {
+                this.showError(`Could not duplicate — ${this.describeRejected(rejected)}`);
             } else {
-                this.showError('Failed to duplicate rule');
+                this.showError((response && response.error) || 'Failed to duplicate rule');
             }
         } catch (error) {
             console.error('Failed to copy rule:', error);
@@ -1058,13 +1295,47 @@ class SpliceTapPopup {
     }
 
     /**
-     * Test rule
+     * PER-55: what the per-rule check currently says about a rule, as the
+     * glyph key and its accessible name. It is a syntax check — the save-time
+     * validation run again — so it can say "Valid" for a rule that has never
+     * matched a single request; that is why it no longer calls itself a pass.
+     */
+    getCheckStatus(rule) {
+        const check = this.checks.get(rule.id);
+        if (!check) return { key: 'pending', label: 'Not checked' };
+        if (check.valid) return { key: 'valid', label: 'Valid (syntax check only)' };
+        return { key: 'failed', label: `Invalid: ${check.message || 'the rule failed validation'}` };
+    }
+
+    /** The rendered row for a rule id, or null. */
+    findRuleCard(ruleId) {
+        return Array.from(document.querySelectorAll('.rule-card'))
+            .find((el) => el.dataset.ruleId === ruleId) || null;
+    }
+
+    /** Re-draw one row's check glyph and its accessible name. */
+    updateStatusIndicator(rule) {
+        const card = this.findRuleCard(rule.id);
+        const indicator = card && card.querySelector('.status-indicator');
+        if (!indicator) return;
+        const status = this.getCheckStatus(rule);
+        // A-9/A-18: keep the accessible name in sync with the new status, not
+        // just the visual icon.
+        indicator.innerHTML = this.getStatusIcon(status.key);
+        indicator.title = status.label;
+        indicator.setAttribute('aria-label', status.label);
+    }
+
+    /**
+     * Check rule. PER-55: this re-runs the save-time validation and nothing
+     * else, so the result is "Valid"/"Invalid" — it used to be a green "Test
+     * passed" for a rule that had never matched anything.
      */
     async testRule(ruleId) {
         const rule = this.rules.find(r => r.id === ruleId);
         if (!rule) return;
 
-        const card = document.querySelector(`[data-rule-id="${ruleId}"]`);
+        const card = this.findRuleCard(ruleId);
         const statusIndicator = card?.querySelector('.status-indicator');
 
         try {
@@ -1085,25 +1356,22 @@ class SpliceTapPopup {
             });
 
             if (response && response.success) {
-                rule.testStatus = response.passed ? 'passed' : 'failed';
+                const message = response.passed ? '' : this.firstCheckMessage(response);
+                this.checks.set(ruleId, { valid: !!response.passed, message });
+                this.updateStatusIndicator(rule);
 
-                if (statusIndicator) {
-                    // A-9/A-18: keep the accessible name in sync with the new
-                    // status, not just the visual icon.
-                    const tooltip = this.getStatusTooltip(rule.testStatus);
-                    statusIndicator.innerHTML = this.getStatusIcon(rule.testStatus);
-                    statusIndicator.title = tooltip;
-                    statusIndicator.setAttribute('aria-label', tooltip);
+                if (response.passed) {
+                    this.showNotification('Valid (syntax check only)');
+                } else {
+                    this.showError(`Invalid: ${message || 'the rule failed validation'}`);
                 }
-
-                this.showNotification(`Test ${response.passed ? 'passed' : 'failed'}`);
             } else {
-                this.showError('Test failed');
+                this.showError('Could not check the rule');
             }
 
         } catch (error) {
-            console.error('Test failed:', error);
-            this.showError('Test failed');
+            console.error('Check failed:', error);
+            this.showError('Could not check the rule');
         } finally {
             if (statusIndicator) {
                 statusIndicator.classList.remove('is-busy');
@@ -1112,12 +1380,27 @@ class SpliceTapPopup {
         }
     }
 
+    /** The first validation message in a testRule response. */
+    firstCheckMessage(response) {
+        const found = (response.results || []).find((r) => r && r.message);
+        return found ? String(found.message) : '';
+    }
+
     /**
      * Delete rule
      */
     async deleteRule(ruleId) {
         const rule = this.rules.find(r => r.id === ruleId);
         if (!rule) return;
+
+        // PER-29 / PER-71: remember where the rule sat — in the stored order,
+        // for Undo, and in the visible list, for focus.
+        const position = this.rules.findIndex(r => r.id === ruleId);
+        const where = {
+            index: position,
+            afterId: position > 0 ? this.rules[position - 1].id : null,
+            visibleIndex: this.filteredRules.findIndex(r => r.id === ruleId)
+        };
 
         // U-11: a native confirm() is OS-styled (nothing like the rest of the
         // product), and — like every destructive action in the app — offered
@@ -1132,15 +1415,18 @@ class SpliceTapPopup {
             });
 
             if (response && response.success) {
+                this.checks.delete(ruleId);
                 await this.loadData();
                 this.applySearchFilter();
                 this.updateStatus();
+                this.updateTabCount();
                 // A11Y-4: renderRules() rebuilds the list via innerHTML, which
                 // destroys the Delete button that was just activated — focus
                 // then falls to <body> and a keyboard user has to Tab from the
-                // top of the popup again. Park focus somewhere stable instead.
-                this.restoreListFocus();
-                this.showUndoToast(`Deleted "${rule.name}"`, rule);
+                // top of the popup again. Park focus on the neighbouring row
+                // (PER-71); the toast below then takes it for Undo.
+                this.restoreListFocus(where.visibleIndex);
+                this.showUndoToast(`Deleted "${rule.name}"`, rule, where);
             } else {
                 this.showError('Failed to delete rule');
             }
@@ -1243,24 +1529,17 @@ class SpliceTapPopup {
      * Create new rule
      */
     async createNewRule() {
-        const opened = await this.openRuleOverlay({ mode: 'new' });
-        if (!opened) {
-            // Not injectable on this page — fall back to the options tab.
-            await chrome.tabs.create({
-                url: chrome.runtime.getURL('options/options.html?action=new')
-            });
-        }
-        window.close();
+        await this.openEditor({ mode: 'new' }, 'options/options.html?action=new');
     }
 
     /**
-     * Test all rules
+     * Check all enabled rules (PER-55: syntax only — see testRule).
      */
     async testAllRules() {
         const enabledRules = this.rules.filter(r => r.enabled);
 
         if (enabledRules.length === 0) {
-            this.showNotification('No enabled rules to test');
+            this.showNotification('No enabled rules to check');
             return;
         }
 
@@ -1286,7 +1565,10 @@ class SpliceTapPopup {
                 });
 
                 if (response && response.success) {
-                    rule.testStatus = response.passed ? 'passed' : 'failed';
+                    this.checks.set(rule.id, {
+                        valid: !!response.passed,
+                        message: response.passed ? '' : this.firstCheckMessage(response)
+                    });
                     if (response.passed) passed++;
                     else failed++;
                 }
@@ -1295,9 +1577,11 @@ class SpliceTapPopup {
             }
 
             this.renderRules();
-            this.showNotification(`Tests: ${passed} passed, ${failed} failed`);
+            const summary = `Checked ${passed + failed}: ${passed} valid, ${failed} invalid (syntax only)`;
+            if (failed) this.showError(summary);
+            else this.showNotification(summary);
         } catch (error) {
-            this.showError('Testing failed');
+            this.showError('Checking failed');
         } finally {
             testBtn.classList.remove('is-busy');
             testBtn.removeAttribute('aria-busy');
@@ -1353,6 +1637,9 @@ class SpliceTapPopup {
             statusText.textContent = `Active (${enabledCount})`;
         } else if (!this.isActive) {
             statusText.textContent = 'Disabled';
+        } else if (this.rules.length > 0) {
+            // PER-69: "No rules" was wrong here — there are rules, none are on.
+            statusText.textContent = `Active (0/${this.rules.length})`;
         } else {
             statusText.textContent = 'No rules';
         }
@@ -1365,7 +1652,10 @@ class SpliceTapPopup {
         const statsText = document.getElementById('statsText');
         if (statsText) {
             const count = this.stats.intercepted || 0;
-            statsText.textContent = `${count} ${count === 1 ? 'intercept' : 'intercepts'}`;
+            // PER-53: the counter restarts daily (see the background's stats
+            // reset), so an unqualified "N intercepts" read as an all-time total.
+            statsText.textContent = `${count} ${count === 1 ? 'intercept' : 'intercepts'} today`;
+            statsText.title = 'Counts requests handled today; resets daily';
         }
     }
 
@@ -1386,7 +1676,13 @@ class SpliceTapPopup {
             const tab = document.getElementById(tabId);
             const pane = document.getElementById(paneId);
             const on = key === active;
-            if (tab) tab.setAttribute('aria-selected', String(on));
+            if (tab) {
+                tab.setAttribute('aria-selected', String(on));
+                // PER-85: roving tabindex — the tablist is one Tab stop (the
+                // selected tab) and arrow keys move within it, as the tabs
+                // pattern says; all three used to be separate stops.
+                tab.setAttribute('tabindex', on ? '0' : '-1');
+            }
             if (pane) pane.hidden = !on;
         }
 
@@ -1493,6 +1789,18 @@ class SpliceTapPopup {
         }
     }
 
+    /**
+     * PER-61: the empty state's "Record a real response". Arms Capture and
+     * shows where the recordings will appear.
+     */
+    async startRecording() {
+        await this.setCaptureArmed(true);
+        if (!(this.settings && this.settings.captureArmed)) return; // refused; the error is shown
+        this.switchTab('data');
+        const toggle = document.getElementById('captureArmed');
+        if (toggle) toggle.focus();
+    }
+
     async renderCaptureSection() {
         const armed = !!(this.settings && this.settings.captureArmed);
 
@@ -1523,6 +1831,18 @@ class SpliceTapPopup {
         // Newest first — the request just triggered is the one being looked for.
         list.innerHTML = captures.slice().reverse().map((c) => {
             const isError = c.status >= 400;
+            // PER-82: every capture's buttons were just "Mock" and "Patch", so
+            // a screen reader user could not tell which request each one acts
+            // on. The visible word stays first in the name (WCAG 2.5.3).
+            const target = `${c.method} ${this.capturePath(c.url)}`;
+            const mockLabel = this.escapeHtml(`Mock ${target}`);
+            const patchLabel = this.escapeHtml(`Patch ${target}`);
+            // PER-19: a patch is a merge into a JSON *object*. Against an array
+            // or a scalar the only rule it can express is `{}`, which replaces
+            // the real response — so Patch is not offered for those.
+            const patchButton = this.isPatchableBody(c.body)
+                ? `<button type="button" class="mini-btn" data-capture-action="patch" data-capture-id="${this.escapeHtml(c.id)}" title="Create a rule that edits this response, keeping the rest live" aria-label="${patchLabel}">Patch</button>`
+                : '';
             return `
                 <div class="capture-item" role="listitem">
                     <div class="capture-main">
@@ -1534,8 +1854,8 @@ class SpliceTapPopup {
                         </div>
                     </div>
                     <div class="capture-actions">
-                        <button type="button" class="mini-btn" data-capture-action="mock" data-capture-id="${this.escapeHtml(c.id)}" title="Create a rule returning this exact response">Mock</button>
-                        <button type="button" class="mini-btn" data-capture-action="patch" data-capture-id="${this.escapeHtml(c.id)}" title="Create a rule that edits this response, keeping the rest live">Patch</button>
+                        <button type="button" class="mini-btn" data-capture-action="mock" data-capture-id="${this.escapeHtml(c.id)}" title="Create a rule returning this exact response" aria-label="${mockLabel}">Mock</button>
+                        ${patchButton}
                     </div>
                 </div>`;
         }).join('');
@@ -1548,6 +1868,25 @@ class SpliceTapPopup {
         list.querySelectorAll('[data-capture-action]').forEach((btn) => {
             btn.addEventListener('click', () => this.createRuleFromCapture(btn.dataset.captureId, btn.dataset.captureAction));
         });
+    }
+
+    /** Path (no origin or query) of a captured URL, for button names. */
+    capturePath(url) {
+        try {
+            return new URL(url).pathname;
+        } catch (error) {
+            return String(url || '').split(/[?#]/)[0] || '/';
+        }
+    }
+
+    /** PER-19: true when a captured body is a JSON object (patchable). */
+    isPatchableBody(body) {
+        try {
+            const parsed = JSON.parse(body);
+            return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+        } catch (error) {
+            return false;
+        }
     }
 
     formatBytes(n) {
@@ -1567,6 +1906,12 @@ class SpliceTapPopup {
     async createRuleFromCapture(captureId, mode) {
         const capture = (this.captures || []).find((c) => c.id === captureId);
         if (!capture) return;
+
+        // PER-19: the list does not offer Patch for these; refuse here too.
+        if (mode === 'patch' && !this.isPatchableBody(capture.body)) {
+            this.showError('Patch needs a JSON object response — use Mock for this one');
+            return;
+        }
 
         let parsedBody = null;
         try {
@@ -1618,12 +1963,26 @@ class SpliceTapPopup {
                 return;
             }
             await this.loadData();
+            // PER-60: this used to leave the user on the Data tab with nothing
+            // to show for the click. Go to the new rule, and land on it: clear
+            // any search that would hide it, then focus (which scrolls) its row.
+            const search = document.getElementById('searchInput');
+            if (search && search.value) {
+                search.value = '';
+                this.searchTerm = '';
+                if (this.searchClearBtn) this.searchClearBtn.hidden = true;
+            }
             this.applySearchFilter();
+            this.updateStatus();
             this.updateTabCount();
+            this.switchTab('rules');
+            const row = this.findRuleCard(rule.id);
+            if (row) row.scrollIntoView({ block: 'nearest' });
+            this.restoreListFocus(rule.id);
             this.showNotification(
                 isPatch
-                    ? 'Patch rule created — add the fields to change, then enable it'
-                    : 'Mock rule created — enable it on the Rules tab'
+                    ? 'Patch rule created (off) — add the fields to change, then switch it on'
+                    : 'Mock rule created (off) — switch it on when you are ready'
             );
         } catch (error) {
             console.error('Failed to create rule from capture:', error);
@@ -1664,9 +2023,12 @@ class SpliceTapPopup {
             this.showError('No rules to export');
             return;
         }
+        // PER-62: hitCount and friends are this browser's own bookkeeping.
+        // Exporting them made a shared pack arrive with someone else's traffic
+        // counts ("40 hits" on a rule that has never run here).
         const payload = {
             exportedAt: new Date().toISOString(),
-            rules
+            rules: rules.map((rule) => this.stripRuntimeFields(rule))
         };
         const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
         const a = document.createElement('a');
@@ -1681,6 +2043,33 @@ class SpliceTapPopup {
         this.showNotification(`Exported ${rules.length} rule${rules.length === 1 ? '' : 's'}`);
     }
 
+    /** Fields that describe this browser's use of a rule, not the rule. */
+    stripRuntimeFields(rule) {
+        const clean = { ...rule };
+        for (const key of ['hitCount', 'testStatus', 'testError', 'dnrRuleId']) delete clean[key];
+        return clean;
+    }
+
+    /**
+     * PER-62: a stable fingerprint of what a rule DOES — type, match and
+     * payload — ignoring identity and bookkeeping (id, name, enabled, dates,
+     * counters). Two rules with the same fingerprint are exact duplicates.
+     */
+    ruleSignature(rule) {
+        const IGNORED = new Set(['id', 'name', 'enabled', 'created', 'lastModified', 'hitCount', 'testStatus', 'testError', 'dnrRuleId']);
+        const canon = (value) => {
+            if (Array.isArray(value)) return value.map(canon);
+            if (value && typeof value === 'object') {
+                return Object.keys(value).sort().reduce((out, key) => { out[key] = canon(value[key]); return out; }, {});
+            }
+            return value;
+        };
+        const body = {};
+        for (const key of Object.keys(rule)) if (!IGNORED.has(key)) body[key] = rule[key];
+        if (!body.type) body.type = 'mock'; // legacy v1 rules have no type
+        return JSON.stringify(canon(body));
+    }
+
     /** Show/hide an inline disclosure panel and sync its trigger's aria-expanded. */
     togglePanel(panelId, triggerId, show) {
         const panel = document.getElementById(panelId);
@@ -1690,6 +2079,7 @@ class SpliceTapPopup {
         panel.hidden = !next;
         if (trigger) trigger.setAttribute('aria-expanded', String(next));
         if (next && panelId === 'importPanel') {
+            this.updateImportMode();
             const ta = document.getElementById('importJson');
             if (ta) ta.focus();
         }
@@ -1701,9 +2091,100 @@ class SpliceTapPopup {
     }
 
     /**
+     * PER-62: keep the confirm button's wording in step with the mode. With
+     * "Keep existing rules" off the import REPLACES everything, so the button
+     * says exactly what it will do, and a pending confirmation is cancelled.
+     */
+    updateImportMode() {
+        const merge = document.getElementById('importMerge');
+        const btn = document.getElementById('importConfirmBtn');
+        const warn = document.getElementById('importReplaceWarn');
+        const count = (this.rules || []).length;
+        const replacing = !!merge && !merge.checked && count > 0;
+
+        this.replaceArmed = 0;
+        if (btn) {
+            btn.textContent = replacing ? `Replace all ${count} rule${count === 1 ? '' : 's'}` : 'Import';
+            btn.classList.toggle('is-danger', replacing);
+            btn.classList.toggle('is-primary', !replacing);
+        }
+        if (warn) {
+            warn.hidden = true;
+            warn.textContent = '';
+        }
+    }
+
+    /** Typing or toggling after the warning appeared cancels the confirmation. */
+    disarmReplace() {
+        if (this.replaceArmed) this.updateImportMode();
+    }
+
+    /** First click of a replace-mode import: say what is about to be lost. */
+    armReplace(count) {
+        const btn = document.getElementById('importConfirmBtn');
+        const warn = document.getElementById('importReplaceWarn');
+        const noun = `${count} rule${count === 1 ? '' : 's'}`;
+        this.replaceArmed = count;
+        if (btn) {
+            btn.textContent = `Replace all ${noun} — confirm`;
+            btn.classList.add('is-danger');
+            btn.classList.remove('is-primary');
+        }
+        const message = `This deletes your ${noun} and cannot be undone. Click again to replace them, or tick "Keep existing rules".`;
+        if (warn) {
+            warn.textContent = message;
+            warn.hidden = false;
+        }
+        this.announce(message, 'error');
+    }
+
+    /**
+     * PER-62: say what the last import skipped and why, in the Data tab, until
+     * dismissed. It used to be a 3-second green toast with a count and no
+     * names; the background had already worked out each reason.
+     */
+    renderImportReport() {
+        const el = document.getElementById('importReport');
+        if (!el) return;
+        const report = this.importReport;
+        if (!report) {
+            el.hidden = true;
+            el.innerHTML = '';
+            return;
+        }
+
+        const skipped = report.skipped || [];
+        el.hidden = false;
+        el.className = `import-report${skipped.length ? ' is-error' : ''}`;
+        el.setAttribute('role', 'group');
+        el.setAttribute('aria-labelledby', 'importReportTitle');
+        const items = skipped.map((item) => `
+            <li><span class="ir-name">${this.escapeHtml(item.name || '(unnamed rule)')}</span><span class="ir-reason">${this.escapeHtml((item.errors || []).join('; ') || 'not valid')}</span></li>`).join('');
+        el.innerHTML = `
+            <h3 class="import-report-title" id="importReportTitle">${this.escapeHtml(report.summary)}</h3>
+            ${items ? `<ul class="import-report-list">${items}</ul>` : ''}
+            <div class="sub-actions"><button type="button" class="mini-btn" id="importReportDismiss">Dismiss</button></div>`;
+        const dismiss = document.getElementById('importReportDismiss');
+        if (dismiss) {
+            dismiss.addEventListener('click', () => {
+                this.importReport = null;
+                this.renderImportReport();
+                const trigger = document.getElementById('importToggleBtn');
+                if (trigger) trigger.focus();
+            });
+        }
+    }
+
+    /**
      * Parse pasted JSON and hand it to the background's bulk `setRules`,
      * which validates each rule, skips the bad ones and allocates DNR ids —
      * so this deliberately does not re-implement that validation.
+     *
+     * PER-5 / PER-62: "Keep existing rules" appends the import AFTER the rules
+     * already there (it used to put it first, so a teammate's broad mock
+     * silently out-ranked the user's own), skips exact duplicates instead of
+     * doubling every rule on a re-import, and reports every rule it did not
+     * import with its reason. Replace mode needs a second, confirming click.
      */
     async confirmImport() {
         const ta = document.getElementById('importJson');
@@ -1740,11 +2221,48 @@ class SpliceTapPopup {
         const merge = document.getElementById('importMerge');
         const keepExisting = merge ? merge.checked : true;
 
+        // Re-fetch before merging: `this.rules` is a snapshot that may predate
+        // rules added from the overlay or another surface while this popup was
+        // open, and "keep existing" promises not to lose those. Replace mode
+        // needs the live count too, for its confirmation.
+        let existing = [];
+        try {
+            const fresh = await this.sendMessage({ type: 'getRules' });
+            existing = (fresh && fresh.success && Array.isArray(fresh.rules)) ? fresh.rules : (this.rules || []);
+        } catch (error) {
+            existing = this.rules || [];
+        }
+
+        if (!keepExisting && existing.length > 0 && this.replaceArmed !== existing.length) {
+            this.armReplace(existing.length);
+            return;
+        }
+
+        const skipped = [];
+        const known = new Map(); // fingerprint -> name of the rule that holds it
+        if (keepExisting) {
+            for (const rule of existing) {
+                if (rule && typeof rule === 'object') known.set(this.ruleSignature(rule), rule.name);
+            }
+        }
+
         // Fresh ids on merge so imported rules can never collide with, and
         // therefore overwrite, a rule already stored under the same id.
-        const prepared = incoming.map((rule) => {
+        const prepared = [];
+        for (const rule of incoming) {
+            if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+                skipped.push({ name: '', errors: ['Not a rule object'] });
+                continue;
+            }
+            const signature = this.ruleSignature(rule);
+            if (known.has(signature)) {
+                skipped.push({ name: rule.name, errors: [`Exact duplicate of "${known.get(signature)}"`], duplicate: true });
+                continue;
+            }
+            known.set(signature, rule.name);
+
             const next = {
-                ...rule,
+                ...this.stripRuntimeFields(rule),
                 id: keepExisting || !rule.id ? this.generateId() : rule.id
             };
             // Same collision as duplicating a rule (PROD-1): exports carry
@@ -1753,55 +2271,82 @@ class SpliceTapPopup {
             // rules with the same id, which rejects the entire batch and takes
             // every headers/queryparams rule down with it. The id is an
             // internal allocation, never user data, so always re-issue it.
-            delete next.dnrRuleId;
-            return next;
-        });
+            // (stripRuntimeFields drops it, and the counters of whoever
+            // exported the file.)
+            prepared.push(next);
+        }
 
-        // Re-fetch before merging: `this.rules` is a snapshot that may predate
-        // rules added from the overlay or another surface while this popup was
-        // open, and "keep existing" promises not to lose those.
-        let existing = [];
-        if (keepExisting) {
-            try {
-                const fresh = await this.sendMessage({ type: 'getRules' });
-                existing = (fresh && fresh.success && Array.isArray(fresh.rules)) ? fresh.rules : (this.rules || []);
-            } catch (error) {
-                existing = this.rules || [];
-            }
+        if (!prepared.length) {
+            // Everything was a duplicate or malformed: nothing to write.
+            this.finishImport({ added: 0, skipped, replaced: 0, ta, dnrWarning: undefined });
+            return;
         }
 
         try {
             const response = await this.sendMessage({
                 type: 'setRules',
-                rules: [...prepared, ...existing]
+                rules: keepExisting ? [...existing, ...prepared] : prepared
             });
             if (!response || !response.success) {
-                this.showError('Import failed');
+                this.showError(`Import failed${response && response.error ? `: ${response.error}` : ''}`);
                 return;
             }
             this.rules = response.rules || [];
-            const rejected = (response.rejected || []).length;
-            const added = prepared.length - rejected;
-            const summary = rejected
-                ? `Imported ${added} rule${added === 1 ? '' : 's'}, skipped ${rejected} invalid`
-                : `Imported ${added} rule${added === 1 ? '' : 's'}`;
-            // CQ-3: an imported headers/queryparams rule can be stored yet
-            // rejected by declarativeNetRequest, which previously left the user
-            // with an unqualified success message for a rule that never applies.
-            if (response.dnrWarning) {
-                this.showError(`${summary} — but the network-layer rules could not be applied: ${response.dnrWarning}`);
-            } else {
-                this.showNotification(summary);
-            }
-            if (ta) ta.value = '';
-            this.togglePanel('importPanel', 'importToggleBtn', false);
-            this.renderRules();
-            this.updateTabCount();
-            this.renderDataSection();
+
+            // PER-27: the background names each rule it refused and why.
+            const rejected = this.normalizeRejected(response.rejected);
+            const landed = new Set(this.rules.map((r) => r.id));
+            const added = Array.isArray(response.rules)
+                ? prepared.filter((r) => landed.has(r.id)).length
+                : prepared.length - rejected.length;
+            this.finishImport({
+                added,
+                skipped: skipped.concat(rejected),
+                replaced: keepExisting ? 0 : existing.length,
+                ta,
+                dnrWarning: response.dnrWarning
+            });
         } catch (error) {
             console.error('Import failed:', error);
             this.showError('Import failed');
         }
+    }
+
+    /** Summarise an import: toast it, record the details, refresh the views. */
+    finishImport({ added, skipped, replaced, ta, dnrWarning }) {
+        const duplicates = skipped.filter((item) => item.duplicate).length;
+        const invalid = skipped.length - duplicates;
+        let summary = `Imported ${added} rule${added === 1 ? '' : 's'}`;
+        if (replaced) summary += `, replacing ${replaced}`;
+        if (skipped.length) {
+            const parts = [];
+            if (duplicates) parts.push(`${duplicates} duplicate${duplicates === 1 ? '' : 's'}`);
+            if (invalid) parts.push(`${invalid} invalid`);
+            summary += `, skipped ${skipped.length} (${parts.join(', ')})`;
+        }
+
+        this.importReport = skipped.length ? { summary, skipped } : null;
+        this.renderImportReport();
+
+        // CQ-3: an imported headers/queryparams rule can be stored yet
+        // rejected by declarativeNetRequest, which previously left the user
+        // with an unqualified success message for a rule that never applies.
+        if (dnrWarning) {
+            this.showError(`${summary} — but the network-layer rules could not be applied: ${dnrWarning}`);
+        } else if (skipped.length) {
+            // Error styling whenever anything was left out (PER-62).
+            this.showError(summary);
+        } else {
+            this.showNotification(summary);
+        }
+
+        if (ta) ta.value = '';
+        this.togglePanel('importPanel', 'importToggleBtn', false);
+        this.updateImportMode();
+        this.applySearchFilter();
+        this.updateStatus();
+        this.updateTabCount();
+        this.renderDataSection();
     }
 
     /**
@@ -1824,9 +2369,35 @@ class SpliceTapPopup {
             } catch (e) {
                 // localStorage unavailable — nothing cached
             }
+
+            // PER-83: the confirmation used to show for 0.6 s and then reload
+            // the whole popup, dropping focus to <body> and the message with
+            // it. Re-render from the (now empty) state instead, say it once
+            // through the live region, and park focus on the tab strip.
+            this.checks.clear();
+            this.importReport = null;
+            this.renderImportReport();
+            this.captures = [];
+            const search = document.getElementById('searchInput');
+            if (search) search.value = '';
+            this.searchTerm = '';
+            if (this.searchClearBtn) this.searchClearBtn.hidden = true;
+
+            await this.loadData();
+            this.applyTheme();
+            this.applySearchFilter();
+            this.updateStatus();
+            this.updateStats();
+            this.updateTabCount();
+            this.renderSettings();
+            this.updateImportMode();
+            this.renderDataSection();
+            this.renderCaptureSection();
+
             this.togglePanel('resetPanel', 'resetAllBtn', false);
             this.showNotification('All SpliceTap data deleted');
-            setTimeout(() => window.location.reload(), 600);
+            const selected = document.querySelector('.tab[aria-selected="true"]');
+            if (selected) selected.focus();
         } catch (error) {
             console.error('Reset failed:', error);
             this.showError('Could not delete data');
@@ -1867,6 +2438,17 @@ class SpliceTapPopup {
      * Handle keyboard shortcuts
      */
     handleKeyboardShortcuts(e) {
+        // PER-71: while an Undo toast is showing, Ctrl+Z (or Alt+Z, which also
+        // works from a text field) undoes it, wherever focus is. In a text
+        // field Ctrl+Z stays the field's own undo.
+        const typing = e.target && e.target.closest
+            && e.target.closest('input:not([type="checkbox"]):not([type="radio"]), textarea, [contenteditable="true"]');
+        if (((e.ctrlKey || e.metaKey) && !e.altKey && !typing && String(e.key).toLowerCase() === 'z')
+            || (e.altKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyZ')) {
+            if (this.triggerToastAction()) e.preventDefault();
+            return;
+        }
+
         if (e.ctrlKey || e.metaKey) {
             switch (e.key.toLowerCase()) {
                 case 'n':
@@ -1887,6 +2469,13 @@ class SpliceTapPopup {
                     break;
             }
         } else if (e.key === 'Escape') {
+            // PER-81: Escape dismisses the newest toast first — a toast could
+            // only be dismissed by clicking it, which a keyboard user could not.
+            if (this.dismissTopToast()) {
+                e.preventDefault();
+                return;
+            }
+
             // A11Y-3: Escape used to close the whole popup unconditionally,
             // which threw away a half-pasted import JSON on the reflex keystroke
             // people use to mean "cancel this". Close the innermost open thing
@@ -1921,26 +2510,14 @@ class SpliceTapPopup {
         // unlabelled graphics node.
         const icons = {
             passed: `<svg viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.2" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>`,
+            // PER-55: "valid" is not "working", so it is not the green tick.
+            valid: `<svg viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2.2" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>`,
             failed: `<svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.2" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/></svg>`,
             warning: `<svg viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.2" aria-hidden="true" focusable="false"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>`,
             pending: `<svg viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2.2" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`,
             never: `<svg viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2.2" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`
         };
         return icons[status] || icons.pending;
-    }
-
-    /**
-     * Utility: Get status tooltip
-     */
-    getStatusTooltip(status) {
-        const tooltips = {
-            passed: 'Test passed',
-            failed: 'Test failed',
-            warning: 'Test passed with warnings',
-            pending: 'Not tested',
-            never: 'Never tested'
-        };
-        return tooltips[status] || 'Unknown';
     }
 
     /**
@@ -1959,31 +2536,114 @@ class SpliceTapPopup {
 
     /**
      * U-11: delete used to be gated by a blocking native confirm(); it's now
-     * immediate with an undo toast (~8s) instead. Restoring re-saves the
-     * exact same rule object (same id) — storage.saveRule() upserts by id,
-     * so this recreates it identically rather than as a new rule.
+     * immediate with an undo toast instead.
+     *
+     * PER-29: Undo puts the rule back where it was. It used to re-save it
+     * through saveRule, which appends — so a rule deleted from the top came
+     * back at the bottom, silently changing which rule wins a request. It now
+     * re-reads the stored order and splices the rule in after the one that
+     * preceded it, through the bulk path.
+     *
+     * PER-71: the toast takes focus (Undo is otherwise a screen of Tab presses
+     * away, after the footer), stays until acted on or dismissed instead of
+     * vanishing after 8 s, and Ctrl+Z / Alt+Z trigger it.
      */
-    showUndoToast(message, rule) {
-        this.createToast(message, 'success', {
+    showUndoToast(message, rule, where = {}) {
+        return this.createToast(message, 'success', {
             actionLabel: 'Undo',
-            duration: 8000,
+            actionHint: 'Ctrl+Z',
+            focusAction: true,
+            announce: `${message}. Press Ctrl+Z to undo.`,
+            restoreFocus: () => this.restoreListFocus(where.visibleIndex),
             onAction: async () => {
                 try {
-                    const response = await this.sendMessage({ type: 'saveRule', rule });
-                    if (response && response.success) {
+                    const fresh = await this.sendMessage({ type: 'getRules' });
+                    const current = (fresh && fresh.success && Array.isArray(fresh.rules)) ? fresh.rules : (this.rules || []);
+                    if (current.some((r) => r && r.id === rule.id)) {
+                        this.showNotification('Rule already restored');
+                        this.restoreListFocus(rule.id);
+                        return;
+                    }
+
+                    let at = 0;
+                    if (where.afterId) {
+                        const after = current.findIndex((r) => r && r.id === where.afterId);
+                        at = after >= 0 ? after + 1 : Math.min(Math.max(where.index, 0), current.length);
+                    }
+                    const next = current.slice();
+                    next.splice(at, 0, rule);
+
+                    const response = await this.sendMessage({ type: 'setRules', rules: next });
+                    const rejected = this.normalizeRejected(response && response.rejected);
+                    const restored = response && response.success
+                        && (!Array.isArray(response.rules) || response.rules.some((r) => r.id === rule.id));
+                    if (restored) {
                         await this.loadData();
                         this.applySearchFilter();
                         this.updateStatus();
+                        this.updateTabCount();
+                        this.restoreListFocus(rule.id);
                         this.showNotification('Rule restored');
                     } else {
-                        this.showError('Could not undo delete');
+                        this.showError(rejected.length
+                            ? `Could not undo delete — ${this.describeRejected(rejected)}`
+                            : 'Could not undo delete');
+                        this.restoreListFocus(where.visibleIndex);
                     }
                 } catch (error) {
                     console.error('Undo failed:', error);
                     this.showError('Could not undo delete');
+                    this.restoreListFocus(where.visibleIndex);
                 }
             }
         });
+    }
+
+    /**
+     * PER-81 / A-6: the single place a status message is announced. Every
+     * toast used to announce twice — once through its own role="alert"/"status"
+     * and once through this region — and its accessible name was its tooltip,
+     * "Click to dismiss". Errors are assertive; everything else is polite.
+     */
+    announce(message, type = 'info') {
+        const region = document.getElementById('liveRegion');
+        if (!region) return;
+        const assertive = type === 'error';
+        region.setAttribute('role', assertive ? 'alert' : 'status');
+        region.setAttribute('aria-live', assertive ? 'assertive' : 'polite');
+        clearTimeout(this._announceTimer);
+        if (region.textContent === message) {
+            // An identical message is not a change, so it would not be read
+            // again: clear it first.
+            region.textContent = '';
+            this._announceTimer = setTimeout(() => { region.textContent = message; }, 60);
+        } else {
+            region.textContent = message;
+        }
+    }
+
+    /** The toasts currently on screen, oldest first. */
+    liveToasts() {
+        const container = document.getElementById('toastContainer');
+        return container ? Array.from(container.querySelectorAll('.toast:not(.closing)')) : [];
+    }
+
+    /** PER-81: Escape — dismiss the newest toast. Returns whether one existed. */
+    dismissTopToast() {
+        const toasts = this.liveToasts();
+        const top = toasts[toasts.length - 1];
+        if (!top || typeof top._dismiss !== 'function') return false;
+        top._dismiss({ restore: true });
+        return true;
+    }
+
+    /** PER-71: run the newest toast's action (Undo). Returns whether there was one. */
+    triggerToastAction() {
+        const toasts = this.liveToasts().filter((t) => typeof t._action === 'function');
+        const top = toasts[toasts.length - 1];
+        if (!top) return false;
+        top._action();
+        return true;
     }
 
     /**
@@ -1993,20 +2653,33 @@ class SpliceTapPopup {
      * right: 10px`, landing directly on the header/Settings button, with
      * consecutive toasts stacking unreadably at the identical coordinates.
      * They now flow inside the single `#toastContainer` (popup.html),
-     * anchored above the footer, and pause their auto-dismiss on hover.
+     * anchored above the footer.
      *
-     * A-6: no status message anywhere was ever announced to screen-reader
-     * users. Every toast now also mirrors its text into `#liveRegion`
-     * (persistent, `aria-live="polite"`) and carries its own
-     * role="alert"/"status" as a second, redundant path.
+     * A-6 / PER-81: announced once, through `#liveRegion`; the toast itself
+     * has no live role, and no tooltip to become its accessible name.
+     *
+     * PER-68: a toast sits over whatever is beneath it — after Import, the
+     * Import button — and used to swallow the click meant for it. Clicks now
+     * pass through everything but the toast's own buttons (see popup.css), so
+     * there is no control it can hide from a pointer.
+     *
+     * PER-71: a toast with an action is not on a timer. It stays until it is
+     * used, dismissed (Escape, or its × button) or superseded by a newer one.
      */
     createToast(message, type = 'info', options = {}) {
         const container = document.getElementById('toastContainer');
         if (!container) return null;
 
+        const hasAction = !!(options.actionLabel && typeof options.onAction === 'function');
+
+        // Only the newest action can be undone with the keyboard shortcut, so
+        // an older, still-visible one would offer something it no longer can.
+        if (hasAction) {
+            this.liveToasts().filter((t) => t._action).forEach((t) => t._dismiss({ restore: false }));
+        }
+
         const toast = document.createElement('div');
-        toast.className = `toast toast-${type}`;
-        toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+        toast.className = `toast toast-${type}${hasAction ? ' has-action' : ''}`;
 
         const text = document.createElement('span');
         text.className = 'toast-message';
@@ -2014,62 +2687,63 @@ class SpliceTapPopup {
         toast.appendChild(text);
 
         let dismissTimer;
-        const dismissToast = () => {
+        let dismissed = false;
+        const dismissToast = ({ restore = false } = {}) => {
+            if (dismissed) return;
+            dismissed = true;
+            clearTimeout(dismissTimer);
+            const hadFocus = toast.contains(document.activeElement);
             toast.classList.add('closing');
             setTimeout(() => toast.remove(), 300);
+            // Focus on a control that is going away would fall to <body>.
+            if (hadFocus && restore && typeof options.restoreFocus === 'function') options.restoreFocus();
         };
         const scheduleDismiss = () => {
             clearTimeout(dismissTimer);
-            const duration = options.duration || (type === 'error' ? 6000 : 3000);
-            dismissTimer = setTimeout(dismissToast, duration);
+            if (hasAction) return;
+            // Long error text (a list of refused rules) needs longer to read.
+            const base = options.duration || (type === 'error' ? 6000 : 3000);
+            const duration = type === 'error' ? Math.min(Math.max(base, message.length * 60), 20000) : base;
+            dismissTimer = setTimeout(() => dismissToast(), duration);
         };
+        toast._dismiss = dismissToast;
 
-        if (options.actionLabel && typeof options.onAction === 'function') {
-            const actionBtn = document.createElement('button');
+        let actionBtn = null;
+        if (hasAction) {
+            actionBtn = document.createElement('button');
             actionBtn.type = 'button';
             actionBtn.className = 'toast-action';
             actionBtn.textContent = options.actionLabel;
-            actionBtn.addEventListener('click', () => {
-                clearTimeout(dismissTimer);
+            if (options.actionHint) {
+                actionBtn.title = `${options.actionLabel} (${options.actionHint})`;
+                actionBtn.setAttribute('aria-keyshortcuts', options.actionHint.replace('Ctrl', 'Control'));
+            }
+            const run = () => {
+                if (dismissed) return;
+                // The action puts focus where it belongs (e.g. the restored row).
+                dismissToast({ restore: false });
                 options.onAction();
-                dismissToast();
-            });
+            };
+            actionBtn.addEventListener('click', run);
+            toast._action = run;
             toast.appendChild(actionBtn);
+
+            const closeBtn = document.createElement('button');
+            closeBtn.type = 'button';
+            closeBtn.className = 'toast-dismiss';
+            closeBtn.setAttribute('aria-label', 'Dismiss');
+            closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+            closeBtn.addEventListener('click', () => dismissToast({ restore: true }));
+            toast.appendChild(closeBtn);
         }
-
-        // A toast overlays the bottom of the pane, so whatever control sits
-        // there — the Import button, the last rule's actions — is under it
-        // for the toast's lifetime. Clicks on the toast used to go nowhere,
-        // and because hovering pauses the auto-dismiss (U-18, below), a
-        // pointer resting where that control had been kept the toast — and
-        // the dead zone — alive indefinitely. Clicking the toast now
-        // dismisses it at once, so the control beneath is one visible click
-        // away. Its action button handles its own click and is unaffected.
-        toast.title = 'Click to dismiss';
-        toast.addEventListener('click', (e) => {
-            if (e.target.closest('.toast-action')) return;
-            clearTimeout(dismissTimer);
-            dismissToast();
-        });
-
-        // U-18: pause the auto-dismiss while the user is reading/reaching
-        // for the action button.
-        toast.addEventListener('mouseenter', () => clearTimeout(dismissTimer));
-        toast.addEventListener('mouseleave', scheduleDismiss);
-        // UX-2: a mouse user could hold the toast open indefinitely by hovering,
-        // but a keyboard user tabbing toward Undo got no such extension — and
-        // the toast sits after the footer in tab order, so they had further to
-        // travel. Pause on focus too.
-        toast.addEventListener('focusin', () => clearTimeout(dismissTimer));
-        toast.addEventListener('focusout', scheduleDismiss);
 
         container.appendChild(toast);
         scheduleDismiss();
 
-        const liveRegion = document.getElementById('liveRegion');
-        if (liveRegion) {
-            liveRegion.textContent = message;
-        }
+        this.announce(options.announce || message, type);
+
+        // PER-71: Undo is after the footer in tab order; bring focus to it.
+        if (hasAction && options.focusAction && actionBtn) actionBtn.focus({ preventScroll: true });
 
         return toast;
     }

@@ -185,10 +185,9 @@ describe('popup', () => {
         const exported = await captureExport();
 
         await h.bg({ type: 'clearRules' });
-        // The "Exported" toast overlays the Import button. A user clicks it
-        // away (toasts dismiss on click), which is what this models.
-        await popup.click('.toast .toast-message');
-        await waitFor(() => popup.evaluate(() => !document.querySelector('.toast')), { label: 'toast dismissed' });
+        // The "Exported" toast overlays the Import button. PER-68: a toast no
+        // longer takes the click (only its own buttons do), so Import is
+        // clickable straight away — it used to have to be clicked away first.
         await popup.click('#importToggleBtn');
         await popup.$eval('#importJson', (el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }, exported);
         await popup.click('#importConfirmBtn');
