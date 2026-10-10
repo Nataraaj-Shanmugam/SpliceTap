@@ -34,8 +34,10 @@ Every claim below is verifiable against the source in this repository.
   time it is on, keeps at most 25 textual responses of up to 100 KB each, stores
   them in session storage only, and lets you clear them at any time. Nothing
   captured is transmitted — there is nowhere for it to go.
-- **Sensitive URL parameters are redacted before logging.** Common token, key
-  and session parameter names are stripped from URLs before they reach the log.
+- **Sensitive URL parameters are redacted before logging (best effort).**
+  Redaction removes the values of query and fragment parameters whose names
+  suggest secrets (token, secret, session, signature, auth, key, password,
+  code, jwt…) and token-like path segments from URLs before they reach the log.
 - **No remote code.** Everything that runs ships in the package. There is no
   `eval`, no `new Function`, no remotely-hosted script, and no remotely-fetched
   rule payload. Manifest V3 forbids remote code, but note that it did not stop

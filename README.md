@@ -68,7 +68,8 @@ do yet — with every claim backed by a headless test.
    - **URL Pattern**: Wildcard like `*/api/users/*`, regex `/api/users/\d+/`, or a plain substring
 
 3. **Testing Rules**:
-   - Use the "Test" button in the popup to validate a rule's structure
+   - Use **Check syntax** on a rule to validate its structure (Valid / Invalid).
+   - Rule rows show "N hits" or "No hits yet".
    - Each rule card shows a status icon: a green check (passed), a red cross
      (failed), an amber triangle (warning), or a grey clock (not yet tested)
 
@@ -79,13 +80,13 @@ Every rule has a `type`. Legacy rules exported without a `type` field are automa
 ### `mock` — Return a synthetic or patched response
 Two response **modes**:
 - **`static`** (default): Return a fully synthetic response you define — `statusCode`, `statusText`, `headers`, `body`, optional `delay`. Placeholders in the body are expanded at request time.
-- **`patch`**: Let the **real** request go to the network, then apply an RFC 7386 **JSON Merge Patch** to the response body. Objects merge recursively, `null` deletes a key, and arrays/scalars replace the existing value. Only valid-JSON responses are patched; anything else passes through untouched. Patch mode keeps the original status code.
+- **`patch`**: Let the **real** request go to the network, then apply an RFC 7386 **JSON Merge Patch** to the response body. Objects merge recursively, `null` deletes a key, and arrays/scalars replace the existing value. A patch is skipped (the real response passes through, and the log notes why) when the response is not JSON, or its root is not an object. An empty patch `{}` changes nothing. Patch mode keeps the original status code.
 
 Mock rules also support two optional matching conditions:
-- **`match.graphql.operationName`** — matches against the request body's `operationName`. This is the key to mocking a single query/mutation on a shared single-endpoint GraphQL API. (Requires method `POST` or `*`.)
+- **`match.graphql.operationName`** — matches `operationName` for POST bodies, batched (array) bodies, GET requests with `?operationName=`, and names declared in the `query`. This is the key to mocking a single query/mutation on a shared single-endpoint GraphQL API. (Method: POST, GET or Any (`*`).)
 - **`match.headers`** — an object of `{ 'header-name': 'value-substring' }`; **all** entries must match. Names are compared case-insensitively; values by substring.
 
-All successful mock/patch responses carry `x-splicetap: true` and `x-splicetap-rule: <rule name>` headers so you can confirm interception in the console/Network response headers.
+All successful mock/patch responses carry `x-splicetap: true` and `x-splicetap-rule: <rule name>` headers so you can confirm interception in the console/Network response headers. `x-splicetap-rule` carries the rule name, percent-encoded when the name has non-ASCII characters.
 
 ### `block` — Fail the request
 `fetch` rejects with a `TypeError('Failed to fetch')`; XHR fires an `error` event with `status: 0`. Useful for testing error and offline states.
@@ -94,7 +95,7 @@ All successful mock/patch responses carry `x-splicetap: true` and `x-splicetap-r
 Waits `delayMs` milliseconds, then passes the request through to the real network unchanged. Useful for testing spinners and latency handling.
 
 ### `redirect` — Send the request somewhere else
-Rewrites the request URL to `redirect.destination` before it hits the network. If `match.url` is a `/regex/` pattern, `$1`..`$9` capture references are supported in the destination (e.g. redirect `https://prod.example.com/api/$1` to `http://localhost:3000/$1`).
+Rewrites the request URL to `redirect.destination` before it hits the network. With a `/regex/` pattern, the destination replaces the whole URL and `$1`–`$9` come from the match. For example, the *Redirect to localhost* template's pattern `/^https?:\/\/[^/]+\/(api\/.*)/` sends `…/api/…` on any host to `http://localhost:3000/$1`. `$n` is refused with a wildcard pattern, because wildcards don't capture.
 
 ### `headers` — Add/remove request or response headers
 Handled by `chrome.declarativeNetRequest` (see Architecture). `headersMod.request` and `headersMod.response` are each arrays of `{ op: 'set' | 'remove', name, value }`. Common use: a "CORS Unblock" preset that sets `Access-Control-Allow-Origin: *` on responses, or overriding `User-Agent` on requests.
@@ -102,12 +103,21 @@ Handled by `chrome.declarativeNetRequest` (see Architecture). `headersMod.reques
 ### `queryparams` — Add or remove URL query parameters
 Also handled by declarativeNetRequest. `queryParams.add` is an array of `{ key, value }`; `queryParams.remove` is an array of keys to strip.
 
+### Validation
+- Status codes must be 200–599, because 1xx are interim responses.
+- Header names and values must not contain characters above U+00FF.
+- `/regex/flags` is refused (matching is already case-insensitive).
+- Bodies and patches can be nested at most 64 levels.
+- `Access-Control-Allow-Credentials: true` needs a URL pattern that names a host.
+
 ## Matching & Precedence
 
+- **Which URL is matched**: Rules match the request's absolute URL, with the URL as the page wrote it as a fallback. A host or full-URL pattern now also matches relative calls such as `fetch('/api/users')`.
 - **URL pattern semantics** (case-insensitive):
   - Contains `*` → wildcard, anchored full-match (`*` alone matches everything)
   - Wrapped in `/.../` → treated as a regular expression
   - Otherwise → substring match
+- **Header and query-param rules** use the same anchored wildcard semantics as other rules: `*/echo` does not match `/echo/sub` or `/echo?x=1`.
 - **Method** `*` matches any method.
 - **What they reach**: `mock`, `block`, `delay` and `redirect` act on requests the page makes with `fetch` or `XMLHttpRequest`. They do not reach scripts, stylesheets, images or page navigations — a `<script src>` is not redirected and an `<img>` is not blocked.
 - **Precedence**: For interceptor-handled types (`mock`, `block`, `delay`, `redirect`), enabled rules are evaluated in array order and the **first** rule whose URL + method + headers + GraphQL conditions all match wins — only that rule is applied.
@@ -188,15 +198,27 @@ The two header templates are deliberately scoped to `localhost` and `127.0.0.1` 
 than every site, because a CORS-disabling rule left on `*` is a real security
 downgrade, not just a mocking convenience. Widen them only when you mean to.
 
+- **Redirect to localhost** uses the anchored regex `/^https?:\/\/[^/]+\/(api\/.*)/` and sends `…/api/…` on any host to `http://localhost:3000/$1`.
+- **CORS Unblock** also sets `Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS`. Credentialed requests need a specific origin plus `Access-Control-Allow-Credentials: true` on a host-scoped pattern.
+
 ### Import/Export
 Both live in the popup's **Data** tab.
-- Export downloads your rules as a JSON file, for backup or sharing
+- Export downloads your rules as a JSON file, for backup or sharing. Export omits hit counts and other runtime fields.
 - Import takes JSON pasted into the panel, with a "Keep existing rules" option
-  for merge-versus-replace. There is no file picker: a Chrome popup closes the
+  for merge-versus-replace. "Keep existing rules" appends after your rules and skips exact duplicates. Replace mode asks for confirmation. There is no file picker: a Chrome popup closes the
   moment an OS dialog takes focus, which would discard the import mid-flow
 - Every imported rule is validated, and invalid ones are skipped rather than
-  failing the whole batch — the result reports how many were skipped
+  failing the whole batch. Skipped or invalid rules are listed with reasons.
 - **Migration**: v1 rule files (no `type` field) load transparently — each rule is normalized to `type: 'mock'` with `response.mode: 'static'`
+
+### Popup & editor
+- After a Delete, Ctrl+Z or Alt+Z undoes it. Action toasts stay until dismissed.
+- **Move to top** is available in the rule list.
+- A new rule's method defaults to Any (`*`).
+- A blank response body is served empty.
+- A dirty in-page editor prompts before a page reload.
+- The context-menu entry is "New SpliceTap rule for this site…".
+- The popup footer counter is labelled "today".
 
 ### Capture — build a rule from a real response
 Mocking an endpoint normally starts with retyping its payload by hand, and patch
@@ -238,13 +260,17 @@ Open Chrome DevTools and select the **SpliceTap** panel. Because mocked/blocked/
 ### Architecture
 SpliceTap intercepts requests through **two independent mechanisms**, depending on rule type:
 
-- **MAIN-world fetch/XHR monkey-patching** (`content/injected.js`) handles `mock`, `block`, `delay`, and `redirect`. A content script declared with `"world": "MAIN"` and `run_at: "document_start"` injects the interceptor before any page script runs, in all frames. The interceptor wraps `window.fetch` and `XMLHttpRequest` so it can synthesize, reject, delay, or reroute requests entirely in-page — these requests never touch the network stack.
+- **MAIN-world fetch/XHR monkey-patching** (`content/injected.js`) handles `mock`, `block`, `delay`, and `redirect`. A content script declared with `"world": "MAIN"` and `run_at: "document_start"` injects the interceptor before any page script runs, in all frames, including about:blank, srcdoc, blob: and data: frames. The interceptor wraps `window.fetch` and `XMLHttpRequest` so it can synthesize, reject, delay, or reroute requests entirely in-page — these requests never touch the network stack.
 - **`chrome.declarativeNetRequest` dynamic rules** (`service_worker/dnr.js`) handle `headers` and `queryparams`. These are real network-layer modifications applied by the browser, so they affect traffic the in-page interceptor can't see (and correctly show up in the normal DevTools Network tab).
 
 Supporting pieces:
 - **Shared UMD modules** (`src/placeholders.js`, `src/matcher.js`, `src/patch.js`) contain the single canonical copy of the placeholder engine, matcher, and JSON Merge Patch logic. The same files load in the MAIN world (as plain scripts), in the service worker (via side-effect import + global), and under Jest (as CommonJS), so the logic never diverges.
 - **Service Worker** (`service_worker/background.js`): holds rules/settings/stats in memory, persists via `src/storage.js`, broadcasts state to all tabs on every change, syncs declarativeNetRequest rules, and keeps the in-memory interception-log ring buffer.
 - **Content relay** (`content/content.js`): an ISOLATED-world script that syncs rule state between the background worker and the page, and forwards interception-log messages from the interceptor to the background worker.
+
+### Frames and lifecycle
+- **Frames**: about:blank, srcdoc, blob: and data: frames, and about:blank popups, are intercepted. A request a data: frame makes while its own HTML is still loading may not be.
+- **After installing or updating SpliceTap, reload open tabs.** Until then a tab with no content script ignores rules, and the popup shows a "Reload this tab" banner. A tab left open across an extension update stops mocking.
 
 ### Permissions
 - `storage` — persist rules and settings locally
@@ -268,13 +294,26 @@ SpliceTap's single purpose is local API request mocking and modification for dev
 - **CSP Compliant**: No inline scripts in extension pages; DevTools panel logic lives in `devtools/panel.js`
 
 ### Known Limitations
+
+#### What each rule type reaches
+
+| Request source | mock / block / delay / redirect | headers / query params |
+|---|---|---|
+| Page and frame fetch / XHR | yes | yes |
+| Web Worker, SharedWorker, Service Worker fetch | no | yes |
+| EventSource | no | yes |
+| navigator.sendBeacon | no | no |
+| WebSocket | no | no |
+| `<script src>`, images, navigation | no | no |
+
 - Rules act on **fetch and XHR only** — not scripts, styles, images or navigations (see Matching & Precedence).
 - Requests fired by the page **before the first state sync** arrives pass through unmocked.
 - A **delayed XHR** fires `loadstart` when the request actually leaves, after the delay, rather than immediately. `fetch` is unaffected.
 - Rules created from the *CORS Unblock* or *Custom User-Agent* templates before 10 October 2026 used a pattern that missed local ports; recreate them from the template.
-- XHR **patch mode** re-fetches the original response via `fetch(url, { method, body, credentials: 'include' })` — an approximation of the original XHR request.
+- XHR **patch mode** re-fetches the original response via `fetch(url, { method, headers, body, credentials })` — an approximation of the original XHR request. `credentials` is `include` only when `xhr.withCredentials` is set, otherwise `same-origin`, and the request's headers are forwarded.
 - `headers` / `queryparams` (declarativeNetRequest) rules **cannot** use `match.headers` or `match.graphql` conditions — the network layer can't express them, so the editor rejects those combinations.
 - **Firefox** support is out of scope for this release.
+- Headers a page adds by patching `XMLHttpRequest.prototype.send` are not visible to `match.headers`.
 
 ## Data Management
 

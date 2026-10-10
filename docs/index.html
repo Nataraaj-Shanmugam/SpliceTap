@@ -1226,7 +1226,7 @@
                     <p>Mocked requests never hit the network, so the Network tab can't show them. SpliceTap has its
                         own panel that does.</p>
                     <ul>
-                        <li>Every applied rule, newest first</li>
+                        <li>Every mock, block, delay and redirect, newest first — plus chaos failures</li>
                         <li>Method, URL, rule name and type</li>
                         <li>Survives service-worker restarts</li>
                         <li>Sensitive query params redacted</li>
@@ -1246,9 +1246,37 @@
                     <ul>
                         <li>Everything in <code>chrome.storage</code></li>
                         <li>Zero analytics or tracking</li>
-                        <li>Response bodies never stored</li>
+                        <li>Response bodies stored only while you record (Capture), in session storage, cleared when the browser closes</li>
                         <li>Import/export stays on your disk</li>
                     </ul>
+                </div>
+
+                <div class="feature-card reveal">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                            <path d="M12 3v12" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <path d="M4 17v3h16v-3" />
+                        </svg>
+                    </div>
+                    <h3>Capture</h3>
+                    <p>Record real responses, then turn any of them into a mock or patch rule in one click.</p>
+                </div>
+
+                <div class="feature-card reveal">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                            <polyline points="16 3 21 3 21 8" />
+                            <line x1="4" y1="20" x2="21" y2="3" />
+                            <polyline points="21 16 21 21 16 21" />
+                            <line x1="15" y1="15" x2="21" y2="21" />
+                            <line x1="4" y1="4" x2="9" y2="9" />
+                        </svg>
+                    </div>
+                    <h3>Chaos mode</h3>
+                    <p>Fail a percentage of requests at random to test your error handling.</p>
                 </div>
             </div>
         </div>
@@ -1284,7 +1312,7 @@
                 </div>
                 <div class="workflow-step reveal">
                     <div class="step-number">4</div>
-                    <h3>Save &amp; Reload</h3>
+                    <h3>Save — it applies to the next matching request</h3>
                     <p>The rule takes effect immediately on matching requests. Watch it fire in the DevTools panel.
                     </p>
                 </div>
@@ -1390,7 +1418,7 @@
                 </div>
                 <div class="tech-item reveal">
                     <h4>Jest</h4>
-                    <p>59 unit tests</p>
+                    <p>Unit and headless-Chrome tested</p>
                 </div>
                 <div class="tech-item reveal">
                     <h4>RFC 7386</h4>
@@ -1406,7 +1434,7 @@
             <div class="section-header reveal">
                 <span class="section-label">Installation</span>
                 <h2>Get Started</h2>
-                <p>SpliceTap is pending review on the Chrome Web Store — until it lands, install it from source in
+                <p>SpliceTap is being prepared for Chrome Web Store review — until it lands, install it from source in
                     under a minute</p>
             </div>
 
@@ -1422,7 +1450,7 @@
                         <li>Click <strong>Load unpacked</strong> and select the project folder</li>
                         <li>Pin the SpliceTap icon to your toolbar</li>
                     </ol>
-                    <p class="install-note">Requires Chrome or Edge 120+.</p>
+                    <p class="install-note">Requires Chrome 120+ (Edge, Brave and other Chromium browsers are expected to work but are not yet tested).</p>
                 </div>
 
                 <div class="install-divider"></div>
@@ -1430,7 +1458,6 @@
                 <div class="install-main">
                     <h3>Chrome Web Store</h3>
                     <ol>
-                        <li>Listing is <strong>coming soon</strong> — the extension is being prepared for review</li>
                         <li>Watch the repository to hear when it's live</li>
                         <li>Install with one click, no developer mode needed</li>
                         <li>Updates arrive automatically</li>
