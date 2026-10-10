@@ -333,15 +333,29 @@ describe('deep: every template does what its label says', () => {
         expect(r.body.real).toBe(true);
     });
 
-    test('Redirect to localhost rewrites an /api/ call to localhost:3000 with the path kept', async () => {
-        // Nothing listens on :3000 in the test, so assert on the rewrite itself:
-        // the request must leave for localhost:3000/api/... — observed as a
-        // network failure rather than our server answering.
-        await withTemplate('redirectLocalhost');
+    test('Redirect to localhost sends a cross-host absolute /api/ call to the local server, path kept', async () => {
+        // PER-9: the template exists to point a production API at a local
+        // server, i.e. an ABSOLUTE URL on another host. Its regex used to be
+        // substituted inside the source URL, which kept the source's origin in
+        // front of the destination ("https://hosthttp//localhost:3000/...").
+        // The schema group anchored the template at
+        // /^https?:\/\/[^/]+\/(api\/.*)/; that change is not in this branch,
+        // so the pattern is set here directly. Nothing listens on :3000 in
+        // the test, so the destination is this test server under its other
+        // name, and the server's log shows where the request landed.
+        const local = h.baseUrl.replace('127.0.0.1', 'localhost');
+        await withTemplate('redirectLocalhost', {
+            match: { url: '/^https?:\\/\\/[^/]+\\/(api\\/.*)/', method: '*' },
+            redirect: { destination: h.baseUrl + '/$1' }
+        });
         h.requests.length = 0;
-        const r = await pageFetch(page, '/api/users/7');
-        expect(h.requests.some((x) => x.path === '/api/users/7')).toBe(false);
-        expect(r.ok).toBe(false);
+
+        const r = await pageFetch(page, local + '/api/users/7?x=1');
+
+        expect(r.ok).toBe(true);
+        expect(r.body.path).toBe('/api/users/7');
+        expect(h.requests.filter((x) => x.path.startsWith('/api/')).map((x) => x.path + x.query)).toEqual(['/api/users/7?x=1']);
+        expect(r.url).toBe(h.baseUrl + '/api/users/7?x=1');
     });
 
     test('CORS Unblock lets a page call a localhost API on a port', async () => {

@@ -134,18 +134,38 @@ describe('features in a real browser', () => {
     test('a page script cannot read the rule set off the content-script channel', async () => {
         // Before SEC-2 the channel name was fixed, so any page could listen
         // and receive every mock body and internal URL pattern.
+        //
+        // PER-1: the nonce itself leaked. When the interceptor ran before the
+        // relay, the relay's "ready" listener stayed armed, so a page that
+        // replayed "ready" after load had the nonce re-broadcast to its own
+        // bootstrap listener, and could then listen on the keyed channel.
         await h.saveRule(mockRule({ name: 'SECRET-RULE-NAME' }));
         page = await h.openPage();
 
-        const leaked = await page.evaluate(() => new Promise((resolve) => {
-            const seen = [];
-            for (const name of ['__splicetap_sync_state__', '__splicetap_log__', '__splicetap_capture__']) {
-                document.addEventListener(name, (e) => seen.push(JSON.stringify(e.detail)), true);
-            }
-            fetch('/api/target').then(() => setTimeout(() => resolve(seen), 300));
-        }));
+        await page.evaluate(() => {
+            window.__leak = { nonce: null, seen: [] };
+            const record = (e) => window.__leak.seen.push(JSON.stringify(e.detail));
+            const channels = ['__splicetap_sync_state__', '__splicetap_log__', '__splicetap_capture__'];
+            for (const name of channels) document.addEventListener(name, record, true);
 
-        expect(leaked.join('')).not.toMatch(/SECRET-RULE-NAME/);
+            document.addEventListener('__splicetap_bootstrap__', (e) => {
+                window.__leak.nonce = (e.detail && e.detail.nonce) || null;
+            }, true);
+            document.dispatchEvent(new CustomEvent('__splicetap_ready__'));
+            if (window.__leak.nonce) {
+                for (const name of channels) document.addEventListener(name + ':' + window.__leak.nonce, record, true);
+            }
+        });
+
+        // A rule change broadcasts state to the tab; a request logs.
+        await h.saveRule(mockRule({ id: 'm2', name: 'SECRET-RULE-NAME-2', match: { url: '*/api/other*', method: 'GET' } }));
+        await sleep(300);
+        await page.evaluate(() => fetch('/api/target'));
+        await sleep(300);
+
+        const leak = await page.evaluate(() => window.__leak);
+        expect(leak.nonce).toBeNull();
+        expect(leak.seen.join('')).not.toMatch(/SECRET-RULE-NAME/);
     });
 
     test('a page script cannot inject rules by forging the channel', async () => {

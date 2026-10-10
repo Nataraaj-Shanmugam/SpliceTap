@@ -9,7 +9,8 @@
  *  src/matcher.js      -> window.SpliceTapMatcher,
  *  src/patch.js        -> window.SpliceTapPatch), which must be loaded
  * BEFORE this script (see manifest content_scripts order, G3). This file
- * no longer contains any local copy of that logic.
+ * no longer contains any local copy of that logic. It takes those three
+ * globals into its closure on load and deletes them (PER-2).
  *
  * State transport note (P-13 / S-4 / C-5 / Q-14): state sync from
  * content/content.js (ISOLATED world) arrives via a namespaced CustomEvent
@@ -18,6 +19,37 @@
  */
 
 (function () {
+    // PER-2: take the shared modules into this closure, then remove their
+    // globals. The page shares this realm, and these functions receive every
+    // rule: the request path used to look them up on `window` per request, so
+    // a page that wrapped window.SpliceTapMatcher.findMatchingRule received
+    // the whole rule set, mock bodies included, on its next fetch. This runs
+    // at document_start, before any page script, and before the double-
+    // injection guard so a second load's globals are removed as well.
+    const sharedMatcher = window.SpliceTapMatcher;
+    const sharedPlaceholders = window.SpliceTapPlaceholders;
+    const sharedPatch = window.SpliceTapPatch;
+    try { delete window.SpliceTapMatcher; } catch (e) { /* non-configurable: leave it */ }
+    try { delete window.SpliceTapPlaceholders; } catch (e) { /* non-configurable: leave it */ }
+    try { delete window.SpliceTapPatch; } catch (e) { /* non-configurable: leave it */ }
+
+    const findMatchingRule = sharedMatcher && sharedMatcher.findMatchingRule;
+    const matchUrl = sharedMatcher && sharedMatcher.matchUrl;
+    const isCatastrophicRegex = sharedMatcher && sharedMatcher.isCatastrophicRegex;
+    const processDynamicResponse = sharedPlaceholders && sharedPlaceholders.processDynamicResponse;
+    const jsonMergePatch = sharedPatch && sharedPatch.jsonMergePatch;
+
+    // PER-2: the built-ins this file applies to rule data, captured for the
+    // same reason. A page that later replaced JSON.stringify or Array.isArray
+    // would otherwise see each rule this file handed to them.
+    const jsonParse = JSON.parse;
+    const jsonStringify = JSON.stringify;
+    const objectAssign = Object.assign;
+    const objectKeys = Object.keys;
+    const isArray = Array.isArray;
+    const NativeURL = URL;
+    const NativeRequest = Request;
+
     // Protect against double injection. Non-enumerable so a page scanning
     // `Object.keys(window)` / `for...in` doesn't trivially discover it (S-9).
     if (window.__SPLICETAP_INITIALIZED__) return;
@@ -51,6 +83,12 @@
     let SYNC_STATE_EVENT = null;
     let LOG_INTERCEPTION_EVENT = null;
     let CAPTURE_EVENT = null;
+    let PING_EVENT = null;
+    let DEACTIVATE_EVENT = null;
+
+    // PER-32: set once the relay reports that its extension is gone (reloaded,
+    // updated or removed). Sticky: nothing can bring this frame's relay back.
+    let orphaned = false;
 
     // Store originals
     const originalFetch = window.fetch;
@@ -150,9 +188,10 @@
     // manifest's MAIN-world content_scripts array). If they're missing, log
     // once and leave fetch/XHR unpatched rather than throwing.
     const spliceTapGlobalsReady = !!(
-        window.SpliceTapPlaceholders && typeof window.SpliceTapPlaceholders.processDynamicResponse === 'function' &&
-        window.SpliceTapMatcher && typeof window.SpliceTapMatcher.findMatchingRule === 'function' &&
-        window.SpliceTapPatch && typeof window.SpliceTapPatch.jsonMergePatch === 'function'
+        typeof processDynamicResponse === 'function' &&
+        typeof findMatchingRule === 'function' &&
+        typeof matchUrl === 'function' &&
+        typeof jsonMergePatch === 'function'
     );
 
     if (!spliceTapGlobalsReady) {
@@ -188,7 +227,7 @@
     function sanitizeUrlForLog(rawUrl) {
         let safeUrl = rawUrl;
         try {
-            const parsed = new URL(rawUrl, window.location.href);
+            const parsed = new NativeURL(rawUrl, baseUrl());
             parsed.searchParams.forEach((value, key) => {
                 if (SENSITIVE_QUERY_KEY_RE.test(key)) {
                     parsed.searchParams.set(key, '[redacted]');
@@ -208,6 +247,101 @@
             safeUrl = safeUrl.slice(0, MAX_LOGGED_URL_LENGTH) + '…[truncated]';
         }
         return safeUrl;
+    }
+
+    // PER-8 / PER-20: the base a relative request URL resolves against — the
+    // document's base URL, as fetch and XHR use. It equals location.href on an
+    // ordinary page, and in an about:blank or srcdoc frame it is the creator's
+    // URL, where location.href ('about:blank') cannot resolve anything.
+    function baseUrl() {
+        return document.baseURI || window.location.href;
+    }
+
+    // PER-8: rules see the absolute URL, like DNR-backed rules and the
+    // browser's own network log. Unparseable input is returned unchanged.
+    function resolveUrl(raw) {
+        try {
+            return new NativeURL(raw, baseUrl()).href;
+        } catch (e) {
+            return raw;
+        }
+    }
+
+    /**
+     * PER-8: the first rule matching the request's absolute URL — or, so
+     * patterns written against the relative form ('/api/x*', /^\/api\//) keep
+     * working, the URL as the page wrote it. Matching only the raw string made
+     * a host-scoped or full-URL pattern miss every relative call, which is
+     * how most single-page apps call their own API.
+     *
+     * Two scans keep findMatchingRule's first-match order exactly: the winner
+     * is whichever of the two hits comes first in the rule list.
+     */
+    function findRule(request, rawUrl) {
+        const rules = tmState.rules;
+        const hit = findMatchingRule(rules, request);
+        if (rawUrl === request.url) return hit;
+
+        const rawHit = findMatchingRule(rules, {
+            url: rawUrl, method: request.method, headers: request.headers, bodyText: request.bodyText
+        });
+        if (!hit || !rawHit || hit === rawHit) return hit || rawHit;
+        for (let i = 0; i < rules.length; i++) {
+            if (rules[i] === hit) return hit;
+            if (rules[i] === rawHit) return rawHit;
+        }
+        return hit;
+    }
+
+    /**
+     * PER-10: is there an enabled rule above `target` whose URL and method
+     * match, but whose header or GraphQL condition can only be judged once
+     * the request's headers and body exist? XHR open() cannot tell whether
+     * such a rule wins, so it leaves the decision to send().
+     */
+    function conditionalRuleAhead(target, absUrl, rawUrl, method) {
+        const rules = tmState.rules;
+        for (let i = 0; i < rules.length && rules[i] !== target; i++) {
+            const rule = rules[i];
+            if (!rule || !rule.enabled) continue;
+            const match = rule.match || {};
+            const conditional = (match.headers && objectKeys(match.headers).length > 0) ||
+                (match.graphql && match.graphql.operationName);
+            if (!conditional) continue;
+            const ruleMethod = String(match.method || '*').toUpperCase();
+            if (ruleMethod !== '*' && ruleMethod !== method) continue;
+            if (matchUrl(absUrl, match.url) || matchUrl(rawUrl, match.url)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * PER-32: confirm the relay's extension still exists before applying a
+     * rule. After a reload, update or uninstall the relay in an open tab is
+     * cut off, but this frame would keep serving its last rules. The relay
+     * answers this synchronously — with a deactivate event when the runtime
+     * is gone — so the request about to be mocked passes through instead.
+     */
+    function relayAlive() {
+        if (orphaned) return false;
+        if (PING_EVENT) document.dispatchEvent(new CustomEvent(PING_EVENT));
+        return !orphaned;
+    }
+
+    // PER-12: a header value must be a ByteString. A rule name with any
+    // character above U+00FF made `new Headers()` throw, and the fallback
+    // then dropped every header the mock set. Printable ASCII is sent as is;
+    // anything else is percent-encoded (decodeURIComponent restores it).
+    const PRINTABLE_ASCII = /^[\x20-\x7E]*$/;
+    function ruleMarker(name) {
+        const value = name === undefined || name === null ? '' : String(name);
+        if (PRINTABLE_ASCII.test(value)) return value;
+        try {
+            return encodeURIComponent(value);
+        } catch (e) {
+            // A lone surrogate cannot be encoded.
+            return value.replace(/[^\x20-\x7E]/g, '?');
+        }
     }
 
     // Helper: an AbortError matching what native fetch throws (Q-13).
@@ -269,7 +403,11 @@
     // that supports capture substitution here (there is no separate wildcard
     // branch to mis-order relative to it — a wildcard pattern simply falls
     // through to the plain destination, same as a substring pattern).
-    function computeRedirectUrl(sourceUrl, rule) {
+    //
+    // `sourceUrl` is the absolute request URL and `rawUrl` the URL as the page
+    // wrote it (PER-8): the regex is tried against the absolute form first,
+    // then the raw one, mirroring how the rule was matched.
+    function computeRedirectUrl(sourceUrl, rule, rawUrl) {
         const destination = (rule.redirect && rule.redirect.destination) || sourceUrl; // Q-5: missing rule.redirect
         const pattern = rule.match && rule.match.url;
         if (typeof pattern === 'string' && pattern.length >= 2 && pattern.startsWith('/') && pattern.endsWith('/')) {
@@ -279,11 +417,24 @@
                 // matcher's ReDoS guard entirely — so a pattern the matcher
                 // refused to run could still hang the page here. Reuse the same
                 // check rather than trusting that matchUrl already vetted it.
-                const matcher = window.SpliceTapMatcher;
-                if (matcher && matcher.isCatastrophicRegex && matcher.isCatastrophicRegex(regexBody)) {
+                if (isCatastrophicRegex && isCatastrophicRegex(regexBody)) {
                     return destination;
                 }
-                return sourceUrl.replace(new RegExp(regexBody, 'i'), destination);
+                // PER-9: the destination replaces the whole URL, with $1..$9
+                // taken from the match. This used String.replace, which kept
+                // the unmatched prefix: an absolute URL against /\/api\/(.*)/
+                // became "https://hosthttp://localhost:3000/...".
+                const regex = new RegExp(regexBody, 'i');
+                const match = regex.exec(sourceUrl) ||
+                    (rawUrl !== undefined && rawUrl !== sourceUrl ? regex.exec(rawUrl) : null);
+                if (!match) return destination;
+                return destination.replace(/\$(\d)/g, (ref, digit) => {
+                    const n = Number(digit);
+                    // $0 and references past the last group stay literal, as
+                    // they do in String.replace.
+                    if (n === 0 || n >= match.length) return ref;
+                    return match[n] === undefined ? '' : match[n];
+                });
             } catch (e) {
                 return destination;
             }
@@ -338,6 +489,29 @@
         return null;
     }
 
+    // PER-11: everything a Request carries, as a fetch init for a new URL.
+    // The body is read into a buffer, since a stream body cannot be uploaded
+    // over HTTP/1.1. 'navigate' is not a mode an init may set.
+    async function requestInit(request) {
+        const init = {
+            method: request.method,
+            headers: request.headers,
+            credentials: request.credentials,
+            cache: request.cache,
+            redirect: request.redirect,
+            referrer: request.referrer,
+            referrerPolicy: request.referrerPolicy,
+            integrity: request.integrity,
+            keepalive: request.keepalive,
+            signal: request.signal
+        };
+        if (request.mode !== 'navigate') init.mode = request.mode;
+        if (request.method !== 'GET' && request.method !== 'HEAD' && request.body !== null) {
+            init.body = await request.clone().arrayBuffer();
+        }
+        return init;
+    }
+
     // --- Response construction helpers (Q-2, Q-24, Q-28) ---
 
     // Statuses the Fetch spec forbids from carrying a body at all.
@@ -345,18 +519,36 @@
 
     // `new Headers(...)` throws on an invalid header name/value (Q-24, e.g. a
     // typo'd "Content Type" instead of "Content-Type"). Never let a bad rule
-    // turn a mock into a network-level failure — fall back to a sane default.
+    // turn a mock into a network-level failure.
+    //
+    // PER-12: drop only the offending header. The fallback used to replace
+    // every header with a bare JSON Content-Type, so one value above U+00FF
+    // (an en dash in a rule name, "café" in a header) cost the mock its
+    // status-relevant headers, Content-Type included.
     function buildHeadersSafe(headersInit) {
         try {
             return new Headers(headersInit);
         } catch (e) {
-            log('Invalid response header name/value in rule, falling back to default headers', e);
+            // Fall through and add the headers one at a time.
+        }
+        const headers = new Headers();
+        if (!headersInit || typeof headersInit !== 'object') return headers;
+        const names = objectKeys(headersInit);
+        let droppedContentType = false;
+        for (let i = 0; i < names.length; i++) {
             try {
-                return new Headers({ 'Content-Type': 'application/json' });
-            } catch (e2) {
-                return new Headers();
+                headers.append(names[i], headersInit[names[i]]);
+            } catch (e) {
+                log(`Dropping invalid response header "${names[i]}" from rule`, e);
+                if (String(names[i]).toLowerCase() === 'content-type') droppedContentType = true;
             }
         }
+        // Keep the mock's JSON default rather than letting Response() pick
+        // text/plain when the rule's own Content-Type was the bad one.
+        if (droppedContentType && !headers.has('content-type')) {
+            headers.set('Content-Type', 'application/json');
+        }
+        return headers;
     }
 
     // Build a fetch Response for an arbitrary mock/patch status, including
@@ -374,8 +566,12 @@
      * that Headers joined into "application/json, text/html".
      */
     function withDefaultContentType(userHeaders) {
-        const headers = Object.assign({}, userHeaders || {});
-        const hasContentType = Object.keys(headers).some((name) => name.toLowerCase() === 'content-type');
+        const headers = objectAssign({}, userHeaders || {});
+        const names = objectKeys(headers);
+        let hasContentType = false;
+        for (let i = 0; i < names.length; i++) {
+            if (names[i].toLowerCase() === 'content-type') hasContentType = true;
+        }
         if (!hasContentType) headers['Content-Type'] = 'application/json';
         return headers;
     }
@@ -411,10 +607,10 @@
         return response;
     }
 
+    const EMPTY_HEADERS = Object.freeze({});
+
     // --- INTERCEPTOR: FETCH ---
     if (spliceTapGlobalsReady) {
-        const EMPTY_HEADERS = Object.freeze({});
-
         // Sync outer wrapper: P-1/P-2. Bails to the real fetch, with zero
         // extra allocation, before any promise/array/object is created, for
         // the common "installed but nothing to do" case. Chaos mode has no
@@ -428,12 +624,15 @@
 
         async function handleInterceptedFetch(...args) {
             const [resource, config] = args;
-            const isRequestObj = resource instanceof Request;
-            const isURLObj = typeof URL !== 'undefined' && resource instanceof URL;
+            const isRequestObj = resource instanceof NativeRequest;
+            const isURLObj = resource instanceof NativeURL;
             // Q-6: fetch(new URL(...)) previously left `url` as a non-string
             // object, breaking matchUrl's .toLowerCase() and later crashing
             // logInterception's postMessage/CustomEvent with a DataCloneError.
-            const url = isRequestObj ? resource.url : (isURLObj ? resource.href : String(resource));
+            const rawUrl = isRequestObj ? resource.url : (isURLObj ? resource.href : String(resource));
+            // PER-8: match, redirect and fill {{request.url}} with the
+            // absolute URL; rawUrl is the fallback for relative patterns.
+            const url = resolveUrl(rawUrl);
             const method = ((config && config.method) || (isRequestObj && resource.method) || 'GET').toUpperCase();
 
             // Q-13: honor AbortController/signal on the mock/patch paths (the
@@ -445,7 +644,7 @@
 
             // 1. Chaos Mode Check
             if (tmState.settings?.chaosMode?.enabled) {
-                if (getSecureRandom() < (tmState.settings.chaosMode.failureRate || 0.1)) {
+                if (getSecureRandom() < (tmState.settings.chaosMode.failureRate || 0.1) && relayAlive()) {
                     log(`Chaos Mode: Blocked ${url}`);
                     return Promise.reject(new TypeError('Failed to fetch (SpliceTap Chaos Mode)'));
                 }
@@ -468,8 +667,8 @@
             }
 
             // 4. Find matching rule
-            const rule = window.SpliceTapMatcher.findMatchingRule(tmState.rules, { url, method, headers, bodyText });
-            if (!rule) {
+            const rule = findRule({ url, method, headers, bodyText }, rawUrl);
+            if (!rule || !relayAlive()) {
                 // Nothing to apply — but this is exactly the response worth
                 // capturing, since a rule for it does not exist yet.
                 if (isCaptureArmed()) {
@@ -497,11 +696,16 @@
             }
 
             if (effectiveType === 'redirect') {
-                const newUrl = computeRedirectUrl(url, rule);
+                const newUrl = computeRedirectUrl(url, rule, rawUrl);
                 log(`Redirecting ${method} ${url} -> ${newUrl} (Rule: ${rule.name})`);
                 logInterception(rule, url, method, 302);
-                const newResource = isRequestObj ? new Request(newUrl, resource) : newUrl;
-                return originalFetch.call(this, newResource, config);
+                if (!isRequestObj) return originalFetch.call(this, newUrl, config);
+                // PER-11: `new Request(newUrl, resource)` carried the body over
+                // as a stream, and Chrome refuses a streaming upload on
+                // HTTP/1.1 — every redirected fetch(Request) with a body failed
+                // with "Failed to fetch". Rebuild the init with a buffered body.
+                const init = await requestInit(resource);
+                return originalFetch.call(this, newUrl, config ? objectAssign(init, config) : init);
             }
 
             // effectiveType === 'mock'
@@ -518,8 +722,8 @@
                     return real;
                 }
 
-                const patchPayload = window.SpliceTapPlaceholders.processDynamicResponse(cfg.patch, { url, method });
-                const merged = window.SpliceTapPatch.jsonMergePatch(data, patchPayload);
+                const patchPayload = processDynamicResponse(cfg.patch, { url, method });
+                const merged = jsonMergePatch(data, patchPayload);
 
                 if (cfg.delay > 0) {
                     await sleepAbortable(cfg.delay, signal);
@@ -531,12 +735,12 @@
                 const mergedHeaders = {};
                 real.headers.forEach((value, key) => { mergedHeaders[key] = value; });
                 mergedHeaders['x-splicetap'] = 'true';
-                mergedHeaders['x-splicetap-rule'] = rule.name;
+                mergedHeaders['x-splicetap-rule'] = ruleMarker(rule.name);
 
                 log(`Patched ${method} ${url} (Rule: ${rule.name})`);
                 logInterception(rule, url, method, real.status);
 
-                const patchedResponse = buildMockResponse(JSON.stringify(merged), real.status, real.statusText, mergedHeaders);
+                const patchedResponse = buildMockResponse(jsonStringify(merged), real.status, real.statusText, mergedHeaders);
                 // Q-28: a freshly constructed Response can't carry these, but
                 // patch mode is "the real response, plus a merge" — best-effort
                 // restore them from the real response.
@@ -560,12 +764,12 @@
                 return Promise.reject(abortError());
             }
 
-            const body = window.SpliceTapPlaceholders.processDynamicResponse(cfg.body, { url, method });
-            const responseBody = typeof body === 'string' ? body : JSON.stringify(body);
+            const body = processDynamicResponse(cfg.body, { url, method });
+            const responseBody = typeof body === 'string' ? body : jsonStringify(body);
 
             const headerObj = withDefaultContentType(cfg.headers);
             headerObj['x-splicetap'] = 'true';
-            headerObj['x-splicetap-rule'] = rule.name;
+            headerObj['x-splicetap-rule'] = ruleMarker(rule.name);
 
             logInterception(rule, url, method, cfg.statusCode);
 
@@ -575,7 +779,7 @@
             // links against it saw "" from a mock. Patch mode already restores
             // this (Q-28); static mocks now match.
             try {
-                Object.defineProperty(mocked, 'url', { value: new URL(url, window.location.href).href, configurable: true });
+                Object.defineProperty(mocked, 'url', { value: new NativeURL(url).href, configurable: true });
             } catch (e) {
                 // Environment won't allow the override — leave it empty.
             }
@@ -598,8 +802,14 @@
 
             // Request tracking
             let requestUrl = '';
+            let requestAbsUrl = '';  // PER-8: requestUrl resolved against the document
             let requestMethod = 'GET';
             let requestHeaders = {};
+            // PER-10: what open() and setRequestHeader() were given, in order,
+            // so send() can re-open for a redirect it could only decide there.
+            let openMethod = 'GET';
+            let openRest = [];
+            let requestHeaderList = [];
             let requestIsAsync = true; // Q-12: sync XHR (open(..., false)) needs different delivery
             let isMocked = false;      // true while WE own the response lifecycle for this request
             let redirectHandled = false; // true once open() rewrote the URL for a redirect rule
@@ -622,7 +832,7 @@
             function buildMockHeaders(userHeaders, rule) {
                 const merged = withDefaultContentType(userHeaders);
                 merged['x-splicetap'] = 'true';
-                merged['x-splicetap-rule'] = rule.name;
+                merged['x-splicetap-rule'] = ruleMarker(rule.name); // PER-12: same value as fetch
                 return merged;
             }
 
@@ -680,7 +890,10 @@
                 xhr.dispatchEvent(new ProgressEvent('loadstart'));
             }
 
-            function finishMock(responseText, status, statusText, headers) {
+            // `rawBody` (optional): the response's own bytes, for a real
+            // response delivered unchanged (PER-13), so arraybuffer and blob
+            // reads see them rather than a UTF-8 re-encoding of the text.
+            function finishMock(responseText, status, statusText, headers, rawBody) {
                 if (isAborted) return;
                 try {
                     advanceTo(3, status, statusText, headers);
@@ -688,7 +901,7 @@
                     // left it empty. (fetch mocks already set response.url.)
                     try {
                         Object.defineProperty(xhr, 'responseURL', {
-                            value: new URL(requestUrl, window.location.href).href,
+                            value: new NativeURL(requestAbsUrl).href,
                             configurable: true
                         });
                     } catch (e) {
@@ -701,10 +914,12 @@
                     let responseValue = responseText;
                     if (responseType === 'json') {
                         try {
-                            responseValue = responseText === '' ? null : JSON.parse(responseText);
+                            responseValue = responseText === '' ? null : jsonParse(responseText);
                         } catch (e) {
                             responseValue = null;
                         }
+                    } else if (responseType === 'arraybuffer' && rawBody) {
+                        responseValue = rawBody;
                     } else if (responseType === 'arraybuffer' && typeof TextEncoder !== 'undefined') {
                         try {
                             responseValue = new TextEncoder().encode(responseText).buffer;
@@ -713,7 +928,7 @@
                         }
                     } else if (responseType === 'blob' && typeof Blob !== 'undefined') {
                         try {
-                            responseValue = new Blob([responseText]);
+                            responseValue = new Blob([rawBody || responseText]);
                         } catch (e) {
                             // keep text fallback
                         }
@@ -775,8 +990,8 @@
             // right before delivery instead.
             function runStaticMockFlow(rule) {
                 const cfg = getResponseConfig(rule);
-                const bodyContent = window.SpliceTapPlaceholders.processDynamicResponse(cfg.body, { url: requestUrl, method: requestMethod });
-                const responseText = typeof bodyContent === 'string' ? bodyContent : JSON.stringify(bodyContent);
+                const bodyContent = processDynamicResponse(cfg.body, { url: requestAbsUrl, method: requestMethod });
+                const responseText = typeof bodyContent === 'string' ? bodyContent : jsonStringify(bodyContent);
                 const status = cfg.statusCode;
                 const statusText = cfg.statusText;
                 const totalBytes = responseText.length;
@@ -847,8 +1062,12 @@
             // Override open
             xhr.open = function (method, url, ...args) {
                 requestMethod = String(method).toUpperCase();
-                requestUrl = url instanceof URL ? url.href : String(url);
+                requestUrl = url instanceof NativeURL ? url.href : String(url);
+                requestAbsUrl = resolveUrl(requestUrl);
                 requestHeaders = {};
+                openMethod = method;
+                openRest = args;
+                requestHeaderList = [];
                 isMocked = false;
                 redirectHandled = false;
                 mockResponseHeaders = null;
@@ -857,33 +1076,37 @@
 
                 let finalUrl = url;
 
-                // Redirect-only pre-match (url+method only) so we can rewrite the
+                // Redirect pre-match (url+method only) so we can rewrite the
                 // URL passed to originalOpen. Request headers do not exist yet at
                 // open() — setRequestHeader() runs after it — so a header or
                 // GraphQL condition cannot be evaluated at this point.
                 //
-                // CQ-4: this previously claimed such rules were "invalid (G5
-                // enforces this)". Nothing enforced it — the options form refused
-                // the combination, but import and hand-editing did not, so a
-                // redirect rule carrying a header condition was honoured by fetch
-                // and silently ignored here. background.js validateRule() now
-                // rejects it, which makes url+method genuinely sufficient.
+                // CQ-4: background.js validateRule() rejects a redirect rule
+                // carrying a header condition, so url+method is sufficient to
+                // decide whether a redirect rule matches.
+                //
+                // PER-10: but it is not sufficient to decide that the redirect
+                // is the FIRST match. This used to scan redirect rules only, so
+                // a mock or block above a broader redirect lost to it on XHR
+                // while winning on fetch. It now runs the normal first-match
+                // over every rule type and redirects only when the winner is a
+                // redirect. If a rule above it has a header or GraphQL
+                // condition, the decision waits for send(), which can judge it.
                 // P-10c: skip the scan entirely when no enabled redirect rule exists.
                 if (tmState.active && tmState._hasRedirectRules) {
-                    const redirectRule = tmState.rules.find((rule) =>
-                        rule && rule.enabled &&
-                        (rule.type || 'mock') === 'redirect' &&
-                        window.SpliceTapMatcher.matchUrl(requestUrl, rule.match && rule.match.url) &&
-                        (((rule.match && rule.match.method) || '*').toUpperCase() === '*' ||
-                            ((rule.match && rule.match.method) || '').toUpperCase() === requestMethod)
-                    );
+                    const first = findRule({
+                        url: requestAbsUrl, method: requestMethod, headers: EMPTY_HEADERS, bodyText: null
+                    }, requestUrl);
 
-                    if (redirectRule) {
-                        const newUrl = computeRedirectUrl(requestUrl, redirectRule);
-                        log(`Redirecting XHR ${requestMethod} ${requestUrl} -> ${newUrl} (Rule: ${redirectRule.name})`);
-                        logInterception(redirectRule, requestUrl, requestMethod, 302);
+                    if (first && (first.type || 'mock') === 'redirect' &&
+                        !conditionalRuleAhead(first, requestAbsUrl, requestUrl, requestMethod) &&
+                        relayAlive()) {
+                        const newUrl = computeRedirectUrl(requestAbsUrl, first, requestUrl);
+                        log(`Redirecting XHR ${requestMethod} ${requestUrl} -> ${newUrl} (Rule: ${first.name})`);
+                        logInterception(first, requestAbsUrl, requestMethod, 302);
                         finalUrl = newUrl;
                         requestUrl = newUrl;
+                        requestAbsUrl = resolveUrl(newUrl);
                         redirectHandled = true;
                     }
                 }
@@ -957,7 +1180,8 @@
 
                 // Chaos Mode check (moved from open())
                 if (tmState.settings?.chaosMode?.enabled &&
-                    getSecureRandom() < (tmState.settings.chaosMode.failureRate || 0.1)) {
+                    getSecureRandom() < (tmState.settings.chaosMode.failureRate || 0.1) &&
+                    relayAlive()) {
                     log(`Chaos Mode: Blocked XHR ${requestUrl}`);
                     takeOver();
 
@@ -990,14 +1214,14 @@
                             ? (typeof body.get('operations') === 'string' ? body.get('operations') : null)
                             : null;
 
-                const rule = window.SpliceTapMatcher.findMatchingRule(tmState.rules, {
-                    url: requestUrl,
+                const rule = findRule({
+                    url: requestAbsUrl,
                     method: requestMethod,
                     headers: requestHeaders,
                     bodyText
-                });
+                }, requestUrl);
 
-                if (!rule) {
+                if (!rule || !relayAlive()) {
                     // No rule applies, so this response is a capture candidate.
                     // XHR has no clone(), but reading responseText after the
                     // fact is non-destructive — unlike a fetch body stream.
@@ -1039,6 +1263,25 @@
 
                 const effectiveType = rule.type || 'mock';
 
+                // PER-10: open() left this redirect undecided because a
+                // conditional rule above it needed the headers or body (or the
+                // rules changed in between). Re-opening an OPENED XHR fires no
+                // event and keeps withCredentials, timeout and responseType;
+                // it does clear the request headers, so they are replayed.
+                if (effectiveType === 'redirect') {
+                    const newUrl = computeRedirectUrl(requestAbsUrl, rule, requestUrl);
+                    log(`Redirecting XHR ${requestMethod} ${requestUrl} -> ${newUrl} (Rule: ${rule.name})`);
+                    logInterception(rule, requestAbsUrl, requestMethod, 302);
+                    originalOpen.apply(xhr, [openMethod, newUrl, ...openRest]);
+                    for (let i = 0; i < requestHeaderList.length; i++) {
+                        originalSetRequestHeader.apply(xhr, requestHeaderList[i]);
+                    }
+                    requestUrl = newUrl;
+                    requestAbsUrl = resolveUrl(newUrl);
+                    redirectHandled = true;
+                    return originalSend.apply(this, arguments);
+                }
+
                 // Q-12: synchronous XHR (open(..., false)) blocks the calling
                 // thread inside this very call — none of the setTimeout-based
                 // delivery below can run before the caller reads
@@ -1061,8 +1304,8 @@
 
                     if (effectiveType === 'mock' && ((rule.response && rule.response.mode) || 'static') === 'static') {
                         const cfg = getResponseConfig(rule);
-                        const bodyContent = window.SpliceTapPlaceholders.processDynamicResponse(cfg.body, { url: requestUrl, method: requestMethod });
-                        const responseText = typeof bodyContent === 'string' ? bodyContent : JSON.stringify(bodyContent);
+                        const bodyContent = processDynamicResponse(cfg.body, { url: requestAbsUrl, method: requestMethod });
+                        const responseText = typeof bodyContent === 'string' ? bodyContent : jsonStringify(bodyContent);
                         takeOver();
                         logInterception(rule, requestUrl, requestMethod, cfg.statusCode);
                         finishMock(responseText, cfg.statusCode, cfg.statusText, buildMockHeaders(cfg.headers, rule));
@@ -1115,6 +1358,13 @@
                         takeOver();
 
                         (async () => {
+                            // PER-13: the request has been sent once, below,
+                            // and is never sent again. Every failure used to
+                            // fall back to originalSend(), so a non-JSON or
+                            // empty response (text, a 204) reached the server
+                            // twice: a duplicate write against a real backend.
+                            let real;
+                            let rawBody;
                             try {
                                 // S-7/Q-18: map withCredentials instead of
                                 // hard-coding 'include' (which silently
@@ -1129,36 +1379,54 @@
                                 // POST with side effects that means the write
                                 // the page explicitly cancelled still happened.
                                 patchAbort = new AbortController();
-                                const real = await originalFetch(requestUrl, {
+                                real = await originalFetch(requestUrl, {
                                     method: requestMethod,
                                     headers: requestHeaders,
                                     body: body ?? undefined,
                                     credentials: xhr.withCredentials ? 'include' : 'same-origin',
                                     signal: patchAbort.signal
                                 });
-
-                                if (isAborted) return;
-
-                                const data = await real.clone().json();
-                                const patchPayload = window.SpliceTapPlaceholders.processDynamicResponse(cfg.patch, { url: requestUrl, method: requestMethod });
-                                const merged = window.SpliceTapPatch.jsonMergePatch(data, patchPayload);
-                                const mergedText = JSON.stringify(merged);
-
-                                const mergedHeaders = {};
-                                real.headers.forEach((value, key) => { mergedHeaders[key] = value; });
-                                mergedHeaders['x-splicetap'] = 'true';
-                                mergedHeaders['x-splicetap-rule'] = rule.name;
-
-                                log(`Patched XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
-                                logInterception(rule, requestUrl, requestMethod, real.status);
-
-                                finishMock(mergedText, real.status, real.statusText || 'OK', mergedHeaders);
+                                rawBody = await real.arrayBuffer();
                             } catch (error) {
-                                log('XHR patch mode failed, falling back to real send:', error);
-                                isMocked = false;
+                                // A network failure, as the native XHR would
+                                // have seen it.
                                 if (isAborted) return;
-                                originalSend.call(xhr, body);
+                                log('XHR patch mode: the request failed:', error);
+                                Object.defineProperty(xhr, 'status', { value: 0, writable: true, configurable: true });
+                                Object.defineProperty(xhr, 'readyState', { value: 4, writable: true, configurable: true });
+                                xhr.dispatchEvent(new Event('readystatechange'));
+                                xhr.dispatchEvent(new ProgressEvent('error', { bubbles: false }));
+                                xhr.dispatchEvent(new ProgressEvent('loadend', { bubbles: false }));
+                                return;
                             }
+
+                            if (isAborted) return;
+
+                            const realText = new TextDecoder().decode(rawBody);
+                            const realHeaders = {};
+                            real.headers.forEach((value, key) => { realHeaders[key] = value; });
+
+                            let mergedText;
+                            try {
+                                const data = jsonParse(realText);
+                                const patchPayload = processDynamicResponse(cfg.patch, { url: requestAbsUrl, method: requestMethod });
+                                mergedText = jsonStringify(jsonMergePatch(data, patchPayload));
+                            } catch (error) {
+                                // Not JSON (or nothing to merge into): deliver
+                                // the real response unchanged, as fetch does.
+                                log('XHR patch mode: real response is not valid JSON, delivering it unmodified', error);
+                                finishMock(realText, real.status, real.statusText, realHeaders, rawBody);
+                                return;
+                            }
+
+                            const mergedHeaders = realHeaders;
+                            mergedHeaders['x-splicetap'] = 'true';
+                            mergedHeaders['x-splicetap-rule'] = ruleMarker(rule.name);
+
+                            log(`Patched XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
+                            logInterception(rule, requestAbsUrl, requestMethod, real.status);
+
+                            finishMock(mergedText, real.status, real.statusText || 'OK', mergedHeaders);
                         })();
                         return;
                     }
@@ -1171,8 +1439,7 @@
                     return;
                 }
 
-                // Anything else (e.g. a redirect rule reaching send() despite the
-                // open()-time pre-match, which shouldn't normally happen) — passthrough.
+                // Anything else — passthrough.
                 return originalSend.apply(this, arguments);
             };
 
@@ -1180,6 +1447,7 @@
             // headers still reach the network for the passthrough case.
             xhr.setRequestHeader = function (name, value) {
                 requestHeaders[String(name).toLowerCase()] = value;
+                requestHeaderList.push([name, value]);
                 return originalSetRequestHeader.apply(this, arguments);
             };
 
@@ -1211,21 +1479,29 @@
             console.warn('Invalid state payload received');
             return;
         }
+        if (orphaned) return;
 
         tmState.active = payload.active !== false;
-        tmState.rules = Array.isArray(payload.rules) ? payload.rules : [];
+        tmState.rules = isArray(payload.rules) ? payload.rules : [];
         tmState.settings = payload.settings || {};
 
         // Recompute derived flags once per sync rather than per request.
-        tmState._anyRuleUsesHeaders = tmState.rules.some((r) =>
-            r && r.enabled && r.match && r.match.headers && Object.keys(r.match.headers).length > 0
-        );
-        tmState._anyRuleUsesGraphQL = tmState.rules.some((r) =>
-            r && r.enabled && r.match && r.match.graphql && r.match.graphql.operationName
-        );
-        tmState._hasRedirectRules = tmState.rules.some((r) =>
-            r && r.enabled && (r.type || 'mock') === 'redirect'
-        );
+        // PER-2: index loops and captured built-ins, so no page-replaceable
+        // Array.prototype method is handed the rule list.
+        let usesHeaders = false;
+        let usesGraphQL = false;
+        let hasRedirect = false;
+        const rules = tmState.rules;
+        for (let i = 0; i < rules.length; i++) {
+            const r = rules[i];
+            if (!r || !r.enabled) continue;
+            if (r.match && r.match.headers && objectKeys(r.match.headers).length > 0) usesHeaders = true;
+            if (r.match && r.match.graphql && r.match.graphql.operationName) usesGraphQL = true;
+            if ((r.type || 'mock') === 'redirect') hasRedirect = true;
+        }
+        tmState._anyRuleUsesHeaders = usesHeaders;
+        tmState._anyRuleUsesGraphQL = usesGraphQL;
+        tmState._hasRedirectRules = hasRedirect;
 
         if (tmState.settings.debugMode) {
             log('State synced:', {
@@ -1245,10 +1521,34 @@
         const nonce = event && event.detail && event.detail.nonce;
         if (typeof nonce !== 'string' || !nonce) return;
 
+        // PER-1: tell the relay the nonce landed. When this script ran first,
+        // the relay's own bootstrap is the handover, and this is how it knows
+        // to stop answering "ready" — which a page script could otherwise
+        // replay after load to have the nonce broadcast again.
+        if (event.cancelable) event.preventDefault();
+
         SYNC_STATE_EVENT = '__splicetap_sync_state__:' + nonce;
         LOG_INTERCEPTION_EVENT = '__splicetap_log__:' + nonce;
         CAPTURE_EVENT = '__splicetap_capture__:' + nonce;
+        PING_EVENT = '__splicetap_ping__:' + nonce;
+        DEACTIVATE_EVENT = '__splicetap_deactivate__:' + nonce;
         document.addEventListener(SYNC_STATE_EVENT, onSyncState, true);
+        document.addEventListener(DEACTIVATE_EVENT, onDeactivate, true);
+    }
+
+    // PER-32: the relay's extension was reloaded, updated or removed. The
+    // tab keeps this script, but no rule change or OFF switch can reach it
+    // any more, so it stops intercepting and drops what it holds.
+    function onDeactivate() {
+        orphaned = true;
+        tmState.active = false;
+        tmState.rules = [];
+        tmState.settings = {};
+        tmState._anyRuleUsesHeaders = false;
+        tmState._anyRuleUsesGraphQL = false;
+        tmState._hasRedirectRules = false;
+        document.removeEventListener(SYNC_STATE_EVENT, onSyncState, true);
+        log('Extension context gone; interception stopped for this page');
     }
 
     document.addEventListener(BOOTSTRAP_EVENT, onBootstrap, true);
