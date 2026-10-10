@@ -144,7 +144,9 @@
         if (checkOrphaned()) return;
 
         try {
-            chrome.runtime.sendMessage({ type: 'getRules' }, (response) => {
+            // PER-34: the interceptor needs only enabled interceptor rules —
+            // not disabled rules' mock bodies or the DNR-backed ones.
+            chrome.runtime.sendMessage({ type: 'getRules', scope: 'interceptor' }, (response) => {
                 if (chrome.runtime.lastError) {
                     console.error('Failed to get rules from background:', chrome.runtime.lastError);
                     scheduleRetry();

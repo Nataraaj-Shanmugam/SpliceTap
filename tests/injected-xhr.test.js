@@ -39,7 +39,10 @@ function request(h, url, options = {}) {
         const xhr = h.newXHR();
         if (responseType) xhr.responseType = responseType;
 
-        const done = (outcome) => resolve({
+        // Cleared on settle: a pending guard timer per test kept Jest's
+        // worker alive ("failed to exit gracefully").
+        let guard = null;
+        const done = (outcome) => { clearTimeout(guard); resolve({
             outcome,
             status: xhr.status,
             statusText: xhr.statusText,
@@ -49,12 +52,12 @@ function request(h, url, options = {}) {
             marker: xhr.getResponseHeader('x-splicetap'),
             allHeaders: xhr.getAllResponseHeaders(),
             xhr
-        });
+        }); };
 
         xhr.addEventListener('load', () => done('load'));
         xhr.addEventListener('error', () => done('error'));
         xhr.addEventListener('abort', () => done('abort'));
-        setTimeout(() => reject(new Error('XHR never settled for ' + url)), 3000);
+        guard = setTimeout(() => reject(new Error('XHR never settled for ' + url)), 3000);
 
         xhr.open(method, url);
         for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
