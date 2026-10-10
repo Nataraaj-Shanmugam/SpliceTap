@@ -81,11 +81,11 @@ It is **not** a full Requestly replacement. The largest gaps:
 | Enable/disable rules, master switch | ✅ | Plus toggle-all; badge shows count / OFF / REC. |
 | Rule order / precedence | ✅ | First match wins; reordering changes the winner. |
 | Rule groups | ✗ | Ordering only. |
-| "Test" a rule | ◑ | SpliceTap's Test re-checks structure only; Requestly opens a page and reports whether the rule applied. |
-| Templates | ✅ | Seven, each verified for its stated purpose (two were broken — see bugs). (Redirect to localhost and CORS Unblock were corrected in the persona review: PER-9, PER-24) |
+| "Test" a rule | ◑ | SpliceTap's "Check syntax" validates structure only, and each rule shows its live hit count ("N hits" / "No hits yet") as evidence it fired; Requestly opens a page and reports whether the rule applied. |
+| Templates | ✅ | Seven, each verified for its stated purpose. Two were broken (see bugs); the persona review found two more gaps — Redirect to localhost on absolute URLs, CORS Unblock on PUT/DELETE — now fixed (PER-9, PER-24). |
 | Export / import own rules | ✅ | Including v1 files and replace-vs-merge. |
 | Import from Requestly / ModHeader / Charles / Resource Override | ✗ | A Requestly export is now detected and explained instead of rejected as "invalid". |
-| Execution visibility | ◑ | mock/block/delay/redirect and chaos failures appear in the DevTools log and hit counts; header and query-param rules are applied by Chrome's network layer and are not counted per request, so check Chrome's Network tab. |
+| Execution visibility | ◑ | DevTools panel log (redacted) of every mock, block, delay and redirect — with the final status for delays and redirects — plus chaos failures and skipped patches; per-rule hit counts; a "Not applied" marker for rules Chrome refused. Header and query-param rules are applied by Chrome's network layer with no per-request feedback, so they are not logged or counted — check Chrome's Network tab. |
 | Session recording / HAR | ✗ | No recording or HAR export. |
 | Team sync, sharing, workspaces | ✗ | Not planned: SpliceTap stores nothing off-device. |
 | API client, hosted mock server, file server | ✗ | Separate products; out of scope. |

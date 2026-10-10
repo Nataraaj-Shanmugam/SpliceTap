@@ -70,8 +70,9 @@ do yet — with every claim backed by a headless test.
 3. **Testing Rules**:
    - Use **Check syntax** on a rule to validate its structure (Valid / Invalid).
    - Rule rows show "N hits" or "No hits yet".
-   - Each rule card shows a status icon: a green check (passed), a red cross
-     (failed), an amber triangle (warning), or a grey clock (not yet tested)
+   - Each rule card's check glyph reads "Valid (syntax check only)", "Invalid"
+     with the reason, or "Not checked". Valid means well-formed, not that the
+     rule has matched anything — the hit count is that evidence.
 
 ## Rule Types
 
@@ -112,7 +113,7 @@ Also handled by declarativeNetRequest. `queryParams.add` is an array of `{ key, 
 
 ## Matching & Precedence
 
-- **Which URL is matched**: Rules match the request's absolute URL, with the URL as the page wrote it as a fallback. A host or full-URL pattern now also matches relative calls such as `fetch('/api/users')`.
+- **Which URL is matched**: Rules match the request's absolute URL, with the URL as the page wrote it as a fallback. A host or full-URL pattern also matches relative calls such as `fetch('/api/users')`.
 - **URL pattern semantics** (case-insensitive):
   - Contains `*` → wildcard, anchored full-match (`*` alone matches everything)
   - Wrapped in `/.../` → treated as a regular expression
@@ -183,7 +184,7 @@ produces `{ "user": { "name": "Real", "role": "admin" } }` — `role` is overwri
 - `Alt+Shift+E`: Create new rule (**E**ditor) — opens the in-page overlay on the active tab, falling back to the options page where the overlay can't run (global, works on any page). Either shortcut can be changed at `chrome://extensions/shortcuts`
 - `Ctrl+N`: Create new rule (in popup)
 - `Ctrl+F`: Focus search box (in popup)
-- `Ctrl+T`: Test all rules (in popup)
+- `Ctrl+T`: Check all rules' syntax (in popup)
 - `Ctrl+R`: Refresh data (in popup)
 - `Escape`: Close popup
 

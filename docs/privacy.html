@@ -400,9 +400,10 @@
             </div>
 
             <div class="callout">
-                Request and response <strong>bodies are never written to the log</strong> — only metadata. Common
-                sensitive query-string parameters (tokens, API keys, session ids) are redacted before a URL is
-                recorded.
+                Request and response <strong>bodies are never written to the log</strong> — only metadata. Redaction is
+                best effort: it removes the values of query and fragment parameters whose names suggest secrets
+                (token, secret, session, signature, auth, key, password, code, jwt…) and token-like path segments
+                before a URL is recorded.
             </div>
         </section>
 
