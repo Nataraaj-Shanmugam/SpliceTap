@@ -320,8 +320,9 @@ class SpliceTapBackground {
                 // session storage unavailable — non-fatal
             }
 
-            await this.broadcastState();
-            await this._syncNetworkRules();
+            // PER-31: the broadcast is not awaited — `ready` gates every
+            // handler, and one tab paused at a breakpoint held it forever.
+            await this._syncThenBroadcast();
         } catch (error) {
             console.error('Failed to load stored data:', error);
             // Initialize with defaults on error
@@ -367,10 +368,11 @@ class SpliceTapBackground {
                     };
 
                 case 'toggleExtension': {
+                    // PER-31: every mutation persists, syncs the network layer
+                    // and answers without waiting on tabs; see broadcastState.
                     this.isActive = request.active;
                     await this.storage.saveActiveState(this.isActive);
-                    await this.broadcastState();
-                    const dnrWarning = await this._syncNetworkRules();
+                    const dnrWarning = await this._syncThenBroadcast();
                     return { success: true, active: this.isActive, dnrWarning };
                 }
 
@@ -409,8 +411,7 @@ class SpliceTapBackground {
                         return { success: false, error: (saveResult && saveResult.error) || 'Failed to save rule' };
                     }
                     await this.reloadRulesPreservingHits();
-                    await this.broadcastState();
-                    const dnrWarning = await this._syncNetworkRules();
+                    const dnrWarning = await this._syncThenBroadcast();
                     return { success: true, rule: saveResult.rule, dnrWarning };
                 }
 
@@ -436,8 +437,7 @@ class SpliceTapBackground {
                         return { success: false, error: (bulkResult && bulkResult.error) || 'Failed to save rules' };
                     }
                     await this.reloadRulesPreservingHits();
-                    await this.broadcastState();
-                    const dnrWarning = await this._syncNetworkRules();
+                    const dnrWarning = await this._syncThenBroadcast();
                     return {
                         success: true,
                         rules: this.rules,
@@ -455,10 +455,9 @@ class SpliceTapBackground {
                         return { success: false, error: (toggleResult && toggleResult.error) || 'Failed to toggle rule' };
                     }
                     await this.reloadRulesPreservingHits();
-                    await this.broadcastState();
                     // This path used to discard the sync result, so a toggle
                     // Chrome had not applied still answered plain success.
-                    return { success: true, dnrWarning: await this._syncNetworkRules() };
+                    return { success: true, dnrWarning: await this._syncThenBroadcast() };
 
                 case 'deleteRule':
                     if (!request.ruleId) {
@@ -469,8 +468,7 @@ class SpliceTapBackground {
                         return { success: false, error: (deleteResult && deleteResult.error) || 'Failed to delete rule' };
                     }
                     await this.reloadRulesPreservingHits();
-                    await this.broadcastState();
-                    return { success: true, dnrWarning: await this._syncNetworkRules() };
+                    return { success: true, dnrWarning: await this._syncThenBroadcast() };
 
                 case 'resetStats':
                     this.stats = {
@@ -489,8 +487,7 @@ class SpliceTapBackground {
                         return { success: false, error: (clearResult && clearResult.error) || 'Failed to clear rules' };
                     }
                     this.rules = [];
-                    await this.broadcastState();
-                    return { success: true, dnrWarning: await this._syncNetworkRules() };
+                    return { success: true, dnrWarning: await this._syncThenBroadcast() };
                 }
 
                 case 'resetAll': {
@@ -529,8 +526,7 @@ class SpliceTapBackground {
                     }
 
                     // Tell every tab: no rules, nothing armed, interception on.
-                    await this.broadcastState();
-                    return { success: true, dnrWarning: await this._syncNetworkRules() };
+                    return { success: true, dnrWarning: await this._syncThenBroadcast() };
                 }
 
                 case 'testRule':
@@ -549,7 +545,7 @@ class SpliceTapBackground {
                         if (settingsResult && settingsResult.success === false) {
                             return { success: false, error: settingsResult.error || 'Failed to save settings' };
                         }
-                        await this.broadcastState();
+                        this.broadcastState();
                     }
                     return { success: true };
                 }
@@ -620,7 +616,7 @@ class SpliceTapBackground {
                     if (armResult && armResult.success === false) {
                         return { success: false, error: armResult.error || 'Failed to change capture state' };
                     }
-                    await this.broadcastState();
+                    this.broadcastState();
                     return { success: true, armed: !!this.settings.captureArmed };
                 }
 
@@ -773,6 +769,17 @@ class SpliceTapBackground {
         const outcome = await syncDnrRules(this.rules, this.isActive);
         this.dnrRejected = new Map((outcome.rejected || []).map((r) => [r.id, r.error]));
         return outcome.success ? undefined : outcome.error;
+    }
+
+    /**
+     * PER-31: the tail of every rule or on/off mutation, once the change is
+     * persisted. The network layer is synced before the caller is answered —
+     * its warning is part of the answer — while tabs are told without waiting.
+     */
+    async _syncThenBroadcast() {
+        const dnrWarning = await this._syncNetworkRules();
+        this.broadcastState();
+        return dnrWarning;
     }
 
     /**
@@ -961,12 +968,26 @@ class SpliceTapBackground {
         return this.stateVersion;
     }
 
-    async broadcastState() {
+    /**
+     * Push the current state to every tab. Callers do NOT await this.
+     *
+     * PER-31: every mutation used to await it, and it waited on
+     * tabs.sendMessage to every tab — which never settles for a tab paused at
+     * a breakpoint. Saving, toggling and the master switch all hung until the
+     * developer resumed, and switching off withdrew the network rules only
+     * after the broadcast. The version is bumped synchronously here, and each
+     * message is built when it is sent, so a late delivery is never stale:
+     * the relay drops anything older than what it already applied.
+     */
+    broadcastState() {
         // Every state change funnels through here, so this is the one place the
         // badge needs to be refreshed from.
         this.updateBadge();
         this._bumpStateVersion();
+        return this._sendStateToTabs();
+    }
 
+    async _sendStateToTabs() {
         try {
             // PERF-6: this queried every tab in every window and sent the full
             // rules array to each on every edit — including chrome:// tabs,
@@ -974,10 +995,8 @@ class SpliceTapBackground {
             // content script. The manifest only injects into http(s), so
             // filtering here removes work that could never have landed.
             const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
-            const broadcastPromises = tabs.map(tab => this.broadcastToTab(tab.id));
-            
-            // Wait for all broadcasts to complete (but don't fail if some tabs fail)
-            await Promise.allSettled(broadcastPromises);
+            // Settled per tab (with retries); one unresponsive tab delays nobody.
+            await Promise.allSettled(tabs.map((tab) => this.broadcastToTab(tab.id)));
         } catch (error) {
             console.error('Failed to query tabs for broadcast:', error);
         }
@@ -1133,8 +1152,7 @@ class SpliceTapBackground {
                     await this.ready;
                     this.isActive = !this.isActive;
                     await this.storage.saveActiveState(this.isActive);
-                    await this.broadcastState();
-                    await this._syncNetworkRules();
+                    await this._syncThenBroadcast();
                 } else if (command === 'new-rule') {
                     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
                     if (tab && tab.id && tab.url && /^https?:/i.test(tab.url)) {

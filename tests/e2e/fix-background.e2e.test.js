@@ -67,6 +67,53 @@ describe('fix group B1 (background)', () => {
         expect(await storedIds()).toHaveLength(1);
     });
 
+    // ---- PER-31: a tab paused at a breakpoint ----------------------------
+
+    test('PER-31: a tab paused in the debugger stalls neither saves nor the OFF switch', async () => {
+        await h.saveRule(mock('r1', '*/api/r1*'));
+        await h.saveRule(header('hdr', '*/echo*', 'X-B1-Paused'));
+        const other = await h.openPage();
+        await waitFor(async () => (await pageFetch(other, '/echo')).body.headers['x-b1-paused'] === 'on',
+            { label: 'header rule applied' });
+
+        const paused = await h.openPage();
+        await sleep(300);
+        const cdp = await paused.createCDPSession();
+        await cdp.send('Debugger.enable');
+        let isPaused = false;
+        cdp.on('Debugger.paused', () => { isPaused = true; });
+        cdp.send('Runtime.evaluate', { expression: 'debugger; 1' }).catch(() => {});
+        await waitFor(() => isPaused, { label: 'tab paused' });
+
+        try {
+            let t = Date.now();
+            const toggled = await h.bg({ type: 'toggleRule', ruleId: 'r1', enabled: false });
+            expect(toggled.success).toBe(true);
+            expect(Date.now() - t).toBeLessThan(1000);
+
+            t = Date.now();
+            const off = await h.bg({ type: 'toggleExtension', active: false });
+            expect(off).toMatchObject({ success: true, active: false });
+            expect(Date.now() - t).toBeLessThan(1000);
+
+            // The network rules are withdrawn now, not when the tab resumes.
+            expect(await h.extensionEval(() => chrome.declarativeNetRequest.getDynamicRules())).toEqual([]);
+            expect((await pageFetch(other, '/echo')).body.headers['x-b1-paused']).toBeUndefined();
+        } finally {
+            await cdp.send('Debugger.resume').catch(() => {});
+            await cdp.detach().catch(() => {});
+        }
+
+        // Once resumed, the paused tab catches up with the latest state.
+        await waitFor(async () => {
+            const r = await pageFetch(paused, '/api/r1');
+            return r.body && r.body.from === undefined;
+        }, { label: 'paused tab sees the extension off', timeout: 8000 });
+
+        await paused.close();
+        await other.close();
+    }, 30000);
+
     test('ran without extension errors', () => {
         expect(h.allErrors).toEqual([]);
     });

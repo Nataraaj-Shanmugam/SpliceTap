@@ -132,6 +132,82 @@ describe('PER-27: a bulk write never drops a stored rule', () => {
     });
 });
 
+describe('PER-31: a tab that never answers cannot stall a mutation', () => {
+    const headerRule = {
+        id: 'h1', name: 'H', type: 'headers', enabled: true,
+        match: { url: '*/api/*', method: '*' },
+        headersMod: { request: [{ op: 'set', name: 'X-T', value: '1' }] }
+    };
+
+    // A tab paused at a breakpoint: tabs.sendMessage to it never settles.
+    async function withPausedTab(options) {
+        const ctx = await setup(options);
+        ctx.mock.setTabs([{ id: 5, url: 'https://paused.test/' }]);
+        ctx.mock.chrome.tabs.sendMessage = () => new Promise(() => {});
+        return ctx;
+    }
+
+    test.each([
+        ['saveRule', () => ({ type: 'saveRule', rule: mockRule('n') })],
+        ['toggleRule', () => ({ type: 'toggleRule', ruleId: 'a', enabled: false })],
+        ['deleteRule', () => ({ type: 'deleteRule', ruleId: 'a' })],
+        ['setRules', () => ({ type: 'setRules', rules: [mockRule('a')] })],
+        ['toggleExtension', () => ({ type: 'toggleExtension', active: false })],
+        ['settingsUpdated', () => ({ type: 'settingsUpdated', settings: { theme: 'dark' } })],
+        ['setCaptureArmed', () => ({ type: 'setCaptureArmed', armed: true })],
+        ['clearRules', () => ({ type: 'clearRules' })],
+        ['resetAll', () => ({ type: 'resetAll' })]
+    ])('%s answers while a tab is paused', async (label, message) => {
+        const { send } = await withPausedTab({ initial: { spliceTapRules: [mockRule('a')] } });
+
+        const response = await send(message());
+
+        expect(response.success).toBe(true);
+    });
+
+    test('switching off withdraws the network rules while a tab is paused', async () => {
+        const { mock, send } = await withPausedTab();
+        await send({ type: 'saveRule', rule: headerRule });
+        expect(mock.getDynamicRules()).toHaveLength(1);
+
+        const response = await send({ type: 'toggleExtension', active: false });
+
+        expect(response).toMatchObject({ success: true, active: false });
+        expect(mock.getDynamicRules()).toHaveLength(0);
+    });
+
+    test('a worker starting while a tab is paused still becomes ready', async () => {
+        // loadStoredData broadcast to every tab and awaited it, so `ready`,
+        // which every handler waits on, never resolved.
+        const mock = createChromeMock({ tabs: [{ id: 5, url: 'https://paused.test/' }] });
+        mock.chrome.tabs.sendMessage = () => new Promise(() => {});
+        restoreChrome = installChrome(mock.chrome);
+        const bg = loadEsmModule(BACKGROUND, { chrome: mock.chrome, console: quietConsole }).default;
+        activeBackground = bg;
+
+        const response = await mock.dispatchMessage({ type: 'getRules' }, EXTENSION_PAGE);
+
+        expect(response.success).toBe(true);
+    });
+
+    test('tabs still receive the new state, after the caller has its answer', async () => {
+        const { mock, send } = await setup({ tabs: [{ id: 3, url: 'https://a.test/' }] });
+
+        await send({ type: 'saveRule', rule: mockRule('a') });
+
+        await waitForCondition(() => mock.sentTabMessages.some((m) =>
+            m.tabId === 3 && m.message.type === 'syncState' && m.message.rules.some((r) => r.id === 'a')));
+    });
+});
+
+async function waitForCondition(fn, timeout = 2000) {
+    const deadline = Date.now() + timeout;
+    while (!fn()) {
+        if (Date.now() > deadline) throw new Error('condition not met');
+        await new Promise((r) => setTimeout(r, 5));
+    }
+}
+
 describe('PER-28: setRules re-issues duplicate ids', () => {
     test('a replace-mode import with a repeated id keeps both rules, distinctly', async () => {
         const { mock, send } = await setup();
