@@ -280,6 +280,15 @@ describe('PER-6: what a content script may ask the background for', () => {
         expect((await send({ type: 'logCapture', entry: null }, page)).success).toBe(true);
     });
 
+    test('saveRule is refused from a subframe, where the in-page editor never runs', async () => {
+        const { mock, send } = await setup();
+
+        const response = await send({ type: 'saveRule', rule: mockRule('b') }, contentScript(3));
+
+        expect(response.success).toBe(false);
+        expect(mock.raw.spliceTapRules).toBeUndefined();
+    });
+
     test('extension pages are not restricted, including one opened in a tab', async () => {
         const { send } = await setup();
         const optionsTab = { ...EXTENSION_PAGE, url: 'chrome-extension://test-extension-id/options/options.html', tab: { id: 2 }, frameId: 0 };

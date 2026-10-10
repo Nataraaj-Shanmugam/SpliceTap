@@ -379,9 +379,15 @@ class SpliceTapBackground {
             // compromised renderer (or PER-1) could otherwise reach setRules,
             // resetAll, getCaptures and the rest. Content scripts get the
             // messages they actually send; extension pages are unaffected.
-            if (this._isContentScript(sender) && !CONTENT_SCRIPT_MESSAGES.has(request && request.type)) {
-                console.warn(`SpliceTap: "${request && request.type}" is not accepted from a web page`);
-                return { success: false, error: 'This request is not available to web pages' };
+            if (this._isContentScript(sender)) {
+                const type = request && request.type;
+                // The in-page editor only ever runs in the top frame.
+                const allowed = CONTENT_SCRIPT_MESSAGES.has(type)
+                    && (type !== 'saveRule' || (sender && sender.frameId === 0));
+                if (!allowed) {
+                    console.warn(`SpliceTap: "${type}" is not accepted from a web page`);
+                    return { success: false, error: 'This request is not available to web pages' };
+                }
             }
 
             // Ensure stored state is loaded before serving any message. On a
