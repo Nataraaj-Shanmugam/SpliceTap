@@ -78,6 +78,89 @@
         return `rule_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
     }
 
+    /**
+     * PER-77: which form field a validation message is about, so the editor
+     * can mark that field invalid and describe it. The messages come from
+     * src/rule-schema.js (and the background, which uses the same module),
+     * which owns their wording; this only reads them. A message that matches
+     * nothing returns null and is shown in the summary alone.
+     *
+     * @param {string} message
+     * @param {object} [rule] The rule being saved; disambiguates messages that
+     *        do not say which header list or delay field they are about.
+     * @returns {string|null} an element id inside the editor
+     */
+    function fieldForError(message, rule) {
+        const m = String(message || '');
+        const type = (rule && rule.type) || 'mock';
+
+        const forbidden = /^Header "(.+)" cannot be modified/.exec(m);
+        if (forbidden) {
+            const name = forbidden[1].toLowerCase();
+            const inList = (list) => Array.isArray(list)
+                && list.some((op) => op && typeof op.name === 'string' && op.name.toLowerCase() === name);
+            const hm = (rule && rule.headersMod) || {};
+            return !inList(hm.request) && inList(hm.response) ? 'tmHdrRes' : 'tmHdrReq';
+        }
+
+        if (/^Rule name/i.test(m)) return 'tmName';
+        if (/^Unknown rule type/i.test(m)) return 'tmType';
+        if (/URL pattern/i.test(m)) return 'tmUrl';
+        if (/GraphQL operation matching requires method|^HTTP method/i.test(m)) return 'tmMethod';
+        if (/GraphQL condition/i.test(m)) return 'tmGraphql';
+        if (/^Match request headers/i.test(m)) return 'tmMatchHeaders';
+        if (/^Response mode/i.test(m)) return 'tmMode';
+        if (/status code/i.test(m)) return 'tmStatus';
+        if (/^Response headers/i.test(m)) return 'tmResHeaders';
+        if (/^Delay must/i.test(m)) return type === 'delay' ? 'tmDelayMs' : 'tmDelay';
+        if (/response patch/i.test(m)) return 'tmPatch';
+        if (/^Redirect destination/i.test(m)) return 'tmRedirect';
+        if (/^Request header #|^request header operations|^At least one request or response header/i.test(m)) return 'tmHdrReq';
+        if (/^Response header #|^response header operations|^Access-Control-Allow-Origin/i.test(m)) return 'tmHdrRes';
+        if (/^"add"|^Added parameter|^At least one query parameter/i.test(m)) return 'tmQpAdd';
+        if (/^"remove"|^Every parameter to remove/i.test(m)) return 'tmQpRemove';
+        return null;
+    }
+
+    /**
+     * PER-50: a whole number from a number field's text. This was parseInt,
+     * which stops at the first non-digit: "2e3" saved as 2 ms and "1.9" as 1,
+     * silently. A number field accepts both spellings, so the full string is
+     * read as a number and anything that is not an integer is refused.
+     *
+     * @returns {{value:number, empty?:boolean, invalid?:boolean}} value is NaN
+     *          when the field is empty or not a whole number.
+     */
+    function parseWholeNumber(text) {
+        const t = String(text === undefined || text === null ? '' : text).trim();
+        if (t === '') return { value: NaN, empty: true };
+        const n = Number(t);
+        if (!Number.isFinite(n) || !Number.isInteger(n)) return { value: NaN, invalid: true };
+        return { value: n };
+    }
+
+    /**
+     * A response body: a JSON object or array is stored parsed; anything
+     * else is stored as the exact text typed. (Parsing every value meant a
+     * body of "hello" — with quotes — was stored as the string hello and
+     * served without them; what you type is now what is served.)
+     *
+     * PER-26: an empty (or whitespace-only) body stays '' — an empty 200 is a
+     * real thing to mock. It used to become {}, so merely renaming a rule that
+     * served "" quietly changed what it served.
+     */
+    function readBody(raw) {
+        const text = String(raw === undefined || raw === null ? '' : raw).trim();
+        if (!text) return '';
+        try {
+            const parsed = JSON.parse(text);
+            if (parsed !== null && typeof parsed === 'object') return parsed;
+        } catch (e) {
+            // plain text
+        }
+        return raw;
+    }
+
     // The ~4 KB style string and the markup builder are the bulk of this
     // module's cost. Neither runs until an editor is actually opened, so the
     // great majority of page loads — which never open it — pay only for
@@ -93,7 +176,9 @@
             /* all: initial resets inherited direction/color-scheme too;
                re-establish sane values so RTL pages and native form-control
                chrome aren't broken by our isolation (A-13). */
-            direction: inherit;
+            /* PER-78: the UI is English and its URL/JSON fields are code, so an
+               RTL host page must not mirror them (A-13 used "inherit"). */
+            direction: ltr;
             color-scheme: dark light;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -124,7 +209,11 @@
             padding: 48px 16px;
             overflow-y: auto;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            font-size: 1rem;
+            /* PER-73: the one fixed base. Every size below is in em against
+               this, never rem: rem resolves against the HOST page's <html>,
+               so a site with html{font-size:62.5%} (a common reset) rendered
+               the labels at 6.25px, and :host{all:initial} cannot isolate it. */
+            font-size: 16px;
         }
 
         .tm-panel {
@@ -170,12 +259,12 @@
             background: #1e63f5;
             color: #fff;
             display: flex; align-items: center; justify-content: center;
-            font-size: 0.6875rem; font-weight: 700; letter-spacing: -0.01em;
+            font-size: 0.6875em; font-weight: 700; letter-spacing: -0.01em;
         }
         .tm-logo svg { width: 100%; height: 100%; display: block; }
 
         .tm-title {
-            font-size: 0.875rem;
+            font-size: 0.875em;
             font-weight: 600;
             letter-spacing: -0.01em;
             line-height: 1.15;
@@ -187,7 +276,7 @@
             flex-shrink: 0;
             display: inline-flex; align-items: center; justify-content: center;
             background: transparent; border: none; cursor: pointer;
-            color: #8b9ab3; font-size: 1.125rem; line-height: 1;
+            color: #8b9ab3; font-size: 1.125em; line-height: 1;
             font-family: inherit;
             border-radius: 7px;
             transition: background-color 0.15s, color 0.15s;
@@ -202,7 +291,7 @@
             margin: 12px 16px 0;
             padding: 9px 11px;
             border-radius: 9px;
-            font-size: 0.75rem;
+            font-size: 0.75em;
             line-height: 1.45;
             background: rgba(47, 125, 250, 0.12);
             color: #e7eefb;
@@ -216,7 +305,8 @@
             margin: -3px -3px -3px 0;
             display: inline-flex; align-items: center; justify-content: center;
             background: transparent; border: none; cursor: pointer;
-            color: inherit; font-size: 0.9375rem; line-height: 1;
+            /* 1.25em of the hint bar's 12px = the original 15px (em compounds, PER-73) */
+            color: inherit; font-size: 1.25em; line-height: 1;
             font-family: inherit;
             border-radius: 6px;
             transition: background-color 0.15s;
@@ -245,7 +335,7 @@
            --text-muted rather than --text-dim: #8391a8 on the #111a27 panel
            is 4.13:1, under the 4.5:1 bar for 10px text. #8b9ab3 is 6.07:1. */
         .tm-field > label:not(.tm-check) {
-            font-size: 0.625rem;
+            font-size: 0.625em;
             font-weight: 600;
             letter-spacing: 0.08em;
             text-transform: uppercase;
@@ -262,7 +352,7 @@
             border: 1px solid rgba(148, 163, 184, 0.12);
             color: #e7eefb;
             border-radius: 8px;
-            font-size: 0.78125rem;
+            font-size: 0.78125em;
             font-family: inherit;
             outline: none;
             transition: border-color 0.2s, box-shadow 0.2s;
@@ -278,7 +368,7 @@
         .tm-field textarea {
             padding: 8px 10px;
             font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, 'Liberation Mono', Menlo, monospace;
-            font-size: 0.75rem;
+            font-size: 0.75em;
             line-height: 1.5;
             resize: vertical;
         }
@@ -294,12 +384,20 @@
             box-shadow: 0 0 0 3px rgba(47, 125, 250, 0.18);
         }
 
-        .tm-hint { font-size: 0.6875rem; color: #8b9ab3; line-height: 1.45; }
+        .tm-hint { font-size: 0.6875em; color: #8b9ab3; line-height: 1.45; }
+
+        /* PER-77: required-field marker (the glyph, not the colour, carries
+           the meaning; aria-required carries it for assistive tech) and the
+           per-field error that aria-describedby points at. */
+        .tm-req { color: #f87171; font-weight: 700; margin-left: 0.25em; }
+        .tm-legend { font-size: 0.6875em; color: #8b9ab3; line-height: 1.45; margin-bottom: 12px; }
+        .tm-field-err { font-size: 0.6875em; color: #f87171; line-height: 1.45; }
+        .tm-field [aria-invalid="true"] { border-color: #f87171 !important; }
 
         .tm-check {
             display: flex; align-items: center; gap: 8px;
             min-height: 24px;
-            font-size: 0.78125rem;
+            font-size: 0.78125em;
             font-weight: 500;
             color: #e7eefb;
             cursor: pointer;
@@ -323,7 +421,7 @@
             height: 32px;
             padding: 0 14px;
             border-radius: 8px;
-            font-size: 0.78125rem;
+            font-size: 0.78125em;
             font-weight: 600;
             font-family: inherit;
             cursor: pointer;
@@ -349,7 +447,7 @@
             margin-bottom: 12px;
             padding: 9px 11px;
             border-radius: 8px;
-            font-size: 0.75rem;
+            font-size: 0.75em;
             line-height: 1.45;
             background: rgba(239, 68, 68, 0.12);
             color: #f87171;
@@ -377,7 +475,11 @@
         .tm-light .tm-foot { border-top-color: #eef1f6; }
         .tm-light .tm-title { color: #101828; }
         .tm-light .tm-field > label:not(.tm-check) { color: #5d6a80; }
-        .tm-light .tm-hint { color: #5d6a80; }
+        .tm-light .tm-hint,
+        .tm-light .tm-legend { color: #5d6a80; }
+        .tm-light .tm-req,
+        .tm-light .tm-field-err { color: #b91c1c; }
+        .tm-light .tm-field [aria-invalid="true"] { border-color: #b91c1c !important; }
         .tm-light .tm-check { color: #101828; }
         .tm-light .tm-x { color: #5d6a80; }
         .tm-light .tm-x:hover { background: rgba(15, 23, 42, 0.07); color: #101828; }
@@ -450,8 +552,14 @@
             .concat(templates.map((t) => `<option value="${t.id}" title="${t.description}">${t.label}</option>`))
             .join('');
 
+        // PER-77: the marker is decoration for sighted users; aria-required
+        // on the control is what assistive tech reads.
+        const REQ = '<span class="tm-req" aria-hidden="true">*</span>';
+
+        // PER-78: dir="ltr" on the root, not just direction in the host CSS,
+        // so native controls and bidi text resolve left-to-right on an RTL page.
         return `
-        <div class="tm-backdrop" part="backdrop">
+        <div class="tm-backdrop" part="backdrop" dir="ltr">
           <div class="tm-panel" role="dialog" aria-modal="true" aria-labelledby="tmTitle">
             <div class="tm-head">
               <div class="tm-brand">
@@ -490,6 +598,8 @@
                  options-page fallback announced correctly. -->
             <div class="tm-error" id="tmError" role="alert" aria-live="assertive"></div>
 
+              <div class="tm-legend">${REQ} Required field</div>
+
               <!-- PROD-3: the README advertises these presets as the fast path
                    to a first rule, but they existed only on the options page,
                    which none of the documented entry points open. -->
@@ -506,8 +616,8 @@
                   <select id="tmType">${typeOptions}</select>
                 </div>
                 <div class="tm-field">
-                  <label for="tmName">Rule Name</label>
-                  <input type="text" id="tmName" placeholder="e.g. User Profile API">
+                  <label for="tmName">Rule Name${REQ}</label>
+                  <input type="text" id="tmName" placeholder="e.g. User Profile API" aria-required="true">
                 </div>
               </div>
 
@@ -517,9 +627,9 @@
                   <select id="tmMethod">${methodOptions}</select>
                 </div>
                 <div class="tm-field" style="flex:3">
-                  <label for="tmUrl">URL Pattern</label>
-                  <input type="text" id="tmUrl" placeholder="*/api/users/*">
-                  <span class="tm-hint">Use * for wildcards, or wrap in /.../ for regex.</span>
+                  <label for="tmUrl">URL Pattern${REQ}</label>
+                  <input type="text" id="tmUrl" placeholder="*/api/users*" aria-required="true" aria-describedby="tmUrlHint">
+                  <span class="tm-hint" id="tmUrlHint">Use * for wildcards, or wrap in /.../ for regex.</span>
                 </div>
               </div>
 
@@ -568,22 +678,22 @@
 
               <div class="tm-field" data-types="mock" id="tmPatchField">
                 <label for="tmPatch">Response Patch (JSON Merge Patch)</label>
-                <textarea id="tmPatch" rows="7" placeholder='{"data": null}'></textarea>
-                <span class="tm-hint">Merged into the real response (RFC 7386). null deletes a key.</span>
+                <textarea id="tmPatch" rows="7" placeholder='{"data": null}' aria-describedby="tmPatchHint"></textarea>
+                <span class="tm-hint" id="tmPatchHint">Merged into the real response (RFC 7386). null deletes a key.</span>
               </div>
 
               <!-- delay -->
               <div class="tm-field" data-types="delay">
                 <label for="tmDelayMs">Delay (ms)</label>
-                <input type="number" id="tmDelayMs" value="1000" min="${L().DELAY_MS_MIN}" max="${L().DELAY_MS_MAX}">
-                <span class="tm-hint">Request passes through to the network after this delay.</span>
+                <input type="number" id="tmDelayMs" value="1000" min="${L().DELAY_MS_MIN}" max="${L().DELAY_MS_MAX}" aria-describedby="tmDelayMsHint">
+                <span class="tm-hint" id="tmDelayMsHint">Request passes through to the network after this delay.</span>
               </div>
 
               <!-- redirect -->
               <div class="tm-field" data-types="redirect">
-                <label for="tmRedirect">Redirect Destination</label>
-                <input type="text" id="tmRedirect" placeholder="https://localhost:3000/api">
-                <span class="tm-hint">If URL Pattern is a /regex/, use $1-$9 for capture groups.</span>
+                <label for="tmRedirect">Redirect Destination${REQ}</label>
+                <input type="text" id="tmRedirect" placeholder="https://localhost:3000/api" aria-required="true" aria-describedby="tmRedirectHint">
+                <span class="tm-hint" id="tmRedirectHint">If URL Pattern is a /regex/, use $1-$9 for capture groups.</span>
               </div>
 
               <!-- headers -->
@@ -640,10 +750,49 @@
         let previousActiveElement = null; // A-5: focus to restore on close
         let bodyWasInert = false;         // A-5: the page's own inert state, to restore
         let formDirty = false;            // A11Y-7: has the user typed anything?
-        let closeArmed = false;           // A11Y-7: a second Escape within the window discards
+        // A11Y-7: a second Escape discards. PER-84: it stays armed until the
+        // next non-Escape input rather than for a fixed 4 s that nobody was told about.
+        let closeArmed = false;
+        let closeWarningShown = false;    // PER-84: the unsaved-changes message is what's in the error box
+        let unloadGuarded = false;        // PER-63: a beforeunload handler is registered
 
         const $ = (id) => shadow && shadow.getElementById(id);
         const send = (message) => chrome.runtime.sendMessage(message);
+
+        // PER-86: the hint under each of these fields, so aria-describedby can
+        // point at it (and keep pointing at it when an error is added, PER-77).
+        const FIELD_HINTS = {
+            tmUrl: 'tmUrlHint',
+            tmPatch: 'tmPatchHint',
+            tmDelayMs: 'tmDelayMsHint',
+            tmRedirect: 'tmRedirectHint'
+        };
+
+        /**
+         * PER-63: a dev-server reload used to throw away a half-written rule
+         * with no warning. While the form is dirty, ask the browser to prompt
+         * before the page unloads. Restoring the draft after a reload would
+         * need storage that the page cannot read and this module does not own
+         * (a per-tab storage.session mirror in the background); until then the
+         * prompt is the safeguard. The draft is never written anywhere.
+         */
+        function onBeforeUnload(e) {
+            if (!formDirty) return;
+            e.preventDefault();
+            e.returnValue = '';
+        }
+
+        function guardUnload(on) {
+            if (on === unloadGuarded) return;
+            unloadGuarded = on;
+            if (on) window.addEventListener('beforeunload', onBeforeUnload);
+            else window.removeEventListener('beforeunload', onBeforeUnload);
+        }
+
+        function markDirty() {
+            formDirty = true;
+            guardUnload(true);
+        }
 
         function mountPoint() {
             return options.mountPoint || document.documentElement;
@@ -694,8 +843,17 @@
             // A11Y-7: track whether the form has been touched, so an accidental
             // dismissal can be told apart from a deliberate one.
             const panel = shadow.querySelector('.tm-panel');
-            panel.addEventListener('input', () => { formDirty = true; }, true);
-            panel.addEventListener('change', () => { formDirty = true; }, true);
+            const onEdit = (e) => {
+                markDirty();
+                disarmClose();
+                // PER-77: editing a field answers its error.
+                if (e.target && e.target.id) clearFieldError(e.target.id);
+            };
+            panel.addEventListener('input', onEdit, true);
+            panel.addEventListener('change', onEdit, true);
+            // PER-84: a click inside the dialog is also "the next input". (Not
+            // on the backdrop: clicking outside twice is how that discards.)
+            panel.addEventListener('pointerdown', disarmClose, true);
 
             document.addEventListener('keydown', onKeydown, true);
         }
@@ -729,7 +887,8 @@
             set('tmHdrRes', t.headersModResponse);
 
             applyTypeVisibility();
-            formDirty = true;
+            markDirty();
+            clearError();
         }
 
         /**
@@ -744,7 +903,20 @@
             }
             closeArmed = true;
             showError('You have unsaved changes. Press Escape again, or use Cancel, to discard them.');
-            setTimeout(() => { closeArmed = false; }, 4000);
+            closeWarningShown = true;
+        }
+
+        /**
+         * PER-84: the arming used to lapse after a hidden 4 s, so a slower
+         * second Escape (a screen-reader user reading the message first)
+         * silently went back to the warning. It now lasts until the next
+         * input that is not Escape; the message is withdrawn with it, because
+         * it would no longer be true.
+         */
+        function disarmClose() {
+            if (!closeArmed) return;
+            closeArmed = false;
+            if (closeWarningShown) clearError();
         }
 
         function getFocusableElements() {
@@ -758,9 +930,13 @@
 
             if (e.key === 'Escape') {
                 e.stopPropagation();
-                requestClose();
+                // PER-84: a held key must not stand in for the second press.
+                if (!e.repeat) requestClose();
                 return;
             }
+
+            // PER-84: any other key (bare modifiers aside) is "the next input".
+            if (!['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(e.key)) disarmClose();
 
             // A-5: trap Tab/Shift+Tab within the dialog.
             if (e.key === 'Tab') {
@@ -803,21 +979,91 @@
             const box = $('tmError');
             box.textContent = msg;
             box.classList.add('tm-show');
+            closeWarningShown = false;
             box.scrollIntoView({ block: 'nearest' });
         }
 
         function clearError() {
             $('tmError').classList.remove('tm-show');
+            closeWarningShown = false;
+            clearFieldErrors();
         }
 
-        function parseJson(value, label, fallback) {
-            const raw = (value || '').trim();
+        // ---- per-field errors (PER-77) ------------------------------------
+        // The summary box stays (it is the announced alert); each invalid field
+        // also gets aria-invalid and an aria-describedby error of its own, and
+        // the first one takes focus — focus used to stay on Save, so a
+        // keyboard user had to hunt for what the alert was about.
+
+        function clearFieldError(id) {
+            const el = $(id);
+            if (!el) return;
+            el.removeAttribute('aria-invalid');
+            const err = $(id + 'Err');
+            if (err) err.remove();
+            if (FIELD_HINTS[id]) el.setAttribute('aria-describedby', FIELD_HINTS[id]);
+            else el.removeAttribute('aria-describedby');
+        }
+
+        function clearFieldErrors() {
+            if (!shadow) return;
+            shadow.querySelectorAll('[aria-invalid]').forEach((el) => clearFieldError(el.id));
+        }
+
+        function setFieldError(id, message) {
+            const el = $(id);
+            if (!el || el.offsetParent === null) return false; // hidden: the user could never reach it
+            let err = $(id + 'Err');
+            if (!err) {
+                err = document.createElement('span');
+                err.id = id + 'Err';
+                err.className = 'tm-field-err';
+                el.closest('.tm-field').appendChild(err);
+                err.textContent = message;
+            } else {
+                err.textContent += ' · ' + message;
+            }
+            el.setAttribute('aria-invalid', 'true');
+            el.setAttribute('aria-describedby', [FIELD_HINTS[id], err.id].filter(Boolean).join(' '));
+            return true;
+        }
+
+        /**
+         * Show a failed save: the summary, every field it can be tied to, and
+         * focus on the first of those in form order.
+         * @param {{message:string, fieldId:(string|null)}[]} problems
+         * @param {string} [summary]
+         */
+        function reportProblems(problems, summary) {
+            showError(summary || problems.map((p) => p.message).join(' · '));
+            for (const p of problems) {
+                if (p.fieldId) setFieldError(p.fieldId, p.message);
+            }
+            const first = shadow.querySelector('[aria-invalid="true"]');
+            if (first) first.focus();
+        }
+
+        function parseJson(id, label, fallback, problems) {
+            const raw = ($(id).value || '').trim();
             if (!raw) return fallback;
             try {
                 return JSON.parse(raw);
             } catch (e) {
-                throw new Error(`${label}: invalid JSON — ${e.message}`);
+                problems.push({ fieldId: id, message: `${label}: invalid JSON — ${e.message}` });
+                return fallback;
             }
+        }
+
+        /** PER-50: a whole number from a number field; see parseWholeNumber. */
+        function readInteger(id, label, problems) {
+            const el = $(id);
+            // A number input reports unparseable text (a lone "e", "1e") as an
+            // empty value; badInput tells that apart from a field left blank.
+            const parsed = el.validity && el.validity.badInput
+                ? { value: NaN, invalid: true }
+                : parseWholeNumber(el.value);
+            if (parsed.invalid) problems.push({ fieldId: id, message: `${label} must be a whole number` });
+            return parsed.value;
         }
 
         function populate(rule, prefillUrl) {
@@ -829,7 +1075,10 @@
             $('tmType').value = type;
             $('tmName').value = r.name || '';
             $('tmEnabled').checked = r.enabled !== false;
-            $('tmMethod').value = match.method || 'GET';
+            // PER-55: a new rule matches any method. GET was a trap: a rule
+            // for a POST (or a GraphQL operation, which needs POST or Any)
+            // saved cleanly and then never fired.
+            $('tmMethod').value = match.method || '*';
             $('tmUrl').value = match.url || prefillUrl || '';
 
             const res = r.response || {};
@@ -860,33 +1109,19 @@
         }
 
         /**
-         * A response body: a JSON object or array is stored parsed; anything
-         * else is stored as the exact text typed. (Parsing every value meant a
-         * body of "hello" — with quotes — was stored as the string hello and
-         * served without them; what you type is now what is served.)
-         */
-        function readBody(raw) {
-            const text = raw.trim();
-            if (!text) return {};
-            try {
-                const parsed = JSON.parse(text);
-                if (parsed !== null && typeof parsed === 'object') return parsed;
-            } catch (e) {
-                // plain text
-            }
-            return raw;
-        }
-
-        /**
-         * Build the rule from the form. Throws a user-facing Error on input
-         * that cannot be read at all (malformed JSON); everything else is
-         * judged by the shared schema in save().
+         * Build the rule from the form. Anything that cannot be read at all
+         * (malformed JSON, a number field that is not a whole number) is
+         * collected into `problems` for the caller, with the field it
+         * belongs to; everything else is judged by the shared schema in save().
          *
          * Starts from the rule being edited, so every field this form does not
          * show — provenance flags, notes, anything a future version adds — is
          * carried through untouched instead of silently dropped.
+         *
+         * @returns {{rule: object, problems: {message:string, fieldId:string}[]}}
          */
         function collect() {
+            const problems = [];
             const type = $('tmType').value;
             const method = $('tmMethod').value;
 
@@ -911,7 +1146,7 @@
             delete match.graphql;
 
             if (CONDITION_TYPES.includes(type)) {
-                const matchHeaders = parseJson($('tmMatchHeaders').value, 'Match Request Headers', null);
+                const matchHeaders = parseJson('tmMatchHeaders', 'Match Request Headers', null, problems);
                 if (matchHeaders && typeof matchHeaders === 'object' && Object.keys(matchHeaders).length) {
                     match.headers = matchHeaders;
                 }
@@ -922,17 +1157,22 @@
 
             if (type === 'mock') {
                 const mode = $('tmMode').value;
-                const statusCode = parseInt($('tmStatus').value, 10);
+                // Patch mode hides the Status Code field, so a bad value there
+                // could not be fixed; it falls back to the field's default.
+                const statusCode = mode === 'patch'
+                    ? (parseWholeNumber($('tmStatus').value).value || 200)
+                    : readInteger('tmStatus', 'Status Code', problems);
+                const delay = readInteger('tmDelay', 'Delay (ms)', problems);
                 const response = Object.assign({}, (editingRule && editingRule.response) || {}, {
                     statusCode,
                     // CQ-2: derived from the code, not hardcoded 'OK'.
                     statusText: (global.SpliceTapTemplates && global.SpliceTapTemplates.getStatusText(statusCode)) || '',
-                    headers: parseJson($('tmResHeaders').value, 'Response Headers', {}),
-                    delay: parseInt($('tmDelay').value, 10) || 0,
+                    headers: parseJson('tmResHeaders', 'Response Headers', {}, problems),
+                    delay: delay || 0, // blank means no delay
                     mode
                 });
                 if (mode === 'patch') {
-                    response.patch = parseJson($('tmPatch').value, 'Response Patch', {});
+                    response.patch = parseJson('tmPatch', 'Response Patch', {}, problems);
                     delete response.body;
                 } else {
                     response.body = readBody($('tmBody').value);
@@ -940,22 +1180,22 @@
                 }
                 rule.response = response;
             } else if (type === 'delay') {
-                rule.delayMs = parseInt($('tmDelayMs').value, 10);
+                rule.delayMs = readInteger('tmDelayMs', 'Delay (ms)', problems);
             } else if (type === 'redirect') {
                 rule.redirect = { destination: $('tmRedirect').value.trim() };
             } else if (type === 'headers') {
                 rule.headersMod = {
-                    request: parseJson($('tmHdrReq').value, 'Request Headers', []),
-                    response: parseJson($('tmHdrRes').value, 'Response Headers', [])
+                    request: parseJson('tmHdrReq', 'Request Headers', [], problems),
+                    response: parseJson('tmHdrRes', 'Response Headers', [], problems)
                 };
             } else if (type === 'queryparams') {
                 rule.queryParams = {
-                    add: parseJson($('tmQpAdd').value, 'Add Query Params', []),
+                    add: parseJson('tmQpAdd', 'Add Query Params', [], problems),
                     remove: $('tmQpRemove').value.split(',').map((s) => s.trim()).filter(Boolean)
                 };
             }
 
-            return rule;
+            return { rule, problems };
         }
 
         /**
@@ -986,7 +1226,12 @@
 
             let rule;
             try {
-                rule = collect();
+                const collected = collect();
+                rule = collected.rule;
+                if (collected.problems.length) {
+                    reportProblems(collected.problems);
+                    return;
+                }
             } catch (e) {
                 showError(e.message);
                 return;
@@ -998,7 +1243,7 @@
             if (schema) {
                 const verdict = schema.validateRule(rule);
                 if (!verdict.valid) {
-                    showError(verdict.errors.join(' · '));
+                    reportProblems(verdict.errors.map((message) => ({ message, fieldId: fieldForError(message, rule) })));
                     return;
                 }
             }
@@ -1028,13 +1273,21 @@
                 }
                 close(true, response.rule || rule);
             } catch (e) {
-                showError('Failed to save: ' + e.message);
+                // The background judges with the same schema, so a rejection
+                // names the same things; tie each to its field where it can
+                // (it joins several with "; ").
+                const rejected = String(e.message).split('; ')
+                    .map((message) => ({ message, fieldId: fieldForError(message, rule) }));
+                reportProblems(rejected, 'Failed to save: ' + e.message);
                 setSaving(false);
             }
         }
 
         function close(saved, savedRule) {
             document.removeEventListener('keydown', onKeydown, true);
+            // PER-63: nothing left to lose, so stop prompting before unload.
+            formDirty = false;
+            guardUnload(false);
             if (hostEl && hostEl.parentNode) hostEl.parentNode.removeChild(hostEl);
             hostEl = null;
             shadow = null;
@@ -1118,6 +1371,7 @@
             // form; reset the dirty flags afterwards, or every editor would
             // open already considering itself modified.
             formDirty = false;
+            guardUnload(false);
             closeArmed = false;
             setSaving(false);
             clearError();
@@ -1135,7 +1389,9 @@
         };
     }
 
-    const api = { create, HOST_ID };
+    // fieldForError, parseWholeNumber and readBody are pure; exported so they
+    // can be unit-tested without a browser.
+    const api = { create, HOST_ID, fieldForError, parseWholeNumber, readBody };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;

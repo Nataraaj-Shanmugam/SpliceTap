@@ -289,6 +289,14 @@
             box-shadow: 0 0 0 3px rgba(11, 188, 212, 0.18);
         }
 
+        /* PER-80: the label stays "Pause" and aria-pressed carries the state
+           (the old "Resume" + pressed read as "Resume, pressed"); paused is
+           shown as a filled, pressed-in button instead of different words. */
+        .pause-btn[aria-pressed="true"] {
+            background: rgba(148, 163, 184, 0.28);
+            border-color: var(--text-muted);
+        }
+
         .clear-btn {
             background: rgba(239, 68, 68, 0.10);
             color: #fca5a5;
@@ -559,6 +567,60 @@
             color: var(--text-main);
         }
 
+        /* PER-79: a narrow panel (a docked DevTools, or 320 px). The one-line
+           row needs ~430 px of fixed-width cells, so below that the URL column
+           collapsed to nothing, one character per line. Rows stack instead:
+             method  status        time  dismiss
+             url (full width, wraps)
+             rule + type
+           The column-header row cannot line up with stacked rows, so it is
+           kept for assistive tech and hidden from view. */
+        @media (max-width: 560px) {
+            .request-item {
+                display: grid;
+                grid-template-columns: auto auto 1fr auto;
+                grid-template-areas:
+                    "method status time actions"
+                    "url url url url"
+                    "rule rule rule rule";
+                column-gap: 8px;
+                row-gap: 6px;
+                align-items: center;
+            }
+
+            .request-method { grid-area: method; }
+            .request-status { grid-area: status; }
+            .timestamp { grid-area: time; }
+            .request-actions { grid-area: actions; }
+            .request-url { grid-area: url; }
+
+            .rule-info {
+                grid-area: rule;
+                flex-direction: row;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 4px 8px;
+                min-width: 0;
+            }
+
+            .request-item-header {
+                position: absolute;
+                width: 1px;
+                height: 1px;
+                padding: 0;
+                margin: -1px;
+                overflow: hidden;
+                clip: rect(0, 0, 0, 0);
+                white-space: nowrap;
+                border: 0;
+            }
+
+            .rule-name {
+                white-space: normal;
+                overflow-wrap: anywhere;
+            }
+        }
+
         /* ── Empty state ──────────────────────────────────────────────── */
         .empty-state {
             padding: 48px 20px;
@@ -642,6 +704,7 @@
 
         body.theme-light .pause-btn { background: rgba(15, 23, 42, 0.05); color: var(--text-main); }
         body.theme-light .pause-btn:hover { background: rgba(15, 23, 42, 0.09); }
+        body.theme-light .pause-btn[aria-pressed="true"] { background: rgba(15, 23, 42, 0.16); border-color: var(--text-muted); }
         body.theme-light .pause-btn[aria-pressed="false"] {
             color: var(--signal-text);
             background: rgba(6, 148, 170, 0.10);
@@ -736,7 +799,8 @@
 
             <div class="stat-card">
                 <div class="stat-value" id="mockedRequests">0</div>
-                <div class="stat-label">Intercepted (all time)</div>
+                <!-- PER-53: the background's counter resets daily, so "all time" overstated it -->
+                <div class="stat-label">Intercepted today</div>
             </div>
 
             <div class="stat-card">
@@ -772,7 +836,8 @@
                 </select>
             </div>
 
-            <div class="requests-list" id="requestsList">
+            <!-- tabindex="-1": panel.js moves focus here when dismissing the last row (PER-80) -->
+            <div class="requests-list" id="requestsList" tabindex="-1">
                 <div class="empty-state" id="emptyState">
                     <div class="empty-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke="url(#tmIconGrad)" stroke-width="1.5">

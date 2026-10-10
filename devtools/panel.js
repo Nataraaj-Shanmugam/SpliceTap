@@ -317,6 +317,29 @@
         cell.title = entry.ts ? new Date(entry.ts).toLocaleString() : '';
     }
 
+    // PER-80: "Dismiss GET http://host/api/users" — the query string stays out
+    // for the same reason it is hidden in the row (S-8).
+    function dismissLabel(entry) {
+        return 'Dismiss ' + (entry.method || 'GET') + ' ' + truncateUrl(stripQueryAndHash(entry.url), 60);
+    }
+
+    // Two rows for the same call (the same URL with different queries, or a
+    // repeat) would still share a name; number those oldest-first, so a row's
+    // number does not shift when newer traffic arrives above it.
+    function labelDismissButtons(visible, keys) {
+        const bases = visible.map(dismissLabel);
+        const totals = new Map();
+        bases.forEach((base) => totals.set(base, (totals.get(base) || 0) + 1));
+        const counted = new Map();
+        for (let i = visible.length - 1; i >= 0; i--) {
+            const row = rowElements.get(keys[i]);
+            const btn = row && row.querySelector('.dismiss-btn');
+            const n = (counted.get(bases[i]) || 0) + 1;
+            counted.set(bases[i], n);
+            if (btn) btn.setAttribute('aria-label', totals.get(bases[i]) > 1 ? `${bases[i]} (#${n})` : bases[i]);
+        }
+    }
+
     // Builds a row entirely via DOM APIs rather than an HTML string. This is
     // the S-6 fix for the row templates: textContent/setAttribute cannot be
     // used to break out of an attribute or inject markup, so there is no
@@ -381,7 +404,10 @@
         dismissBtn.type = 'button';
         dismissBtn.className = 'dismiss-btn';
         dismissBtn.dataset.key = key;
-        dismissBtn.setAttribute('aria-label', 'Dismiss this entry from the log view');
+        // PER-80: every button used to be named the same, so a list of them
+        // was "Dismiss, Dismiss, Dismiss". renderEntries() adds a number when
+        // two rows would still read alike.
+        dismissBtn.setAttribute('aria-label', dismissLabel(entry));
         dismissBtn.textContent = '×';
         actionsCell.appendChild(dismissBtn);
         row.appendChild(actionsCell);
@@ -456,9 +482,16 @@
             return el;
         });
 
+        // Re-inserting a kept row drops focus from the control inside it (a new
+        // request arriving would knock a keyboard user off the button they were
+        // on), so put it back if it is still in the list.
+        const focused = document.activeElement;
+        const hadFocus = !!(focused && itemsContainer.contains(focused));
         itemsContainer.replaceChildren(...nodes);
+        if (hadFocus && focused.isConnected) focused.focus({ preventScroll: true });
         rowElements = newRowElements;
         lastKeySignature = signature;
+        labelDismissButtons(visible, keys);
     }
 
     // A-10: politely announce arrivals instead of leaving screen-reader
@@ -519,7 +552,8 @@
         if (!btn) return;
         btn.addEventListener('click', () => {
             userPaused = !userPaused;
-            btn.textContent = userPaused ? 'Resume' : 'Pause';
+            // PER-80: the label stays "Pause"; only aria-pressed changes. Swapping
+            // it to "Resume" as well made a screen reader say "Resume, pressed".
             btn.setAttribute('aria-pressed', userPaused ? 'true' : 'false');
             updatePollingState();
             const announcer = byId('logAnnouncer');
@@ -569,8 +603,22 @@
             const dismissBtn = event.target.closest('.dismiss-btn');
             if (dismissBtn) {
                 const key = dismissBtn.dataset.key;
+                // PER-80: the row is about to be removed, and with it the focused
+                // button, so focus fell to <body> and a keyboard user lost their
+                // place. Note the neighbours first; land on the next row's
+                // dismiss button, else the previous one, else the list.
+                const rowKeys = Array.from(container.children).map((r) => r.dataset.key);
+                const at = rowKeys.indexOf(key);
+                const neighbours = [rowKeys[at + 1], rowKeys[at - 1]].filter((k) => k !== undefined && at !== -1);
                 dismissedKeys.add(key);
                 renderEntries();
+                let next = null;
+                for (const k of neighbours) {
+                    const row = rowElements.get(k);
+                    next = row && row.querySelector('.dismiss-btn');
+                    if (next) break;
+                }
+                (next || byId('requestsList')).focus();
                 const announcer = byId('logAnnouncer');
                 if (announcer) announcer.textContent = 'Entry dismissed from view.';
             }
