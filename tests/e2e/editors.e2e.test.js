@@ -106,7 +106,8 @@ describe.each(HOSTS)('rule editor — %s host', (hostKind) => {
 
         expect(rules[0]).toMatchObject({
             name: 'Created mock', type: 'mock', enabled: true,
-            match: { url: '*/api/created*', method: 'GET' },
+            // PER-55: a new rule's method defaults to Any (*), no longer GET.
+            match: { url: '*/api/created*', method: '*' },
             response: { statusCode: 201, body: { created: true } }
         });
         expect(rules[0].response.statusText).toBe('Created');
