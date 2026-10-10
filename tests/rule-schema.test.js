@@ -140,8 +140,19 @@ describe('query parameters', () => {
 describe('redirect destination', () => {
     const redirect = (destination) => base({ type: 'redirect', response: undefined, redirect: { destination } });
 
-    test('accepts an absolute http(s) URL, with $n substitutions', () => {
-        expect(S.validateRule(redirect('https://staging.example.test/$1')).valid).toBe(true);
+    test('accepts an absolute http(s) URL', () => {
+        expect(S.validateRule(redirect('https://staging.example.test/users')).valid).toBe(true);
+    });
+
+    test('accepts $n substitutions when the URL pattern is a /regex/', () => {
+        // PER-22: wildcards don't capture, so $n is only valid with a regex
+        // (the refusal is pinned in tests/fix-schema.test.js).
+        const rule = base({
+            type: 'redirect', response: undefined,
+            match: { url: '/\\/api\\/(.*)/', method: 'GET' },
+            redirect: { destination: 'https://staging.example.test/$1' }
+        });
+        expect(S.validateRule(rule).valid).toBe(true);
     });
 
     test('accepts a root-relative path (same-origin redirect)', () => {
@@ -174,9 +185,11 @@ describe('match conditions', () => {
             .toMatch(/Redirect rules cannot use header or GraphQL/);
     });
 
-    test('a GraphQL condition needs POST or any method', () => {
-        const rule = base({ match: { url: '*/graphql', method: 'GET', graphql: { operationName: 'Q' } } });
-        expect(errorsOf(rule)).toMatch(/requires method POST or Any/);
+    test('a GraphQL condition needs POST, GET or any method', () => {
+        // PER-23: GET joined POST — persisted-query clients send the
+        // operation name in the URL.
+        const rule = base({ match: { url: '*/graphql', method: 'PUT', graphql: { operationName: 'Q' } } });
+        expect(errorsOf(rule)).toMatch(/requires method POST, GET or Any/);
     });
 
     test('a non-ASCII URL filter is refused for DNR-backed rules only', () => {
