@@ -57,22 +57,31 @@ describe('PER-77 fieldForError', () => {
     // Every message the shared schema can currently produce for a form field
     // maps to that field, so a schema change that renames a message shows up
     // here rather than as an unmarked field in the editor.
+    const deep = (n) => { let v = {}; for (let i = 0; i < n; i++) v = { a: v }; return v; };
     const cases = [
         [mock({ name: '' }), 'tmName'],
         [mock({ name: 'x'.repeat(101) }), 'tmName'],
         [mock({ match: { url: '', method: '*' } }), 'tmUrl'],
         [mock({ match: { url: '/', method: '*' } }), 'tmUrl'],
         [mock({ match: { url: '*/a*', method: 'FETCH' } }), 'tmMethod'],
-        [mock({ match: { url: '*/a*', method: 'GET', graphql: { operationName: 'op' } } }), 'tmMethod'],
+        // PER-23 made GET valid for GraphQL (persisted queries), so PUT is the refused method.
+        [mock({ match: { url: '*/a*', method: 'PUT', graphql: { operationName: 'op' } } }), 'tmMethod'],
         [mock({ match: { url: '*/a*', method: '*', graphql: { operationName: '' } } }), 'tmGraphql'],
         [mock({ match: { url: '*/a*', method: '*', headers: { 'bad name': 'v' } } }), 'tmMatchHeaders'],
         [mock({ response: { statusCode: 99, headers: {}, body: '', delay: 0, mode: 'static' } }), 'tmStatus'],
+        [mock({ response: { statusCode: 150, headers: {}, body: '', delay: 0, mode: 'static' } }), 'tmStatus'],
+        [mock({ response: { statusCode: 200, headers: { 'X-Note': 'café ☕' }, body: '', delay: 0, mode: 'static' } }), 'tmResHeaders'],
+        [mock({ response: { statusCode: 200, headers: {}, body: deep(70), delay: 0, mode: 'static' } }), 'tmBody'],
+        [mock({ match: { url: '/api\\/x/i', method: '*' } }), 'tmUrl'],
         [mock({ response: { statusCode: 200, headers: { 'bad name': 'v' }, body: '', delay: 0, mode: 'static' } }), 'tmResHeaders'],
         [mock({ response: { statusCode: 200, headers: {}, body: '', delay: 99999, mode: 'static' } }), 'tmDelay'],
         [mock({ response: { statusCode: 200, headers: {}, delay: 0, mode: 'patch', patch: [1] } }), 'tmPatch'],
         [{ name: 'd', type: 'delay', match: { url: '*/a*', method: '*' }, delayMs: 0 }, 'tmDelayMs'],
         [{ name: 'r', type: 'redirect', match: { url: '*/a*', method: '*' }, redirect: { destination: '' } }, 'tmRedirect'],
         [{ name: 'r', type: 'redirect', match: { url: '*/a*', method: '*' }, redirect: { destination: 'ftp://x' } }, 'tmRedirect'],
+        // PER-22: $n needs a /regex/ pattern, so the pattern is the field at fault.
+        [{ name: 'r', type: 'redirect', match: { url: '*/a/*', method: '*' }, redirect: { destination: 'http://localhost:3000/$1' } }, 'tmUrl'],
+        [{ name: 'h', type: 'headers', match: { url: '*/a*', method: '*' }, headersMod: { request: [{ op: 'set', name: 'X-A', value: '1' }, { op: 'set', name: 'x-a', value: '2' }], response: [] } }, 'tmHdrReq'],
         [{ name: 'h', type: 'headers', match: { url: '*/a*', method: '*' }, headersMod: { request: [{ op: 'set', name: 'X-A' }], response: [] } }, 'tmHdrReq'],
         [{ name: 'h', type: 'headers', match: { url: '*/a*', method: '*' }, headersMod: { request: [], response: [{ op: 'set', name: 'X-A' }] } }, 'tmHdrRes'],
         [{ name: 'h', type: 'headers', match: { url: '*/a*', method: '*' }, headersMod: { request: [], response: [] } }, 'tmHdrReq'],

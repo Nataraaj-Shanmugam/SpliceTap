@@ -55,7 +55,7 @@ describe('LIMITS', () => {
         expect(LIMITS).toEqual({
             NAME_MAX: 100,
             URL_MAX: 500,
-            STATUS_MIN: 100,
+            STATUS_MIN: 200,
             STATUS_MAX: 599,
             DELAY_MIN: 0,
             DELAY_MAX: 30000,
@@ -64,8 +64,8 @@ describe('LIMITS', () => {
         });
     });
 
-    test('status bounds match the valid HTTP range', () => {
-        expect(LIMITS.STATUS_MIN).toBe(100);
+    test('status bounds match the final-response HTTP range (PER-52: no 1xx)', () => {
+        expect(LIMITS.STATUS_MIN).toBe(200);
         expect(LIMITS.STATUS_MAX).toBe(599);
     });
 });

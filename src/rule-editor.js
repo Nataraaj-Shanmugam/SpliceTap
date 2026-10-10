@@ -63,7 +63,7 @@
     // CQ-10: limits come from the one shared definition (src/common.js).
     function L() {
         return (global.SpliceTapCommon && global.SpliceTapCommon.LIMITS) || {
-            STATUS_MIN: 100, STATUS_MAX: 599,
+            STATUS_MIN: 200, STATUS_MAX: 599,
             DELAY_MIN: 0, DELAY_MAX: 30000,
             DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000
         };
@@ -114,6 +114,7 @@
         if (/^Response headers/i.test(m)) return 'tmResHeaders';
         if (/^Delay must/i.test(m)) return type === 'delay' ? 'tmDelayMs' : 'tmDelay';
         if (/response patch/i.test(m)) return 'tmPatch';
+        if (/^The response body/i.test(m)) return 'tmBody';
         if (/^Redirect destination/i.test(m)) return 'tmRedirect';
         if (/^Request header #|^request header operations|^At least one request or response header/i.test(m)) return 'tmHdrReq';
         if (/^Response header #|^response header operations|^Access-Control-Allow-Origin/i.test(m)) return 'tmHdrRes';

@@ -58,7 +58,7 @@
     const LIMITS = {
         NAME_MAX: 100,
         URL_MAX: 500,
-        STATUS_MIN: 100,
+        STATUS_MIN: 200, // PER-52: 1xx are interim responses, never a final one
         STATUS_MAX: 599,
         DELAY_MIN: 0,        // response delay on a mock rule
         DELAY_MAX: 30000,
