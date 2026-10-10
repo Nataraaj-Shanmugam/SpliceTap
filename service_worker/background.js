@@ -17,9 +17,28 @@ import '../src/matcher.js';
 import '../src/rule-schema.js';
 import './dnr.js';
 
-const { syncDnrRules } = globalThis.SpliceTapDnr;
+const { syncDnrRules, deepEqual } = globalThis.SpliceTapDnr;
 const { generateId } = globalThis.SpliceTapCommon;
 const RuleSchema = globalThis.SpliceTapRuleSchema;
+
+// PER-34: the rule types the page-side interceptor runs (src/matcher.js
+// INTERCEPTOR_TYPES). headers/queryparams rules are applied by Chrome (DNR).
+const INTERCEPTOR_TYPES = new Set(['mock', 'block', 'delay', 'redirect']);
+
+// PER-6: the only messages content scripts send — the relay (content.js:
+// getRules, logInterceptionBatch, logCapture; logInterception is its older
+// single-entry form) and the in-page editor (rule-editor.js via overlay.js:
+// getRules, saveRule). Everything else is for extension pages only.
+const CONTENT_SCRIPT_MESSAGES = new Set([
+    'getRules', 'saveRule', 'logInterception', 'logInterceptionBatch', 'logCapture'
+]);
+
+// SEC2-7: size caps for what a page-side relay can make the background keep.
+// CAPTURE_MAX_BODY matches the interceptor's own limit (injected.js).
+const LOG_TEXT_MAX = 256;
+const CAPTURE_MAX_BODY = 100 * 1024;
+const CAPTURE_MAX_HEADERS = 100;
+const CAPTURE_HEADER_VALUE_MAX = 8192;
 
 class SpliceTapBackground {
     constructor() {
@@ -146,8 +165,17 @@ class SpliceTapBackground {
         // inspecting another. The sender's tab id is taken here rather than
         // trusted from the message body, since the page-side relay could
         // otherwise claim any tab.
+        // SEC2-7: copied field by field. Spreading the entry kept any extra
+        // field a page put on it, uncapped, in the log and in session storage.
         this.interceptionLog.push({
-            ...entry,
+            ts: entry.ts,
+            url: entry.url,
+            method: entry.method,
+            ruleId: entry.ruleId,
+            // Display only; a rule stored by an older build may have a long name.
+            ruleName: entry.ruleName === undefined ? undefined : entry.ruleName.slice(0, LOG_TEXT_MAX),
+            ruleType: entry.ruleType,
+            status: entry.status,
             tabId: (sender && sender.tab && typeof sender.tab.id === 'number')
                 ? sender.tab.id
                 : null
@@ -179,9 +207,9 @@ class SpliceTapBackground {
         if (!entry || typeof entry !== 'object') return false;
         if (typeof entry.url !== 'string' || entry.url.length > 2048) return false;
         if (typeof entry.method !== 'string' || entry.method.length > 16) return false;
-        if (typeof entry.ruleId !== 'string') return false;
+        if (typeof entry.ruleId !== 'string' || entry.ruleId.length > LOG_TEXT_MAX) return false;
         if (entry.ruleName !== undefined && typeof entry.ruleName !== 'string') return false;
-        if (entry.ruleType !== undefined && typeof entry.ruleType !== 'string') return false;
+        if (entry.ruleType !== undefined && (typeof entry.ruleType !== 'string' || entry.ruleType.length > 32)) return false;
         if (entry.status !== undefined && entry.status !== null && typeof entry.status !== 'number') return false;
         if (entry.ts !== undefined && typeof entry.ts !== 'number') return false;
 
@@ -320,8 +348,9 @@ class SpliceTapBackground {
                 // session storage unavailable — non-fatal
             }
 
-            await this.broadcastState();
-            await this._syncNetworkRules();
+            // PER-31: the broadcast is not awaited — `ready` gates every
+            // handler, and one tab paused at a breakpoint held it forever.
+            await this._syncThenBroadcast();
         } catch (error) {
             console.error('Failed to load stored data:', error);
             // Initialize with defaults on error
@@ -346,6 +375,21 @@ class SpliceTapBackground {
 
     async handleMessage(request, sender) {
         try {
+            // PER-6: any frame of any page runs a content script, so a
+            // compromised renderer (or PER-1) could otherwise reach setRules,
+            // resetAll, getCaptures and the rest. Content scripts get the
+            // messages they actually send; extension pages are unaffected.
+            if (this._isContentScript(sender)) {
+                const type = request && request.type;
+                // The in-page editor only ever runs in the top frame.
+                const allowed = CONTENT_SCRIPT_MESSAGES.has(type)
+                    && (type !== 'saveRule' || (sender && sender.frameId === 0));
+                if (!allowed) {
+                    console.warn(`SpliceTap: "${type}" is not accepted from a web page`);
+                    return { success: false, error: 'This request is not available to web pages' };
+                }
+            }
+
             // Ensure stored state is loaded before serving any message. On a
             // cold SW start the triggering message can arrive before
             // loadStoredData() resolves; this makes handlers wait for it.
@@ -356,7 +400,14 @@ class SpliceTapBackground {
                     return {
                         success: true,
                         version: this.stateVersion,
-                        rules: this.rules,
+                        // PER-34: the relay in every frame asks for state on
+                        // load. A subframe has no use for disabled rules' mock
+                        // bodies or DNR rules — only the top frame hosts the
+                        // in-page editor, which checks any rule still exists.
+                        rules: (request.scope === 'interceptor'
+                            || (this._isContentScript(sender) && sender.frameId !== 0))
+                            ? this._interceptorRules()
+                            : this.rules,
                         active: this.isActive,
                         stats: this.stats,
                         settings: this.settings,
@@ -367,10 +418,11 @@ class SpliceTapBackground {
                     };
 
                 case 'toggleExtension': {
+                    // PER-31: every mutation persists, syncs the network layer
+                    // and answers without waiting on tabs; see broadcastState.
                     this.isActive = request.active;
                     await this.storage.saveActiveState(this.isActive);
-                    await this.broadcastState();
-                    const dnrWarning = await this._syncNetworkRules();
+                    const dnrWarning = await this._syncThenBroadcast();
                     return { success: true, active: this.isActive, dnrWarning };
                 }
 
@@ -409,50 +461,33 @@ class SpliceTapBackground {
                         return { success: false, error: (saveResult && saveResult.error) || 'Failed to save rule' };
                     }
                     await this.reloadRulesPreservingHits();
-                    await this.broadcastState();
-                    const dnrWarning = await this._syncNetworkRules();
+                    const dnrWarning = await this._syncThenBroadcast();
                     return { success: true, rule: saveResult.rule, dnrWarning };
                 }
 
                 case 'setRules': {
-                    // Bulk persist path used by the options editor and import.
-                    // S-2: validate every incoming rule; invalid ones are
-                    // skipped (not silently accepted, not a hard failure for
-                    // the whole batch — one bad rule in an imported file
-                    // shouldn't block the N good ones). Allocates a dnrRuleId
-                    // for any headers/queryparams rule that lacks one, then
-                    // persists, refreshes in-memory rules, broadcasts, and
-                    // syncs DNR.
+                    // Bulk persist path used by reorder, toggle-all and import.
+                    // S-2: new and changed rules are validated; invalid ones
+                    // are skipped (not silently accepted, not a hard failure
+                    // for the whole batch — one bad rule in an imported file
+                    // shouldn't block the N good ones). See _prepareBulkRules
+                    // for what happens to stored rules (PER-27) and ids
+                    // (PER-28). The per-rule decision runs inside the storage
+                    // chain, against the exact copy this write replaces.
                     if (!Array.isArray(request.rules)) {
                         throw new Error('rules array is required');
                     }
-                    const prepared = [];
-                    const rejected = [];
-                    for (const incoming of request.rules) {
-                        const validation = await this.validateRule(incoming);
-                        if (!validation.passed) {
-                            rejected.push({
-                                name: incoming && incoming.name,
-                                errors: validation.results.map((r) => r.message)
-                            });
-                            continue;
-                        }
-                        const rule = { ...incoming };
-                        if (typeof rule.id !== 'string' || !rule.id.trim()) {
-                            rule.id = generateId();
-                        }
-                        if ((rule.type === 'headers' || rule.type === 'queryparams') && !rule.dnrRuleId) {
-                            rule.dnrRuleId = await this.allocateDnrIdSerialized();
-                        }
-                        prepared.push(rule);
-                    }
-                    const bulkResult = await this.storage.replaceRules(prepared);
+                    let rejected = [];
+                    const bulkResult = await this.storage.replaceRules(async (stored) => {
+                        const prepared = await this._prepareBulkRules(request.rules, stored);
+                        rejected = prepared.rejected;
+                        return prepared.rules;
+                    });
                     if (!bulkResult || !bulkResult.success) {
                         return { success: false, error: (bulkResult && bulkResult.error) || 'Failed to save rules' };
                     }
                     await this.reloadRulesPreservingHits();
-                    await this.broadcastState();
-                    const dnrWarning = await this._syncNetworkRules();
+                    const dnrWarning = await this._syncThenBroadcast();
                     return {
                         success: true,
                         rules: this.rules,
@@ -470,10 +505,9 @@ class SpliceTapBackground {
                         return { success: false, error: (toggleResult && toggleResult.error) || 'Failed to toggle rule' };
                     }
                     await this.reloadRulesPreservingHits();
-                    await this.broadcastState();
                     // This path used to discard the sync result, so a toggle
                     // Chrome had not applied still answered plain success.
-                    return { success: true, dnrWarning: await this._syncNetworkRules() };
+                    return { success: true, dnrWarning: await this._syncThenBroadcast() };
 
                 case 'deleteRule':
                     if (!request.ruleId) {
@@ -484,8 +518,7 @@ class SpliceTapBackground {
                         return { success: false, error: (deleteResult && deleteResult.error) || 'Failed to delete rule' };
                     }
                     await this.reloadRulesPreservingHits();
-                    await this.broadcastState();
-                    return { success: true, dnrWarning: await this._syncNetworkRules() };
+                    return { success: true, dnrWarning: await this._syncThenBroadcast() };
 
                 case 'resetStats':
                     this.stats = {
@@ -504,8 +537,7 @@ class SpliceTapBackground {
                         return { success: false, error: (clearResult && clearResult.error) || 'Failed to clear rules' };
                     }
                     this.rules = [];
-                    await this.broadcastState();
-                    return { success: true, dnrWarning: await this._syncNetworkRules() };
+                    return { success: true, dnrWarning: await this._syncThenBroadcast() };
                 }
 
                 case 'resetAll': {
@@ -544,8 +576,7 @@ class SpliceTapBackground {
                     }
 
                     // Tell every tab: no rules, nothing armed, interception on.
-                    await this.broadcastState();
-                    return { success: true, dnrWarning: await this._syncNetworkRules() };
+                    return { success: true, dnrWarning: await this._syncThenBroadcast() };
                 }
 
                 case 'testRule':
@@ -564,7 +595,7 @@ class SpliceTapBackground {
                         if (settingsResult && settingsResult.success === false) {
                             return { success: false, error: settingsResult.error || 'Failed to save settings' };
                         }
-                        await this.broadcastState();
+                        this.broadcastState();
                     }
                     return { success: true };
                 }
@@ -601,16 +632,31 @@ class SpliceTapBackground {
                     // context, so a compromised one must not be able to push
                     // response bodies into storage when the user has not asked.
                     if (!(this.settings && this.settings.captureArmed)) return { success: true };
+                    // SEC2-7: the interceptor never sends a larger body, so a
+                    // larger one did not come from it. Every field below is
+                    // copied and capped here rather than trusting page-side
+                    // limits; headers kept the page's object as-is.
+                    if (e.body.length > CAPTURE_MAX_BODY) return { success: true };
+
+                    const headers = {};
+                    if (e.headers && typeof e.headers === 'object') {
+                        for (const [name, value] of Object.entries(e.headers).slice(0, CAPTURE_MAX_HEADERS)) {
+                            if (typeof value === 'string' && name.length <= LOG_TEXT_MAX) {
+                                headers[name] = value.slice(0, CAPTURE_HEADER_VALUE_MAX);
+                            }
+                        }
+                    }
+                    const status = Number(e.status);
 
                     this.captures.push({
                         id: `cap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
                         ts: Number(e.ts) || Date.now(),
-                        url: String(e.url || ''),
-                        method: String(e.method || 'GET').toUpperCase(),
-                        status: Number(e.status) || 200,
-                        statusText: String(e.statusText || ''),
-                        contentType: String(e.contentType || ''),
-                        headers: (e.headers && typeof e.headers === 'object') ? e.headers : {},
+                        url: String(e.url || '').slice(0, 4096),
+                        method: String(e.method || 'GET').toUpperCase().slice(0, 16),
+                        status: (Number.isInteger(status) && status >= 100 && status <= 999) ? status : 200,
+                        statusText: String(e.statusText || '').slice(0, LOG_TEXT_MAX),
+                        contentType: String(e.contentType || '').slice(0, LOG_TEXT_MAX),
+                        headers,
                         body: e.body,
                         tabId: (sender && sender.tab && typeof sender.tab.id === 'number') ? sender.tab.id : null
                     });
@@ -635,7 +681,7 @@ class SpliceTapBackground {
                     if (armResult && armResult.success === false) {
                         return { success: false, error: armResult.error || 'Failed to change capture state' };
                     }
-                    await this.broadcastState();
+                    this.broadcastState();
                     return { success: true, armed: !!this.settings.captureArmed };
                 }
 
@@ -790,6 +836,116 @@ class SpliceTapBackground {
         return outcome.success ? undefined : outcome.error;
     }
 
+    /**
+     * PER-31: the tail of every rule or on/off mutation, once the change is
+     * persisted. The network layer is synced before the caller is answered —
+     * its warning is part of the answer — while tabs are told without waiting.
+     */
+    async _syncThenBroadcast() {
+        const dnrWarning = await this._syncNetworkRules();
+        this.broadcastState();
+        return dnrWarning;
+    }
+
+    /**
+     * Decide what a bulk write (setRules) stores, rule by rule.
+     *
+     * PER-27: every incoming rule used to be re-validated, and any that failed
+     * was dropped — so Move up/down, Toggle-all and a merge import permanently
+     * deleted stored rules an earlier build had accepted, once a later build
+     * tightened the schema (a 120-character name, for one). Now:
+     *   - a rule identical to its stored copy (ignoring runtime-only fields)
+     *     is kept as stored, without re-validation — nothing about it changed;
+     *   - a new or changed rule is validated, and refused if invalid;
+     *   - a refused change to a stored rule keeps the stored copy, so a bulk
+     *     write can never delete a rule the caller did not leave out.
+     *
+     * PER-28: a replace-mode import could store two rules under one id, and
+     * toggle/delete by id then hit the wrong one or both. A repeated id is
+     * re-issued. Network-rule ids must be unique too (Chrome refuses the
+     * whole batch otherwise): stored copies keep theirs, and a new rule never
+     * trusts one it brought — it came from another profile's counter.
+     */
+    async _prepareBulkRules(incoming, stored) {
+        const storedById = new Map();
+        for (const rule of stored) {
+            if (rule && typeof rule.id === 'string' && !storedById.has(rule.id)) storedById.set(rule.id, rule);
+        }
+
+        const seenIds = new Set();
+        const rejected = [];
+        const chosen = []; // { rule, previous, asStored }
+        for (const raw of incoming) {
+            const rule = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? { ...raw } : raw;
+            let previous = null;
+            if (rule && typeof rule === 'object') {
+                if (typeof rule.id !== 'string' || !rule.id.trim() || seenIds.has(rule.id)) {
+                    rule.id = generateId();
+                } else {
+                    previous = storedById.get(rule.id) || null;
+                }
+                seenIds.add(rule.id);
+            }
+
+            if (previous && this._sameStoredRule(rule, previous)) {
+                chosen.push({ rule: previous, previous, asStored: true });
+                continue;
+            }
+
+            const validation = await this.validateRule(rule);
+            if (!validation.passed) {
+                rejected.push({
+                    id: rule && rule.id,
+                    name: rule && rule.name,
+                    errors: validation.results.map((r) => r.message),
+                    // The change was refused; the rule itself is still there.
+                    keptStored: previous ? true : undefined
+                });
+                if (previous) chosen.push({ rule: previous, previous, asStored: true });
+                continue;
+            }
+            chosen.push({ rule, previous, asStored: false });
+        }
+
+        const isDnr = (r) => r.type === 'headers' || r.type === 'queryparams';
+        const usedDnrIds = new Set();
+        const keepsOwnId = new Set();
+        for (const entry of chosen) {
+            const id = entry.rule.dnrRuleId;
+            if (entry.asStored && isDnr(entry.rule) && id && !usedDnrIds.has(id)) {
+                usedDnrIds.add(id);
+                keepsOwnId.add(entry);
+            }
+        }
+
+        const rules = [];
+        for (const entry of chosen) {
+            let rule = entry.rule;
+            if (isDnr(rule) && !keepsOwnId.has(entry)) {
+                const own = entry.previous && entry.previous.dnrRuleId;
+                const dnrRuleId = (own && !usedDnrIds.has(own)) ? own : await this.allocateDnrIdSerialized();
+                usedDnrIds.add(dnrRuleId);
+                rule = { ...rule, dnrRuleId };
+            }
+            rules.push(rule);
+        }
+        return { rules, rejected };
+    }
+
+    /**
+     * PER-27: is an incoming rule the stored rule, unchanged? hitCount moves
+     * on its own and testStatus is popup display state, so neither counts.
+     */
+    _sameStoredRule(incoming, stored) {
+        const comparable = (rule) => {
+            const copy = { ...this.storage.normalizeRule(rule) };
+            delete copy.hitCount;
+            delete copy.testStatus;
+            return copy;
+        };
+        return deepEqual(comparable(incoming), comparable(stored));
+    }
+
     async validateRule(rule) {
         // The checks themselves live in src/rule-schema.js, shared with both
         // editors, so a rule the editor accepts is a rule this boundary
@@ -859,11 +1015,37 @@ class SpliceTapBackground {
     _stateMessage() {
         return {
             type: 'syncState',
-            rules: this.rules,
+            rules: this._interceptorRules(),
             active: this.isActive,
             settings: this.settings,
             version: this.stateVersion
         };
+    }
+
+    /**
+     * PER-34 (contract 3): what tabs are sent — enabled interceptor rules
+     * only. Every frame of every tab got the whole rule list, disabled rules'
+     * mock bodies included: 58 MB retained on a page with 20 iframes with
+     * every rule disabled, and more for PER-1/PER-2 to expose.
+     */
+    _interceptorRules() {
+        return (this.rules || []).filter((rule) =>
+            rule && rule.enabled && INTERCEPTOR_TYPES.has(rule.type || 'mock'));
+    }
+
+    /**
+     * PER-6: is this message from a content script — code running in a web
+     * page's frame — rather than one of the extension's own pages? Extension
+     * pages (popup, options, DevTools panel) send from this extension's
+     * chrome-extension:// URL; a content script's sender URL is the page's.
+     * Anything not shown to be an extension page counts as a content script.
+     */
+    _isContentScript(sender) {
+        const base = chrome.runtime.getURL
+            ? chrome.runtime.getURL('').replace(/\/$/, '')
+            : `chrome-extension://${chrome.runtime.id}`;
+        const from = (sender && (sender.url || sender.origin)) || '';
+        return !(from === base || from.startsWith(base + '/'));
     }
 
     /**
@@ -877,12 +1059,26 @@ class SpliceTapBackground {
         return this.stateVersion;
     }
 
-    async broadcastState() {
+    /**
+     * Push the current state to every tab. Callers do NOT await this.
+     *
+     * PER-31: every mutation used to await it, and it waited on
+     * tabs.sendMessage to every tab — which never settles for a tab paused at
+     * a breakpoint. Saving, toggling and the master switch all hung until the
+     * developer resumed, and switching off withdrew the network rules only
+     * after the broadcast. The version is bumped synchronously here, and each
+     * message is built when it is sent, so a late delivery is never stale:
+     * the relay drops anything older than what it already applied.
+     */
+    broadcastState() {
         // Every state change funnels through here, so this is the one place the
         // badge needs to be refreshed from.
         this.updateBadge();
         this._bumpStateVersion();
+        return this._sendStateToTabs();
+    }
 
+    async _sendStateToTabs() {
         try {
             // PERF-6: this queried every tab in every window and sent the full
             // rules array to each on every edit — including chrome:// tabs,
@@ -890,10 +1086,8 @@ class SpliceTapBackground {
             // content script. The manifest only injects into http(s), so
             // filtering here removes work that could never have landed.
             const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
-            const broadcastPromises = tabs.map(tab => this.broadcastToTab(tab.id));
-            
-            // Wait for all broadcasts to complete (but don't fail if some tabs fail)
-            await Promise.allSettled(broadcastPromises);
+            // Settled per tab (with retries); one unresponsive tab delays nobody.
+            await Promise.allSettled(tabs.map((tab) => this.broadcastToTab(tab.id)));
         } catch (error) {
             console.error('Failed to query tabs for broadcast:', error);
         }
@@ -944,7 +1138,10 @@ class SpliceTapBackground {
             try {
                 chrome.contextMenus.create({
                     id: "splicetap-add-rule",
-                    title: "Mock this request",
+                    // PER-67: it opens a blank editor prefilled with this
+                    // site's host; "Mock this request" promised a request it
+                    // never had.
+                    title: "New SpliceTap rule for this site…",
                     contexts: ["action", "page"]
                 });
             } catch (error) {
@@ -1049,8 +1246,7 @@ class SpliceTapBackground {
                     await this.ready;
                     this.isActive = !this.isActive;
                     await this.storage.saveActiveState(this.isActive);
-                    await this.broadcastState();
-                    await this._syncNetworkRules();
+                    await this._syncThenBroadcast();
                 } else if (command === 'new-rule') {
                     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
                     if (tab && tab.id && tab.url && /^https?:/i.test(tab.url)) {
