@@ -208,6 +208,41 @@ async function waitForCondition(fn, timeout = 2000) {
     }
 }
 
+describe('PER-34: tabs receive only the rules the interceptor runs', () => {
+    const mixed = () => [
+        mockRule('on'),
+        mockRule('off', { enabled: false, response: { statusCode: 200, headers: {}, body: 'x'.repeat(5000), delay: 0, mode: 'static' } }),
+        { ...mockRule('legacy'), type: undefined }, // stored before `type` existed: a mock
+        { id: 'blk', name: 'B', type: 'block', enabled: true, match: { url: '*/b*', method: '*' } },
+        { id: 'hdr', name: 'H', type: 'headers', enabled: true, dnrRuleId: 1, match: { url: '*/h*', method: '*' }, headersMod: { request: [{ op: 'set', name: 'X', value: '1' }] } }
+    ];
+    const ids = (rules) => rules.map((r) => r.id);
+
+    test('the syncState broadcast carries only enabled mock/block/delay/redirect rules', async () => {
+        const { mock, send } = await setup({ initial: { spliceTapRules: mixed() }, tabs: [{ id: 3, url: 'https://a.test/' }] });
+        mock.sentTabMessages.length = 0;
+
+        await send({ type: 'settingsUpdated', settings: { theme: 'dark' } });
+        await waitForCondition(() => mock.sentTabMessages.length > 0);
+
+        expect(ids(mock.sentTabMessages[0].message.rules)).toEqual(['on', 'legacy', 'blk']);
+    });
+
+    test('getRules with scope "interceptor" returns the same subset', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: mixed() } });
+
+        expect(ids((await send({ type: 'getRules', scope: 'interceptor' })).rules)).toEqual(['on', 'legacy', 'blk']);
+        expect(ids((await send({ type: 'getRules' })).rules)).toEqual(['on', 'off', 'legacy', 'blk', 'hdr']);
+    });
+
+    test('a content script in a subframe gets the subset; the top frame (in-page editor) gets every rule', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: mixed() } });
+
+        expect(ids((await send({ type: 'getRules' }, contentScript(4))).rules)).toEqual(['on', 'legacy', 'blk']);
+        expect(ids((await send({ type: 'getRules' }, contentScript(0))).rules)).toHaveLength(5);
+    });
+});
+
 // ---- service_worker/dnr.js ----------------------------------------------
 
 const dnr = require('../service_worker/dnr');

@@ -21,6 +21,10 @@ const { syncDnrRules, deepEqual } = globalThis.SpliceTapDnr;
 const { generateId } = globalThis.SpliceTapCommon;
 const RuleSchema = globalThis.SpliceTapRuleSchema;
 
+// PER-34: the rule types the page-side interceptor runs (src/matcher.js
+// INTERCEPTOR_TYPES). headers/queryparams rules are applied by Chrome (DNR).
+const INTERCEPTOR_TYPES = new Set(['mock', 'block', 'delay', 'redirect']);
+
 class SpliceTapBackground {
     constructor() {
         this.storage = new SpliceTapStorage();
@@ -357,7 +361,14 @@ class SpliceTapBackground {
                     return {
                         success: true,
                         version: this.stateVersion,
-                        rules: this.rules,
+                        // PER-34: the relay in every frame asks for state on
+                        // load. A subframe has no use for disabled rules' mock
+                        // bodies or DNR rules — only the top frame hosts the
+                        // in-page editor, which checks any rule still exists.
+                        rules: (request.scope === 'interceptor'
+                            || (this._isContentScript(sender) && sender.frameId !== 0))
+                            ? this._interceptorRules()
+                            : this.rules,
                         active: this.isActive,
                         stats: this.stats,
                         settings: this.settings,
@@ -950,11 +961,37 @@ class SpliceTapBackground {
     _stateMessage() {
         return {
             type: 'syncState',
-            rules: this.rules,
+            rules: this._interceptorRules(),
             active: this.isActive,
             settings: this.settings,
             version: this.stateVersion
         };
+    }
+
+    /**
+     * PER-34 (contract 3): what tabs are sent — enabled interceptor rules
+     * only. Every frame of every tab got the whole rule list, disabled rules'
+     * mock bodies included: 58 MB retained on a page with 20 iframes with
+     * every rule disabled, and more for PER-1/PER-2 to expose.
+     */
+    _interceptorRules() {
+        return (this.rules || []).filter((rule) =>
+            rule && rule.enabled && INTERCEPTOR_TYPES.has(rule.type || 'mock'));
+    }
+
+    /**
+     * PER-6: is this message from a content script — code running in a web
+     * page's frame — rather than one of the extension's own pages? Extension
+     * pages (popup, options, DevTools panel) send from this extension's
+     * chrome-extension:// URL; a content script's sender URL is the page's.
+     * Anything not shown to be an extension page counts as a content script.
+     */
+    _isContentScript(sender) {
+        const base = chrome.runtime.getURL
+            ? chrome.runtime.getURL('').replace(/\/$/, '')
+            : `chrome-extension://${chrome.runtime.id}`;
+        const from = (sender && (sender.url || sender.origin)) || '';
+        return !(from === base || from.startsWith(base + '/'));
     }
 
     /**
