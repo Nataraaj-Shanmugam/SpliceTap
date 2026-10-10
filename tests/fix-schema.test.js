@@ -622,3 +622,144 @@ describe('PER-30 — mock bodies and patches nested too deeply are refused', () 
         expect(S.validateRule(base({ response: { statusCode: 200, headers: {} } })).valid).toBe(true);
     });
 });
+
+describe('PER-19 — an empty patch is a no-op and an object patch never rewrites a non-object root', () => {
+    test('an empty patch returns the original untouched', () => {
+        const original = { a: 1, b: { c: 2 } };
+        expect(jsonMergePatch(original, {})).toEqual({ a: 1, b: { c: 2 } });
+        expect(original).toEqual({ a: 1, b: { c: 2 } });
+    });
+
+    test('{} on an array root serves the array, not {}', () => {
+        const original = [1, 2, 3];
+        expect(jsonMergePatch(original, {})).toBe(original);
+        expect(jsonMergePatch([{ id: 1 }], {})).toEqual([{ id: 1 }]);
+    });
+
+    test('an object patch with keys on an array or scalar root returns the root unchanged', () => {
+        const list = [1, 2, 3];
+        expect(jsonMergePatch(list, { a: 1 })).toBe(list);
+        expect(jsonMergePatch('text', { a: 1 })).toBe('text');
+        expect(jsonMergePatch(42, { a: 1 })).toBe(42);
+        expect(jsonMergePatch(true, { a: null })).toBe(true);
+    });
+
+    test('a missing (null/undefined) root is still treated as an empty object', () => {
+        expect(jsonMergePatch(undefined, { a: 1 })).toEqual({ a: 1 });
+        expect(jsonMergePatch(null, { a: 1 })).toEqual({ a: 1 });
+        expect(jsonMergePatch(null, {})).toEqual({});
+    });
+
+    test('a non-object patch still replaces whatever the root was', () => {
+        expect(jsonMergePatch([1, 2, 3], 'replaced')).toBe('replaced');
+        expect(jsonMergePatch([1, 2, 3], [9])).toEqual([9]);
+        expect(jsonMergePatch({ a: 1 }, null)).toBeNull();
+    });
+
+    test('nested levels still follow RFC 7386: a non-object value becomes the merged object', () => {
+        expect(jsonMergePatch({ a: [1, 2] }, { a: { b: 1 } })).toEqual({ a: { b: 1 } });
+        expect(jsonMergePatch({ a: 'x' }, { a: { b: 1 } })).toEqual({ a: { b: 1 } });
+        expect(jsonMergePatch({ a: { c: 1 } }, { a: {} })).toEqual({ a: { c: 1 } });
+    });
+
+    test.each([
+        [{ a: 1 }, {}, false],
+        [[1, 2, 3], {}, false],
+        [[1, 2, 3], { a: 1 }, false],
+        ['text', { a: 1 }, false],
+        [7, { a: 1 }, false],
+        [{ a: 1 }, { a: 2 }, true],
+        [{}, { a: 2 }, true],
+        [null, { a: 2 }, true],
+        [undefined, { a: 2 }, true],
+        [[1, 2], 'replacement', true],
+        [{ a: 1 }, [1], true],
+        [{ a: 1 }, null, true]
+    ])('isPatchApplicable(%j, %j) is %s', (target, patch, expected) => {
+        expect(isPatchApplicable(target, patch)).toBe(expected);
+    });
+});
+
+describe('PER-41 — __proto__ and constructor keys survive the merge', () => {
+    test('a __proto__ key in the patch is kept as data and does not touch the prototype', () => {
+        const patch = JSON.parse('{"__proto__": {"x": 1}, "a": 1}');
+        const result = jsonMergePatch({ b: 2 }, patch);
+        expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+        expect(Object.prototype.hasOwnProperty.call(result, '__proto__')).toBe(true);
+        expect(JSON.parse(JSON.stringify(result))).toEqual(JSON.parse('{"b": 2, "__proto__": {"x": 1}, "a": 1}'));
+        expect(result.x).toBeUndefined();
+        expect({}.x).toBeUndefined();
+    });
+
+    test('a __proto__ key in the original survives an unrelated patch', () => {
+        const original = JSON.parse('{"__proto__": {"k": 1}, "b": 2}');
+        const result = jsonMergePatch(original, { a: 1 });
+        expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+        expect(JSON.stringify(result)).toBe('{"__proto__":{"k":1},"b":2,"a":1}');
+    });
+
+    test('a patch merges into an existing __proto__ key, and null deletes it', () => {
+        const original = JSON.parse('{"__proto__": {"k": 1}}');
+        const merged = jsonMergePatch(original, JSON.parse('{"__proto__": {"y": 2}}'));
+        expect(JSON.stringify(merged)).toBe('{"__proto__":{"k":1,"y":2}}');
+        const removed = jsonMergePatch(original, JSON.parse('{"__proto__": null}'));
+        expect(JSON.stringify(removed)).toBe('{}');
+    });
+
+    test('a constructor key is kept as data and pollutes nothing', () => {
+        const patch = JSON.parse('{"constructor": {"prototype": {"polluted": true}}}');
+        const result = jsonMergePatch({ constructor: { keep: 1 } }, patch);
+        expect(JSON.stringify(result)).toBe('{"constructor":{"keep":1,"prototype":{"polluted":true}}}');
+        expect({}.polluted).toBeUndefined();
+        expect(Object.prototype.polluted).toBeUndefined();
+    });
+});
+
+describe('templates — PER-9 and PER-24', () => {
+    const asRule = (id) => {
+        const t = templates.getTemplate(id);
+        const rule = { name: id, enabled: true, type: t.type, match: { url: t.url, method: t.method } };
+        if (t.graphqlOperation) rule.match.graphql = { operationName: t.graphqlOperation };
+        if (t.type === 'mock') {
+            rule.response = { statusCode: t.status || 200, headers: { 'Content-Type': 'application/json' }, delay: 0, mode: t.mode || 'static' };
+            if (t.mode === 'patch') rule.response.patch = JSON.parse(t.patch);
+            else rule.response.body = JSON.parse(t.body);
+        }
+        if (t.type === 'delay') rule.delayMs = t.delayMs;
+        if (t.type === 'redirect') rule.redirect = { destination: t.redirectDestination };
+        if (t.type === 'headers') rule.headersMod = { request: t.headersModRequest || [], response: t.headersModResponse || [] };
+        return rule;
+    };
+
+    test('every template, as the editor saves it, passes the schema', () => {
+        for (const meta of templates.listTemplates()) {
+            expect({ id: meta.id, ...S.validateRule(asRule(meta.id)) }).toEqual({ id: meta.id, valid: true, errors: [] });
+        }
+    });
+
+    test('PER-9: "Redirect to localhost" is anchored at the origin and keeps its destination', () => {
+        const t = templates.getTemplate('redirectLocalhost');
+        expect(t.url).toBe('/^https?:\\/\\/[^/]+\\/(api\\/.*)/');
+        expect(t.redirectDestination).toBe('http://localhost:3000/$1');
+    });
+
+    test('PER-9: the anchored pattern matches absolute URLs on any host and captures the API path', () => {
+        const t = templates.getTemplate('redirectLocalhost');
+        const body = t.url.slice(1, -1);
+        const re = new RegExp(body, 'i');
+        expect(re.exec('https://api.staging.example.com/api/users/7')[1]).toBe('api/users/7');
+        expect(re.exec('http://127.0.0.1:8080/api/orders?id=1')[1]).toBe('api/orders?id=1');
+        expect(re.test('/api/users/7')).toBe(false);
+        expect(re.test('https://example.com/static/app.js')).toBe(false);
+        expect(matchUrl('https://api.staging.example.com/api/users/7', t.url)).toBe(true);
+    });
+
+    test('PER-24: CORS Unblock also allows the methods a preflight asks about', () => {
+        const t = templates.getTemplate('corsUnblock');
+        const byName = Object.fromEntries(t.headersModResponse.map((op) => [op.name, op.value]));
+        expect(byName['Access-Control-Allow-Methods']).toBe('GET, POST, PUT, PATCH, DELETE, OPTIONS');
+        expect(byName['Access-Control-Allow-Origin']).toBe('*');
+        expect(byName['Access-Control-Allow-Headers']).toBe('*');
+        expect(t.headersModResponse).toHaveLength(3);
+    });
+});
