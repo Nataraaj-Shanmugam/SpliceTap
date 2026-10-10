@@ -23,8 +23,10 @@ remote server:
   DevTools panel keeps history across service-worker restarts within a
   browser session. Session storage clears automatically when the browser
   closes. Response and request **bodies are never written to this log**, only
-  metadata. Common sensitive query-string parameters (tokens, API keys,
-  session ids) are redacted before a URL is written to it.
+  metadata. Redaction is best effort: it removes the values of query and
+  fragment parameters whose names suggest secrets (token, secret, session,
+  signature, auth, key, password, code, jwt…) and token-like path segments
+  before a URL is written to it.
 - **Captures** (`chrome.storage.session`) — response bodies, and only when you
   explicitly switch on **Capture** in the popup's Data tab. This is the one
   feature that records a response body, and it exists so you can build a rule
