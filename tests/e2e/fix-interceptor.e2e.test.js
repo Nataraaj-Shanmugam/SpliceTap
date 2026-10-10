@@ -251,7 +251,7 @@ describe('fix-interceptor: interception in a real browser', () => {
         await sleep(500);
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'load' }),
-            page.evaluate(() => { location.href = '/page2'; })
+            page.evaluate(() => { window.location.href = '/page2'; })
         ]);
 
         const activated = await page.evaluate(() => performance.getEntriesByType('navigation')[0].activationStart > 0);
