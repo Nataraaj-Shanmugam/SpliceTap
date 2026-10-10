@@ -6,11 +6,14 @@
 
 ## Status — updated 10 October 2026
 
-**Original audit: 53 fixed, 4 declined, 0 open.** Every Critical, High,
-Medium and Low is fixed except the four declined below, each with the
-trade-off or measurement behind it. CQ-1, the last open item, is closed.
+**Original audit: 53 recorded fixed, 4 declined — 8 of the 53 reopened by
+the fourth pass.** SEC-1, SEC-2, PROD-5, UX-2, UX-3 and PERF-10 are still
+broken, and A11Y-4 and A11Y-8 are only partly fixed; see **Fourth pass**
+below. The four declined items are listed with the trade-off or measurement
+behind each.
 
-**Second pass: 14 further issues, all fixed.** A headless suite that loads
+**Second pass: 14 further issues, all recorded fixed (E2E-7 reopened by the
+fourth pass).** A headless suite that loads
 the real extension into Chrome found problems no review or unit test had —
 including two that made the product unusable. See **Second pass** below.
 Three of the 14 were regressions introduced by this project's own remediation
@@ -21,6 +24,20 @@ with Requestly, tested headlessly, found them — including a page running a
 stale rule set when rules changed during load (29 of 30 trials), and two
 templates that never matched a local API on a port. They are recorded with
 the comparison in [PARITY.md](PARITY.md) (P-1 to P-12).
+
+**Fourth pass: 89 open findings, none fixed yet.** Seven persona reviews
+(product owner, QA, end-user developer, compatibility, security,
+accessibility, performance), all run headlessly against the real extension,
+produced 110 findings — 89 after merging duplicates: 17 High, 39 Medium,
+33 Low. Fifteen of the 17 High items were re-run independently before being
+recorded. They include two routes by which any web page can read the whole
+rule set (so SEC-2 is not fixed), rules matching the URL as the page spelled
+it (so the editor's own default pattern misses relative calls), redirect,
+precedence and header bugs, a bulk write that silently deletes stored rules,
+and a paused tab freezing every rule change. Nine items recorded as fixed
+here (the eight above, plus E2E-7 from the second pass) are reopened. All
+of it — evidence, causes, fixes and a prioritised roadmap — is in
+[PERSONA-REVIEW.md](PERSONA-REVIEW.md) (PER-1 to PER-89).
 
 The report after this section is the original audit and is kept as written;
 this section records what has changed since.
