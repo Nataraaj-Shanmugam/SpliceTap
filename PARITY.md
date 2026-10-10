@@ -53,7 +53,7 @@ It is **not** a full Requestly replacement. The largest gaps:
 | Cancel Request | ◑ | `block`, fetch/XHR only — an `<img>` or `<script>` is not blocked (pinned). |
 | Modify Query Params | ◑ | Add, replace and remove, on the wire. No "Remove All". |
 | Modify User Agent | ◑ | Via a headers rule (and the *Custom User-Agent* template); the header changes, `navigator.userAgent` does not. No device presets. |
-| Redirect / Map Remote | ◑ | `redirect`, with `$1`–`$9` from a regex; keeps method, body and headers. fetch/XHR only — a `<script src>` is not redirected (pinned). |
+| Redirect / Map Remote | ◑ | `redirect`, with `$1`–`$9` from a regex; keeps method, body and headers, including `fetch(Request)` with a body. fetch/XHR only — a `<script src>` is not redirected (pinned). |
 | Replace String (in URL) | ◑ | Achievable with a regex redirect and capture groups, for fetch/XHR. |
 | Delay | ✅ ★ | fetch/XHR up to 30 s (verified at 6 s); Requestly's extension caps fetch/XHR at 5 s. Not applicable to other resources. |
 | Insert Script (JS/CSS) | ✗ | Not planned: arbitrary page injection is a Web Store review risk and overlaps userscript managers. |
@@ -82,10 +82,10 @@ It is **not** a full Requestly replacement. The largest gaps:
 | Rule order / precedence | ✅ | First match wins; reordering changes the winner. |
 | Rule groups | ✗ | Ordering only. |
 | "Test" a rule | ◑ | SpliceTap's Test re-checks structure only; Requestly opens a page and reports whether the rule applied. |
-| Templates | ✅ | Seven, each verified for its stated purpose (two were broken — see bugs). |
+| Templates | ✅ | Seven, each verified for its stated purpose (two were broken — see bugs). (Redirect to localhost and CORS Unblock were corrected in the persona review: PER-9, PER-24) |
 | Export / import own rules | ✅ | Including v1 files and replace-vs-merge. |
 | Import from Requestly / ModHeader / Charles / Resource Override | ✗ | A Requestly export is now detected and explained instead of rejected as "invalid". |
-| Execution visibility | ✅ | DevTools panel log (redacted), per-rule hit counts, "Not applied" marker for rules Chrome refused. |
+| Execution visibility | ◑ | mock/block/delay/redirect and chaos failures appear in the DevTools log and hit counts; header and query-param rules are applied by Chrome's network layer and are not counted per request, so check Chrome's Network tab. |
 | Session recording / HAR | ✗ | No recording or HAR export. |
 | Team sync, sharing, workspaces | ✗ | Not planned: SpliceTap stores nothing off-device. |
 | API client, hosted mock server, file server | ✗ | Separate products; out of scope. |
