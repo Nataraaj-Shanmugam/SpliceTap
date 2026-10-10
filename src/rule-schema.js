@@ -35,6 +35,17 @@
         DELAY_MIN: 0, DELAY_MAX: 30000, DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000
     };
 
+    // PER-52: 1xx statuses are interim ("100 Continue", "103 Early Hints"):
+    // they precede the real response and can never BE it, and fetch and XHR
+    // disagree on what a mocked one is. The shared LIMITS still say 100, which
+    // the editors use for their number inputs; the floor is enforced here.
+    const STATUS_MIN = Math.max(LIMITS.STATUS_MIN, 200);
+
+    // PER-30: chrome.storage silently truncates a value nested deeper than
+    // about 96 levels to `{}` (verified), so a deep mock body or patch came
+    // back empty after a reload. Refuse well short of that.
+    const JSON_DEPTH_MAX = 64;
+
     const RULE_TYPES = ['mock', 'block', 'delay', 'redirect', 'headers', 'queryparams'];
 
     // What the editors offer. Also the set declarativeNetRequest accepts as a
@@ -73,6 +84,55 @@
     const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
     const isRegexPattern = (p) => typeof p === 'string' && p.length >= 2 && p.startsWith('/') && p.endsWith('/');
 
+    // PER-12: header names and values reach `new Headers()` in the page, which
+    // throws on anything that is not a ByteString — a character above U+00FF.
+    // An en dash (as macOS and Word autocorrect type it), an emoji or CJK text
+    // is enough. Reject at save time rather than lose every header at runtime.
+    const ABOVE_LATIN1_RE = /[^\x00-\xFF]/;
+    const ABOVE_LATIN1_VALUE = 'contains characters above U+00FF (an en dash, emoji or CJK text, for example), '
+        + 'which a browser cannot send in a header. Use plain ASCII or Latin-1 text, or percent-encode it.';
+
+    // PER-49: /pattern/flags. Only the slash-delimited form is a regex, so a
+    // trailing flag silently turned the whole pattern into a literal substring
+    // that no URL contains. A trailing run of flag letters is only read as
+    // flags when the body also looks like a regex (an escape, anchor, group,
+    // class, alternation or `.*`), so a plain path like /api/v1/i or /api/v is
+    // still a substring pattern.
+    const REGEX_FLAGGED_RE = /^\/(.+)\/([dgimsuvy]{1,8})$/;
+    const REGEX_SYNTAX_RE = /[\\^$()[\]{}|+?]|\.[*+]/;
+
+    // PER-5: does a URL pattern name a host? Yes when, after a "//" (the one
+    // in "https://" or "*://"), it spells out a specific host: localhost, an
+    // IPv4 address, or a dotted name such as api.example.com, optionally behind
+    // a "*." wildcard subdomain. "*/api/*", "*://*/*" and a bare path do not.
+    // In a /regex/ the punctuation escapes are undone first, so
+    // ^https?:\/\/api\.example\.com\/ reads as https://api.example.com/.
+    const HOST_AFTER_SLASHES_RE = /^\(?(?:\?:)?(?:\*\.)?(?:localhost\b|\d{1,3}(?:\.\d{1,3}){3}\b|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b)/i;
+
+    function patternNamesHost(pattern) {
+        if (typeof pattern !== 'string') return false;
+        const text = isRegexPattern(pattern)
+            ? pattern.slice(1, -1).replace(/\\([^A-Za-z0-9])/g, '$1')
+            : pattern;
+        return text.split('//').slice(1).some((rest) => HOST_AFTER_SLASHES_RE.test(rest));
+    }
+
+    // True when a JSON value nests containers deeper than `max` levels.
+    // Iterative, and it returns as soon as one path is too deep, so neither a
+    // hostile document nor a cyclic object can exhaust the stack or the clock.
+    function exceedsDepth(value, max) {
+        const stack = [[value, 1]];
+        while (stack.length > 0) {
+            const [node, depth] = stack.pop();
+            if (node === null || typeof node !== 'object') continue;
+            if (depth > max) return true;
+            for (const child of Array.isArray(node) ? node : Object.values(node)) {
+                stack.push([child, depth + 1]);
+            }
+        }
+        return false;
+    }
+
     function getMatcher() {
         return global.SpliceTapMatcher
             || (typeof require === 'function' ? require('./matcher.js') : null);
@@ -96,6 +156,14 @@
         }
         if (pattern.length > LIMITS.URL_MAX) {
             return { isValid: false, error: `Pattern is too long (max ${LIMITS.URL_MAX} characters)` };
+        }
+
+        const flagged = REGEX_FLAGGED_RE.exec(pattern);
+        if (flagged && REGEX_SYNTAX_RE.test(flagged[1])) {
+            return {
+                isValid: false,
+                error: `Regex flags aren't supported — matching is already case-insensitive. Remove "${flagged[2]}" after the closing slash (/${flagged[1]}/).`
+            };
         }
 
         if (isRegexPattern(pattern)) {
@@ -129,18 +197,26 @@
     }
 
     function validateStatusCode(code) {
-        const numCode = typeof code === 'number' ? code : parseInt(code, 10);
-        if (!Number.isInteger(numCode)) {
-            return { isValid: false, error: 'Status code must be a number' };
+        // PER-25: a number, and a whole one. This used to parseInt strings, so
+        // "404" and even "201abc" passed here while the interceptor then
+        // served the stored string differently in fetch and XHR.
+        if (typeof code !== 'number' || !Number.isInteger(code)) {
+            return { isValid: false, error: 'Status code must be a whole number like 200, not text or a fraction' };
         }
-        if (numCode < LIMITS.STATUS_MIN || numCode > LIMITS.STATUS_MAX) {
-            return { isValid: false, error: `Status code must be between ${LIMITS.STATUS_MIN} and ${LIMITS.STATUS_MAX}` };
+        if (code < STATUS_MIN || code > LIMITS.STATUS_MAX) {
+            const interim = code >= 100 && code < STATUS_MIN
+                ? ' — 1xx statuses are interim responses and can never be a final response'
+                : '';
+            return { isValid: false, error: `Status code must be between ${STATUS_MIN} and ${LIMITS.STATUS_MAX}${interim}` };
         }
-        return { isValid: true, code: numCode };
+        return { isValid: true, code };
     }
 
     function validateHeaderName(name, where) {
         if (typeof name !== 'string' || name.trim() === '') return `${where}: header name is required`;
+        if (ABOVE_LATIN1_RE.test(name)) {
+            return `${where}: the header name "${name}" contains characters above U+00FF — header names must be plain ASCII`;
+        }
         if (!HEADER_NAME_RE.test(name)) return `${where}: "${name}" is not a valid header name`;
         return null;
     }
@@ -153,7 +229,7 @@
      * incomplete op does not just fail its own rule, it blocks every other
      * headers/queryparams rule from being applied or withdrawn.
      */
-    function validateHeadersMod(headersMod) {
+    function validateHeadersMod(headersMod, urlPattern) {
         const errors = [];
         if (!isPlainObject(headersMod)) {
             return { valid: false, errors: ['Header operations must be an object with "request" and "response" lists'] };
@@ -161,12 +237,16 @@
 
         const lists = [['request', headersMod.request], ['response', headersMod.response]];
         const allOps = [];
+        const responseOps = [];
         for (const [side, list] of lists) {
             if (list === undefined || list === null) continue;
             if (!Array.isArray(list)) {
                 errors.push(`${side} header operations must be a list`);
                 continue;
             }
+            // PER-51: only the first operation on a header name applies, so a
+            // second one on the same side is a rule that does less than it says.
+            const seen = new Set();
             list.forEach((op, i) => {
                 const where = `${side === 'request' ? 'Request' : 'Response'} header #${i + 1}`;
                 if (!isPlainObject(op)) {
@@ -178,14 +258,24 @@
                 }
                 const nameError = validateHeaderName(op.name, where);
                 if (nameError) errors.push(nameError);
+                if (typeof op.name === 'string' && op.name.trim() !== '') {
+                    const key = op.name.toLowerCase();
+                    if (seen.has(key)) {
+                        errors.push(`${where}: "${op.name}" appears twice in the ${side} headers — use one operation per header name (names are not case-sensitive)`);
+                    }
+                    seen.add(key);
+                }
                 if (op.op === 'set') {
                     if (typeof op.value !== 'string') {
                         errors.push(`${where}: a "set" operation needs a string "value"`);
                     } else if (hasLineBreak(op.value)) {
                         errors.push(`${where}: header values cannot contain line breaks`);
+                    } else if (ABOVE_LATIN1_RE.test(op.value)) {
+                        errors.push(`${where}: the header value ${ABOVE_LATIN1_VALUE}`);
                     }
                 }
                 allOps.push(op);
+                if (side === 'response') responseOps.push(op);
             });
         }
 
@@ -197,13 +287,28 @@
             // Browsers reject a wildcard origin combined with credentials at
             // fetch time anyway; say so at save time instead of shipping a
             // rule that can never work.
-            if (name === 'access-control-allow-origin' && op.op === 'set' && op.value === '*') {
+            if (name === 'access-control-allow-origin' && op.op === 'set' && String(op.value).trim() === '*') {
                 const credentials = allOps.some((o) => o !== op && o && typeof o.name === 'string'
                     && o.name.toLowerCase() === 'access-control-allow-credentials'
-                    && o.op === 'set' && String(o.value).toLowerCase() === 'true');
+                    && o.op === 'set' && String(o.value).trim().toLowerCase() === 'true');
                 if (credentials) {
                     errors.push('Access-Control-Allow-Origin: * cannot be combined with Access-Control-Allow-Credentials: true.');
                 }
+            }
+        }
+
+        // PER-5: credentialed CORS tells the browser to hand cookies and auth
+        // headers to the page. Applied to every site a pattern like */api/*
+        // matches, that is a shared pack's way of opening the user's sessions
+        // to whatever origin it names, so the rule must say which host it is
+        // for. `urlPattern` is only passed by validateRule: a caller with no
+        // URL in hand (the DNR layer) cannot be judged on it.
+        if (urlPattern !== undefined) {
+            const credentials = responseOps.some((o) => o && typeof o.name === 'string'
+                && o.name.toLowerCase() === 'access-control-allow-credentials'
+                && o.op === 'set' && String(o.value).trim().toLowerCase() === 'true');
+            if (credentials && !patternNamesHost(urlPattern)) {
+                errors.push('Access-Control-Allow-Credentials: true needs a URL pattern that names a host, such as "https://api.example.com/*" or "http://localhost:3000/*". A pattern like "*/api/*" would send credentialed CORS headers to every site it matches.');
             }
         }
 
@@ -284,13 +389,18 @@
                 errors.push(`${label}: the value for "${name}" must be text, not an object`);
             } else if (typeof value === 'string' && hasLineBreak(value)) {
                 errors.push(`${label}: the value for "${name}" cannot contain line breaks`);
+            } else if (typeof value === 'string' && ABOVE_LATIN1_RE.test(value)) {
+                errors.push(`${label}: the value for "${name}" ${ABOVE_LATIN1_VALUE}`);
             }
         }
     }
 
     function validateDelay(value, min, max, errors) {
-        const n = typeof value === 'number' ? value : parseInt(value, 10);
-        if (!Number.isInteger(n) || n < min || n > max) {
+        // PER-25: a number, and a whole one. parseInt used to accept "300ms"
+        // (and read "2e3" as 2), which then waited about 0 ms at runtime.
+        if (typeof value !== 'number' || !Number.isInteger(value)) {
+            errors.push(`Delay must be a whole number of milliseconds between ${min} and ${max}`);
+        } else if (value < min || value > max) {
             errors.push(`Delay must be between ${min} and ${max} ms`);
         }
     }
@@ -316,6 +426,12 @@
             errors.push('Rule name is required');
         } else if (rule.name.length > LIMITS.NAME_MAX) {
             errors.push(`Rule name must be ${LIMITS.NAME_MAX} characters or less`);
+        }
+
+        // PER-25: `enabled: "false"` is truthy, so the interceptor ran the rule
+        // while the UI, which compares strictly, showed it as off.
+        if (rule.enabled !== undefined && typeof rule.enabled !== 'boolean') {
+            errors.push('"enabled" must be true or false');
         }
 
         const type = rule.type || 'mock';
@@ -344,9 +460,11 @@
                     || match.graphql.operationName.trim() === '') {
                     errors.push('A GraphQL condition needs an operationName');
                 } else {
+                    // PER-23: GET too — persisted-query clients send
+                    // ?operationName= in the URL and no body at all.
                     const method = String(match.method || '').toUpperCase();
-                    if (method !== 'POST' && method !== '*') {
-                        errors.push('GraphQL operation matching requires method POST or Any (*)');
+                    if (method !== 'POST' && method !== 'GET' && method !== '*') {
+                        errors.push('GraphQL operation matching requires method POST, GET or Any (*)');
                     }
                 }
             }
@@ -372,17 +490,33 @@
                 if (mode === 'patch' && r.patch !== undefined && !isPlainObject(r.patch)) {
                     errors.push('A response patch must be a JSON object');
                 }
+                if (r.body !== undefined && exceedsDepth(r.body, JSON_DEPTH_MAX)) {
+                    errors.push(`The response body is nested more than ${JSON_DEPTH_MAX} levels deep, which cannot be stored reliably. Flatten it.`);
+                }
+                if (r.patch !== undefined && exceedsDepth(r.patch, JSON_DEPTH_MAX)) {
+                    errors.push(`The response patch is nested more than ${JSON_DEPTH_MAX} levels deep, which cannot be stored reliably. Flatten it.`);
+                }
             }
         } else if (type === 'delay') {
             validateDelay(rule.delayMs, LIMITS.DELAY_MS_MIN, LIMITS.DELAY_MS_MAX, errors);
         } else if (type === 'redirect') {
-            const destinationError = validateRedirectDestination(rule.redirect && rule.redirect.destination);
+            const destination = rule.redirect && rule.redirect.destination;
+            const destinationError = validateRedirectDestination(destination);
             if (destinationError) errors.push(destinationError);
+            // PER-22: $1-$9 only mean something when the URL pattern is a
+            // /regex/ with capture groups. A wildcard has none, so the page
+            // was sent to the literal text "$1" (or every path collapsed to
+            // one URL), with no warning. Stated at save time instead.
+            if (typeof destination === 'string' && /\$[1-9]/.test(destination)
+                && isPlainObject(match) && typeof match.url === 'string' && match.url !== ''
+                && !isRegexPattern(match.url)) {
+                errors.push('The redirect destination uses $1-$9, which only work with a /regex/ URL pattern. Wildcards (*) don\'t capture, so the page would be sent to the literal text "$1". Use a pattern like /\\/api\\/(.*)/, or remove the $ placeholders.');
+            }
         } else if (type === 'headers') {
             if (rule.headersMod === undefined || rule.headersMod === null) {
                 errors.push('At least one request or response header operation is required');
             } else {
-                errors.push(...validateHeadersMod(rule.headersMod).errors);
+                errors.push(...validateHeadersMod(rule.headersMod, isPlainObject(match) ? match.url : undefined).errors);
             }
         } else if (type === 'queryparams') {
             errors.push(...validateQueryParams(rule.queryParams || {}).errors);
@@ -423,10 +557,13 @@
         validateQueryParams,
         validateRedirectDestination,
         isRegexPattern,
+        patternNamesHost,
         RULE_TYPES,
         METHODS,
         FORBIDDEN_HEADER_NAMES,
-        LIMITS
+        // The limits this validator enforces: the shared ones, with the
+        // status floor (PER-52) and the nesting cap (PER-30) applied.
+        LIMITS: Object.assign({}, LIMITS, { STATUS_MIN, JSON_DEPTH_MAX })
     };
 
     if (typeof module !== 'undefined' && module.exports) {

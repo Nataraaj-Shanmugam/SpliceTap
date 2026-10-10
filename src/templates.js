@@ -75,7 +75,13 @@
             rule: {
                 type: 'redirect',
                 method: '*',
-                url: '/\\/(api\\/.*)/',
+                // PER-9: anchored at the origin. A redirect's result is the
+                // destination with $1 substituted, so the pattern has to match
+                // the WHOLE URL for the capture to be the only thing left. The
+                // old '/\/(api\/.*)/' matched an absolute URL mid-string and
+                // sent https://api.staging.example.com/api/users/7 to a
+                // malformed hybrid of both hosts — the template's own use case.
+                url: '/^https?:\\/\\/[^/]+\\/(api\\/.*)/',
                 redirectDestination: 'http://localhost:3000/$1'
             }
         },
@@ -101,6 +107,10 @@
                 url: LOCAL_API_PATTERN,
                 headersModResponse: [
                     { op: 'set', name: 'Access-Control-Allow-Origin', value: '*' },
+                    // PER-24: a preflight for PUT, PATCH or DELETE asks which
+                    // methods are allowed, and a wildcard origin alone answers
+                    // only the simple ones — those requests failed.
+                    { op: 'set', name: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, PATCH, DELETE, OPTIONS' },
                     { op: 'set', name: 'Access-Control-Allow-Headers', value: '*' }
                 ]
             }
