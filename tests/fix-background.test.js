@@ -243,6 +243,112 @@ describe('PER-34: tabs receive only the rules the interceptor runs', () => {
     });
 });
 
+describe('PER-6: what a content script may ask the background for', () => {
+    test.each([
+        ['setRules', { type: 'setRules', rules: [] }],
+        ['resetAll', { type: 'resetAll' }],
+        ['clearRules', { type: 'clearRules' }],
+        ['deleteRule', { type: 'deleteRule', ruleId: 'a' }],
+        ['toggleRule', { type: 'toggleRule', ruleId: 'a', enabled: false }],
+        ['toggleExtension', { type: 'toggleExtension', active: false }],
+        ['settingsUpdated', { type: 'settingsUpdated', settings: {} }],
+        ['setCaptureArmed', { type: 'setCaptureArmed', armed: true }],
+        ['getCaptures', { type: 'getCaptures' }],
+        ['clearCaptures', { type: 'clearCaptures' }],
+        ['getInterceptionLog', { type: 'getInterceptionLog' }],
+        ['clearInterceptionLog', { type: 'clearInterceptionLog' }],
+        ['resetStats', { type: 'resetStats' }],
+        ['getRuleStats', { type: 'getRuleStats' }],
+        ['testRule', { type: 'testRule', rule: mockRule('t') }]
+    ])('refuses %s from a content script', async (label, message) => {
+        const { mock, send } = await setup({ initial: { spliceTapRules: [mockRule('a')] } });
+
+        const response = await send(message, contentScript());
+
+        expect(response.success).toBe(false);
+        expect(mock.raw.spliceTapRules.map((r) => [r.id, r.enabled])).toEqual([['a', true]]);
+    });
+
+    test('allows what the relay and the in-page editor send', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [mockRule('a')] } });
+        const page = contentScript();
+
+        expect((await send({ type: 'getRules' }, page)).success).toBe(true);
+        expect((await send({ type: 'saveRule', rule: mockRule('b') }, page)).success).toBe(true);
+        expect((await send({ type: 'logInterceptionBatch', entries: [] }, page)).success).toBe(true);
+        expect((await send({ type: 'logInterception', entry: null }, page)).success).toBe(true);
+        expect((await send({ type: 'logCapture', entry: null }, page)).success).toBe(true);
+    });
+
+    test('extension pages are not restricted, including one opened in a tab', async () => {
+        const { send } = await setup();
+        const optionsTab = { ...EXTENSION_PAGE, url: 'chrome-extension://test-extension-id/options/options.html', tab: { id: 2 }, frameId: 0 };
+
+        expect((await send({ type: 'getCaptures' }, optionsTab)).success).toBe(true);
+        expect((await send({ type: 'getCaptures' }, { id: 'test-extension-id', origin: 'chrome-extension://test-extension-id' })).success).toBe(true);
+    });
+
+    test('a page URL that merely contains the extension URL is still a page', async () => {
+        const { send } = await setup();
+        const spoof = contentScript();
+        spoof.url = 'https://evil.test/chrome-extension://test-extension-id/popup.html';
+
+        expect((await send({ type: 'getCaptures' }, spoof)).success).toBe(false);
+    });
+});
+
+describe('SEC2-7: log and capture entries are copied field by field, with size caps', () => {
+    test('a log entry keeps only the known fields', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [mockRule('a')] } });
+
+        await send({
+            type: 'logInterceptionBatch',
+            entries: [{ url: 'https://s.test/api/a', method: 'GET', ruleId: 'a', ruleName: 'n', ruleType: 'mock', status: 200, ts: 5, junk: 'x'.repeat(100000) }]
+        }, contentScript());
+
+        const [entry] = (await send({ type: 'getInterceptionLog' })).entries;
+        expect(Object.keys(entry).sort()).toEqual(['method', 'ruleId', 'ruleName', 'ruleType', 'status', 'tabId', 'ts', 'url']);
+        expect(entry.tabId).toBe(7);
+    });
+
+    test('an oversized rule name is cut short; an oversized rule type drops the entry', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [mockRule('a')] } });
+
+        await send({
+            type: 'logInterceptionBatch',
+            entries: [
+                { url: 'https://s.test/api/a', method: 'GET', ruleId: 'a', ruleName: 'n'.repeat(5000) },
+                { url: 'https://s.test/api/a', method: 'GET', ruleId: 'a', ruleType: 't'.repeat(5000) }
+            ]
+        }, contentScript());
+
+        const { entries } = await send({ type: 'getInterceptionLog' });
+        expect(entries).toHaveLength(1);
+        expect(entries[0].ruleName).toHaveLength(256);
+    });
+
+    test('a capture keeps only known fields, caps headers, and refuses an oversized body', async () => {
+        const { send } = await setup();
+        await send({ type: 'setCaptureArmed', armed: true });
+        const headers = {};
+        for (let i = 0; i < 300; i++) headers[`h${i}`] = 'v';
+        headers.nested = { a: 1 };
+        headers.long = 'v'.repeat(20000);
+
+        await send({
+            type: 'logCapture',
+            entry: { url: 'https://s.test/x', method: 'get', status: 200, body: '{}', headers, extra: 'x'.repeat(100000) }
+        }, contentScript());
+        await send({ type: 'logCapture', entry: { url: 'https://s.test/big', body: 'x'.repeat(200 * 1024) } }, contentScript());
+
+        const { captures } = await send({ type: 'getCaptures' });
+        expect(captures).toHaveLength(1);
+        expect(captures[0].extra).toBeUndefined();
+        expect(Object.keys(captures[0].headers).length).toBeLessThanOrEqual(100);
+        expect(Object.values(captures[0].headers).every((v) => typeof v === 'string' && v.length <= 8192)).toBe(true);
+    });
+});
+
 // ---- service_worker/dnr.js ----------------------------------------------
 
 const dnr = require('../service_worker/dnr');

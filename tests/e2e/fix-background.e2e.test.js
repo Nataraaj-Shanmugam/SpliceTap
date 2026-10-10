@@ -191,6 +191,51 @@ describe('fix group B1 (background)', () => {
         expect(await updates()).toBe(before);
     });
 
+    // ---- PER-6 / PER-34: what a content script can ask for --------------
+
+    /** Send a message from SpliceTap's own content-script world in `page`. */
+    async function fromContentScript(page, message) {
+        const cdp = await page.createCDPSession();
+        const contexts = [];
+        cdp.on('Runtime.executionContextCreated', (e) => contexts.push(e.context));
+        await cdp.send('Runtime.enable');
+        const { frameTree } = await cdp.send('Page.getFrameTree');
+        const ctx = contexts.find((c) => c.auxData && c.auxData.type === 'isolated'
+            && c.auxData.frameId === frameTree.frame.id && c.origin.includes(h.extensionId));
+        if (!ctx) throw new Error('content-script world not found');
+        const { result } = await cdp.send('Runtime.evaluate', {
+            contextId: ctx.id,
+            expression: `chrome.runtime.sendMessage(${JSON.stringify(message)})`,
+            awaitPromise: true,
+            returnByValue: true
+        });
+        await cdp.detach();
+        return result.value;
+    }
+
+    test('PER-6: a content script gets its own messages answered and nothing else', async () => {
+        await h.saveRule(mock('kept', '*/api/kept*'));
+        await h.saveRule(mock('disabled', '*/api/disabled*', { enabled: false }));
+        const page = await h.openPage();
+
+        const state = await fromContentScript(page, { type: 'getRules' });
+        expect(state.success).toBe(true);
+        // The top frame hosts the in-page editor, which needs every rule.
+        expect(state.rules.map((r) => r.id).sort()).toEqual(['disabled', 'kept']);
+
+        const scoped = await fromContentScript(page, { type: 'getRules', scope: 'interceptor' });
+        expect(scoped.rules.map((r) => r.id)).toEqual(['kept']);
+
+        for (const message of [{ type: 'getCaptures' }, { type: 'setRules', rules: [] }, { type: 'resetAll' }]) {
+            expect(await fromContentScript(page, message)).toMatchObject({ success: false });
+        }
+        expect(await storedIds()).toEqual(['kept', 'disabled']);
+
+        // The popup (an extension page) is unaffected.
+        expect((await h.bg({ type: 'getCaptures' })).success).toBe(true);
+        await page.close();
+    });
+
     test('ran without extension errors', () => {
         expect(h.allErrors).toEqual([]);
     });

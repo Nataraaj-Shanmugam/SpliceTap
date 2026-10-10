@@ -25,6 +25,21 @@ const RuleSchema = globalThis.SpliceTapRuleSchema;
 // INTERCEPTOR_TYPES). headers/queryparams rules are applied by Chrome (DNR).
 const INTERCEPTOR_TYPES = new Set(['mock', 'block', 'delay', 'redirect']);
 
+// PER-6: the only messages content scripts send — the relay (content.js:
+// getRules, logInterceptionBatch, logCapture; logInterception is its older
+// single-entry form) and the in-page editor (rule-editor.js via overlay.js:
+// getRules, saveRule). Everything else is for extension pages only.
+const CONTENT_SCRIPT_MESSAGES = new Set([
+    'getRules', 'saveRule', 'logInterception', 'logInterceptionBatch', 'logCapture'
+]);
+
+// SEC2-7: size caps for what a page-side relay can make the background keep.
+// CAPTURE_MAX_BODY matches the interceptor's own limit (injected.js).
+const LOG_TEXT_MAX = 256;
+const CAPTURE_MAX_BODY = 100 * 1024;
+const CAPTURE_MAX_HEADERS = 100;
+const CAPTURE_HEADER_VALUE_MAX = 8192;
+
 class SpliceTapBackground {
     constructor() {
         this.storage = new SpliceTapStorage();
@@ -150,8 +165,17 @@ class SpliceTapBackground {
         // inspecting another. The sender's tab id is taken here rather than
         // trusted from the message body, since the page-side relay could
         // otherwise claim any tab.
+        // SEC2-7: copied field by field. Spreading the entry kept any extra
+        // field a page put on it, uncapped, in the log and in session storage.
         this.interceptionLog.push({
-            ...entry,
+            ts: entry.ts,
+            url: entry.url,
+            method: entry.method,
+            ruleId: entry.ruleId,
+            // Display only; a rule stored by an older build may have a long name.
+            ruleName: entry.ruleName === undefined ? undefined : entry.ruleName.slice(0, LOG_TEXT_MAX),
+            ruleType: entry.ruleType,
+            status: entry.status,
             tabId: (sender && sender.tab && typeof sender.tab.id === 'number')
                 ? sender.tab.id
                 : null
@@ -183,9 +207,9 @@ class SpliceTapBackground {
         if (!entry || typeof entry !== 'object') return false;
         if (typeof entry.url !== 'string' || entry.url.length > 2048) return false;
         if (typeof entry.method !== 'string' || entry.method.length > 16) return false;
-        if (typeof entry.ruleId !== 'string') return false;
+        if (typeof entry.ruleId !== 'string' || entry.ruleId.length > LOG_TEXT_MAX) return false;
         if (entry.ruleName !== undefined && typeof entry.ruleName !== 'string') return false;
-        if (entry.ruleType !== undefined && typeof entry.ruleType !== 'string') return false;
+        if (entry.ruleType !== undefined && (typeof entry.ruleType !== 'string' || entry.ruleType.length > 32)) return false;
         if (entry.status !== undefined && entry.status !== null && typeof entry.status !== 'number') return false;
         if (entry.ts !== undefined && typeof entry.ts !== 'number') return false;
 
@@ -351,6 +375,15 @@ class SpliceTapBackground {
 
     async handleMessage(request, sender) {
         try {
+            // PER-6: any frame of any page runs a content script, so a
+            // compromised renderer (or PER-1) could otherwise reach setRules,
+            // resetAll, getCaptures and the rest. Content scripts get the
+            // messages they actually send; extension pages are unaffected.
+            if (this._isContentScript(sender) && !CONTENT_SCRIPT_MESSAGES.has(request && request.type)) {
+                console.warn(`SpliceTap: "${request && request.type}" is not accepted from a web page`);
+                return { success: false, error: 'This request is not available to web pages' };
+            }
+
             // Ensure stored state is loaded before serving any message. On a
             // cold SW start the triggering message can arrive before
             // loadStoredData() resolves; this makes handlers wait for it.
@@ -593,16 +626,31 @@ class SpliceTapBackground {
                     // context, so a compromised one must not be able to push
                     // response bodies into storage when the user has not asked.
                     if (!(this.settings && this.settings.captureArmed)) return { success: true };
+                    // SEC2-7: the interceptor never sends a larger body, so a
+                    // larger one did not come from it. Every field below is
+                    // copied and capped here rather than trusting page-side
+                    // limits; headers kept the page's object as-is.
+                    if (e.body.length > CAPTURE_MAX_BODY) return { success: true };
+
+                    const headers = {};
+                    if (e.headers && typeof e.headers === 'object') {
+                        for (const [name, value] of Object.entries(e.headers).slice(0, CAPTURE_MAX_HEADERS)) {
+                            if (typeof value === 'string' && name.length <= LOG_TEXT_MAX) {
+                                headers[name] = value.slice(0, CAPTURE_HEADER_VALUE_MAX);
+                            }
+                        }
+                    }
+                    const status = Number(e.status);
 
                     this.captures.push({
                         id: `cap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
                         ts: Number(e.ts) || Date.now(),
-                        url: String(e.url || ''),
-                        method: String(e.method || 'GET').toUpperCase(),
-                        status: Number(e.status) || 200,
-                        statusText: String(e.statusText || ''),
-                        contentType: String(e.contentType || ''),
-                        headers: (e.headers && typeof e.headers === 'object') ? e.headers : {},
+                        url: String(e.url || '').slice(0, 4096),
+                        method: String(e.method || 'GET').toUpperCase().slice(0, 16),
+                        status: (Number.isInteger(status) && status >= 100 && status <= 999) ? status : 200,
+                        statusText: String(e.statusText || '').slice(0, LOG_TEXT_MAX),
+                        contentType: String(e.contentType || '').slice(0, LOG_TEXT_MAX),
+                        headers,
                         body: e.body,
                         tabId: (sender && sender.tab && typeof sender.tab.id === 'number') ? sender.tab.id : null
                     });

@@ -33,8 +33,14 @@ async function setup(options) {
     activeBackground = bg;
     await bg.ready;
 
-    return { mock, bg, send: mock.dispatchMessage };
+    // PER-6: the background now tells extension pages from content scripts
+    // by sender URL, and the mock's default sender (a bare tab) is a content
+    // script. These tests drive it as the popup does unless they say otherwise.
+    const send = (message, sender = EXTENSION_PAGE) => mock.dispatchMessage(message, sender);
+    return { mock, bg, send };
 }
+
+const EXTENSION_PAGE = { id: 'test-extension-id', url: 'chrome-extension://test-extension-id/popup/popup.html' };
 
 afterEach(() => {
     // Q-16's trailing flush schedules a real timer. Left running it outlives
