@@ -52,14 +52,14 @@
     <!-- Tab strip: Rules / Data / Settings. All three moved here from the
          options page so everyday work never requires opening a new tab. -->
     <div class="tabs" role="tablist" aria-label="SpliceTap sections">
-      <button type="button" class="tab" id="tabRules" role="tab" aria-selected="true" aria-controls="paneRules">
+      <button type="button" class="tab" id="tabRules" role="tab" aria-selected="true" aria-controls="paneRules" tabindex="0">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">
           <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
         </svg>
         Rules
         <span class="tab-count" id="tabRuleCount" aria-hidden="true">0</span>
       </button>
-      <button type="button" class="tab" id="tabData" role="tab" aria-selected="false" aria-controls="paneData">
+      <button type="button" class="tab" id="tabData" role="tab" aria-selected="false" aria-controls="paneData" tabindex="-1">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
           <ellipse cx="12" cy="5.5" rx="8" ry="3" />
           <path d="M4 5.5v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
@@ -67,7 +67,7 @@
         </svg>
         Data
       </button>
-      <button type="button" class="tab" id="tabSettings" role="tab" aria-selected="false" aria-controls="paneSettings">
+      <button type="button" class="tab" id="tabSettings" role="tab" aria-selected="false" aria-controls="paneSettings" tabindex="-1">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
           <circle cx="12" cy="12" r="3" />
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
@@ -179,11 +179,16 @@
             <input type="checkbox" id="importMerge" checked>
             <span>Keep existing rules</span>
           </label>
+          <p class="sub-warn is-danger" id="importReplaceWarn" hidden></p>
           <div class="sub-actions">
             <button type="button" class="mini-btn" id="importCancelBtn">Cancel</button>
             <button type="button" class="mini-btn is-primary" id="importConfirmBtn">Import</button>
           </div>
         </div>
+
+        <!-- PER-62: what the last import skipped, and why. A 3-second toast
+             named nothing; this stays until dismissed or the next import. -->
+        <div class="import-report" id="importReport" hidden></div>
       </section>
 
       <section class="set-group" aria-labelledby="setStorage">

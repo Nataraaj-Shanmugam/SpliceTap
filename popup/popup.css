@@ -106,13 +106,19 @@ body.theme-light {
   user-select: text;
 }
 
+/* PER-72: Chrome caps a popup at 800x600 *device* pixels, so at 200% zoom the
+   popup is 400x300 CSS px and at 400% it is 200x150. `overflow: hidden` on a
+   fixed 560px body clipped the footer (New rule, Toggle all, Test all, Refresh)
+   with nothing to scroll, and the fixed 380px width cut off the right half at
+   400%. The design size is unchanged at 100%; below it the page scrolls, the
+   width gives way (max-width) and the footer wraps. */
 body {
   width: 380px;
+  max-width: 100%;
   height: 560px;
   background-color: var(--bg-app);
   color: var(--text-main);
   font-family: var(--font-main);
-  overflow: hidden;
 }
 
 /* Brand hairline along the top edge — the same motif the options page and
@@ -134,6 +140,7 @@ body::before {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 
 /* ── Header ─────────────────────────────────────────────── */
@@ -142,7 +149,8 @@ body::before {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   background: var(--bg-app);
   border-bottom: 1px solid var(--border);
   z-index: 10;
@@ -177,7 +185,7 @@ body::before {
 }
 
 .title-group h1 {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.15;
@@ -185,7 +193,7 @@ body::before {
 
 .host-label {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--text-dim);
   letter-spacing: 0.03em;
   white-space: nowrap;
@@ -208,10 +216,11 @@ body::before {
   gap: 7px;
   min-height: 24px;
   padding: 5px 9px 5px 7px;
+  max-width: 100%;
   background: rgba(148, 163, 184, 0.08);
   border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -288,7 +297,7 @@ body.is-active .status-dot {
   flex: 1 1 0;
   min-width: 0;
   padding: 8px 4px 9px;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
   color: var(--text-muted);
   display: flex;
@@ -334,12 +343,19 @@ body.is-active .status-dot {
 
 .tab-count {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--text-dim);
   background: var(--bg-chip);
   border-radius: 999px;
   padding: 1px 5px;
   margin-left: -1px;
+}
+
+/* At 400% zoom the popup is ~200 CSS px wide: three tabs only fit as text. */
+@media (max-width: 300px) {
+  .tab svg {
+    display: none;
+  }
 }
 
 /* ── Panes ──────────────────────────────────────────────── */
@@ -383,7 +399,7 @@ body.is-active .status-dot {
 }
 
 .set-label {
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -395,7 +411,8 @@ body.is-active .status-dot {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   padding: 9px 0;
   border-bottom: 1px solid var(--hairline);
 }
@@ -419,6 +436,7 @@ body.is-active .status-dot {
 
 .set-info {
   min-width: 0;
+  flex: 1 1 8rem;
   display: block;
 }
 
@@ -428,13 +446,13 @@ label.set-info {
 
 .set-title {
   display: block;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--text-main);
 }
 
 .set-desc {
   display: block;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--text-muted);
   margin-top: 2px;
   line-height: 1.35;
@@ -486,7 +504,7 @@ label.set-info {
 
 .theme-name {
   display: block;
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   color: var(--text-muted);
   margin-top: 3px;
 }
@@ -566,7 +584,7 @@ label.set-info {
   border: 1px solid var(--border);
   color: var(--text-main);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.75rem;
   text-align: right;
   outline: none;
 }
@@ -582,7 +600,7 @@ label.set-info {
   top: 50%;
   transform: translateY(-50%);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--text-dim);
   pointer-events: none;
 }
@@ -591,14 +609,14 @@ label.set-info {
 /* Compact action buttons used by the Settings pane */
 .mini-btn {
   flex-shrink: 0;
-  height: 26px;
+  min-height: 26px;
   padding: 0 11px;
   border-radius: 6px;
   background: var(--bg-card);
   border: 1px solid var(--border-strong);
   color: var(--text-main);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 600;
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
@@ -639,7 +657,7 @@ label.set-info {
   border-radius: 6px;
   background: rgba(180, 83, 9, 0.12);
   color: var(--warn-text, #b45309);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   line-height: 1.5;
 }
 
@@ -678,7 +696,7 @@ label.set-info {
 
 .capture-url {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--text-main);
   white-space: nowrap;
   overflow: hidden;
@@ -687,8 +705,10 @@ label.set-info {
 
 .capture-meta {
   font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-dim);
+  font-size: 0.625rem;
+  /* --text-dim on the light card measured 4.46:1 (found by auditing a row that
+     actually had captures in it). */
+  color: var(--text-muted);
   display: flex;
   gap: 6px;
 }
@@ -730,7 +750,7 @@ label.set-info {
   border: 1px solid var(--border);
   color: var(--text-main);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.5;
   resize: vertical;
   outline: none;
@@ -746,7 +766,7 @@ label.set-info {
   align-items: center;
   gap: 7px;
   margin-top: 8px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--text-muted);
   cursor: pointer;
 }
@@ -763,9 +783,75 @@ label.set-info {
   margin-top: 9px;
 }
 
+.sub-warn.is-danger {
+  margin-top: 8px;
+  color: var(--danger-text);
+}
+
+.sub-warn[hidden] {
+  display: none;
+}
+
+/* PER-62: what the last import skipped, and why. Error-toned whenever
+   anything was left out. */
+.import-report {
+  margin: 2px 0 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+
+.import-report[hidden] {
+  display: none;
+}
+
+.import-report.is-error {
+  background: rgba(239, 68, 68, 0.10);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.import-report-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-main);
+}
+
+.import-report.is-error .import-report-title {
+  color: var(--danger-text);
+}
+
+.import-report-list {
+  list-style: none;
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.import-report-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+.ir-name {
+  font-weight: 600;
+  color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+
+.ir-reason {
+  color: var(--danger-text);
+  overflow-wrap: anywhere;
+}
+
 .sub-warn {
   margin: 0 0 2px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   line-height: 1.5;
   color: var(--text-muted);
 }
@@ -777,7 +863,9 @@ label.set-info {
 
 .search-bar {
   position: relative;
-  height: 32px;
+  display: flex;
+  align-items: center;
+  min-height: 32px;
   background: var(--bg-card);
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -799,14 +887,16 @@ label.set-info {
 }
 
 .search-bar input {
+  flex: 1;
+  min-width: 0;
   width: 100%;
-  height: 100%;
+  min-height: 30px;
   border: none;
   background: transparent;
   padding: 0 30px 0 32px;
   color: var(--text-main);
   font-family: var(--font-main);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   outline: none;
 }
 
@@ -824,7 +914,11 @@ label.set-info {
   border: none;
   color: var(--text-dim);
   cursor: pointer;
-  padding: 5px;
+  /* PER-86: 5px padding + a 13px glyph measured 23x23, under the 24x24 minimum
+     target (WCAG 2.2 SC 2.5.8). */
+  width: 26px;
+  height: 26px;
+  padding: 0;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -849,7 +943,7 @@ label.set-info {
 .search-result-count {
   padding: 6px 2px 0;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
@@ -857,6 +951,11 @@ label.set-info {
 
 .search-result-count[hidden] {
   display: none;
+}
+
+/* PER-32: "Reload this tab" banner reuses the site-access banner's look. */
+.reload-notice {
+  margin-top: 8px;
 }
 
 /* Withheld-site-access banner (C-17) */
@@ -867,7 +966,7 @@ label.set-info {
   background: rgba(251, 146, 60, 0.12);
   border: 1px solid rgba(251, 146, 60, 0.3);
   color: var(--text-main);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.4;
   display: flex;
   align-items: center;
@@ -882,7 +981,7 @@ label.set-info {
   border: none;
   padding: 6px 10px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   cursor: pointer;
   font-family: var(--font-main);
@@ -934,7 +1033,7 @@ label.set-info {
 }
 
 .empty-state h2 {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 600;
   color: var(--text-main);
   margin-bottom: 6px;
@@ -942,7 +1041,7 @@ label.set-info {
 }
 
 .empty-state p {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   line-height: 1.55;
   text-wrap: pretty;
 }
@@ -950,8 +1049,22 @@ label.set-info {
 .empty-hint {
   margin-top: 14px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--text-dim);
+}
+
+/* PER-61: the first-run screen's two ways in. */
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.empty-btn {
+  min-height: 30px;
+  padding: 4px 12px;
 }
 
 /* Loading skeleton (U-14) — sized to the new row height. */
@@ -1055,20 +1168,34 @@ label.set-info {
    line doesn't reflow as the count climbs, and muted so it never competes
    with the URL beside it. */
 .hit-count {
+  flex-shrink: 0;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 10px;
-  color: var(--text-dim);
+  font-size: 0.625rem;
+  /* --text-dim on --bg-chip measured 4.29:1 in the light theme. */
+  color: var(--text-muted);
   background: var(--bg-chip);
   border-radius: 4px;
   padding: 1px 5px;
-  margin-left: 6px;
   white-space: nowrap;
+}
+
+/* PER-55: a rule that has never matched says so, quietly. */
+.hit-count.is-none {
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  padding: 0 5px;
+}
+
+/* PER-70: the outcome leads the detail line, the URL trails and is what gets
+   truncated; a redirect's destination comes last. */
+.rule-outcome {
+  margin-right: 4px;
 }
 
 .disabled-chip,
 .rule-error-chip {
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   font-weight: 600;
   line-height: 1.35;
   text-transform: uppercase;
@@ -1106,7 +1233,7 @@ label.set-info {
 
 .rule-name {
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   line-height: 1.25;
   color: var(--text-main);
   display: flex;
@@ -1182,7 +1309,7 @@ label.set-info {
 }
 
 .rule-details {
-  font-size: 10px;
+  font-size: 0.625rem;
   line-height: 1.3;
   color: var(--text-muted);
   font-family: var(--font-mono);
@@ -1194,7 +1321,7 @@ label.set-info {
 
 .rule-method {
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   font-weight: 600;
   padding: 1px 5px;
   line-height: 1.35;
@@ -1214,7 +1341,7 @@ label.set-info {
 .method-other { background: rgba(148, 163, 184, 0.14); color: #a8b6c9; }
 
 .rule-type-badge {
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   font-weight: 600;
   line-height: 1.35;
   padding: 1px 5px;
@@ -1346,19 +1473,21 @@ label.set-info {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px 10px;
   position: relative;
 }
 
 .footer-stats {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--text-dim);
 }
 
 .footer-actions-secondary {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -1393,7 +1522,7 @@ label.set-info {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
+  min-height: 28px;
   width: auto;
   padding: 0 12px;
   border-radius: 8px;
@@ -1401,7 +1530,7 @@ label.set-info {
   border: none;
   color: #fff;
   font-family: var(--font-main);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   box-shadow: none;
   cursor: pointer;
@@ -1458,9 +1587,12 @@ label.set-info {
   pointer-events: none;
 }
 
+/* PER-68: a toast overlays the bottom of the pane — after Import, the Import
+   button itself — and used to swallow the click meant for it (clicking it only
+   dismissed it, and hovering kept it open). It now ignores the pointer; only
+   its own buttons take clicks, and Escape dismisses it from the keyboard. */
 .toast {
-  pointer-events: auto;
-  cursor: pointer; /* clicking dismisses it — see createToast */
+  pointer-events: none;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1468,7 +1600,7 @@ label.set-info {
   color: #fff;
   padding: 10px 14px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   box-shadow: var(--shadow-md);
   animation: slideInRight 0.3s ease-out;
@@ -1487,10 +1619,17 @@ label.set-info {
   flex: 1;
 }
 
+.toast-action,
+.toast-dismiss {
+  pointer-events: auto;
+}
+
 .toast-action {
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  /* A white tint on the green toast measured 3.5:1 for the white label; a dark
+     tint keeps it above 4.5:1 on both the success and error toasts. */
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.6);
   color: inherit;
   font: inherit;
   font-weight: 700;
@@ -1500,7 +1639,37 @@ label.set-info {
 }
 
 .toast-action:hover {
-  background: rgba(255, 255, 255, 0.32);
+  background: rgba(0, 0, 0, 0.38);
+}
+
+.toast-action:focus-visible,
+.toast-dismiss:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.toast-dismiss {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.toast-dismiss:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.toast-dismiss svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* ── Light-theme overrides for tinted chips ─────────────── */
@@ -1525,11 +1694,49 @@ body.theme-light .status-badge:hover { background: rgba(15, 23, 42, 0.09); }
 body.theme-light .icon-btn:hover { background: rgba(15, 23, 42, 0.07); }
 body.theme-light .rule-checkbox::before { background: #dfe4ec; }
 body.theme-light .rule-checkbox::after { background: #fff; }
+/* PER-74: the rule above (0,2,2) out-specified `.rule-checkbox.checked::before`
+   (0,2,1), so in the light theme an enabled rule's switch looked exactly like a
+   disabled one. */
+body.theme-light .rule-checkbox.checked::before {
+  background: var(--accent);
+  border-color: var(--accent);
+}
 body.theme-light .rule-action:hover { background: rgba(15, 23, 42, 0.06); }
 body.theme-light .icon-btn-small:hover { background: rgba(15, 23, 42, 0.05); }
 body.theme-light .rules-list {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent 100%);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent 100%);
+}
+
+/* PER-72: at 400% zoom the popup is ~200 CSS px wide. The row's action strip
+   (seven 24px buttons) is an overlay that would cover the whole row, so it
+   drops below the row's text, always visible and wrapping. */
+@media (max-width: 300px) {
+  .rule-actions {
+    position: static;
+    transform: none;
+    flex-wrap: wrap;
+    padding: 0 8px 6px 12px;
+    background: none;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .header,
+  .footer {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .search-wrapper {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .empty-state {
+    margin-top: 16px;
+    padding: 0 12px;
+  }
 }
 
 /* ── Motion / forced colours ────────────────────────────── */
@@ -1558,12 +1765,68 @@ body.theme-light .rules-list {
     border-color: CanvasText;
   }
 
-  .rule-checkbox.checked::before {
+  /* PER-74: on and off must differ without relying on colour that forced
+     colours would replace. Track fill and knob position/colour both change. */
+  .rule-checkbox::before,
+  body.theme-light .rule-checkbox::before {
+    background: Canvas;
+    border-color: CanvasText;
+  }
+
+  .rule-checkbox::after,
+  body.theme-light .rule-checkbox::after {
+    background: CanvasText;
+  }
+
+  .rule-checkbox.checked::before,
+  body.theme-light .rule-checkbox.checked::before {
     background: Highlight;
     border-color: Highlight;
   }
 
+  .rule-checkbox.checked::after,
+  body.theme-light .rule-checkbox.checked::after {
+    background: HighlightText;
+  }
+
+  /* The Capture / Chaos / Debug switches are native checkboxes drawn as a
+     track, and had no forced-colours styling at all: identical on and off. */
+  .switch-track {
+    background: Canvas;
+    border-color: CanvasText;
+  }
+
+  .switch-track::after {
+    background: CanvasText;
+  }
+
+  .switch input:checked ~ .switch-track {
+    background: Highlight;
+    border-color: Highlight;
+  }
+
+  .switch input:checked ~ .switch-track::after {
+    background: HighlightText;
+  }
+
+  .switch input:focus-visible ~ .switch-track {
+    outline-color: Highlight;
+  }
+
+  /* PER-75: box-shadow and border-colour focus styles are dropped in forced
+     colours, and these inputs set `outline: none`, so focus was invisible. */
+  .search-bar:focus-within,
+  .num-field input:focus,
+  .sub-panel textarea:focus {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
+  }
+
   .disabled-chip {
+    border: 1px solid CanvasText;
+  }
+
+  .toast {
     border: 1px solid CanvasText;
   }
 

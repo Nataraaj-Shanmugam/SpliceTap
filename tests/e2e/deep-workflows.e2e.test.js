@@ -105,14 +105,20 @@ describe('deep: workflows', () => {
         await waitFor(async () => (await stored()).every((r) => r.enabled), { label: 'all enabled' });
     });
 
-    test('Test marks a rule passed and announces it', async () => {
+    // PER-55: the per-rule action re-runs the save-time validation and nothing
+    // else, so it reports "Valid", not "passed" — a rule that has never matched
+    // a request is valid, not working. (Hit counts are the evidence it works.)
+    test('Check marks a rule valid (not "passed") and announces it', async () => {
         await h.reset();
         await h.saveRule({ id: 't', name: 'Testable', enabled: true, type: 'block', match: { url: '*/t*', method: 'GET' } });
         await openPopup();
         await popup.click('.rule-action[data-action="test"][data-rule-id="t"]');
         await waitFor(() => popup.evaluate(() =>
-            /passed/i.test(document.querySelector('.rule-card[data-rule-id="t"] .status-indicator').getAttribute('aria-label') || '')),
+            /^valid/i.test(document.querySelector('.rule-card[data-rule-id="t"] .status-indicator').getAttribute('aria-label') || '')),
         { label: 'status updated' });
+        expect(await popup.evaluate(() => /passed/i.test(
+            document.querySelector('.rule-card[data-rule-id="t"] .status-indicator').getAttribute('aria-label')
+            + document.getElementById('liveRegion').textContent))).toBe(false);
     });
 
     // ---- popup keyboard shortcuts (README) ------------------------------------------------
@@ -175,6 +181,8 @@ describe('deep: workflows', () => {
         if (!keepExisting) await popup.click('#importMerge');
         await popup.$eval('#importJson', (el, v) => { el.value = v; }, json);
         await popup.click('#importConfirmBtn');
+        // PER-62: replacing every rule needs a second, confirming click.
+        if (!keepExisting) await popup.click('#importConfirmBtn');
         return waitFor(() => popup.evaluate(() => {
             const t = Array.from(document.querySelectorAll('.toast')).map((x) => x.innerText).join(' | ');
             return t || null;
