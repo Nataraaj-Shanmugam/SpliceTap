@@ -50,6 +50,10 @@ function createRelay(options = {}) {
     const sent = [];
     const chrome = {
         runtime: {
+            // Set while the extension context is valid; Chrome removes it when
+            // the extension is reloaded or removed under an open tab (PER-32).
+            // A test deletes it to simulate that.
+            id: 'splicetap-test-extension',
             lastError: null,
             onMessage: {
                 _listeners: [],
