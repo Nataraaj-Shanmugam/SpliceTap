@@ -17,7 +17,7 @@ import '../src/matcher.js';
 import '../src/rule-schema.js';
 import './dnr.js';
 
-const { syncDnrRules } = globalThis.SpliceTapDnr;
+const { syncDnrRules, deepEqual } = globalThis.SpliceTapDnr;
 const { generateId } = globalThis.SpliceTapCommon;
 const RuleSchema = globalThis.SpliceTapRuleSchema;
 
@@ -415,38 +415,23 @@ class SpliceTapBackground {
                 }
 
                 case 'setRules': {
-                    // Bulk persist path used by the options editor and import.
-                    // S-2: validate every incoming rule; invalid ones are
-                    // skipped (not silently accepted, not a hard failure for
-                    // the whole batch — one bad rule in an imported file
-                    // shouldn't block the N good ones). Allocates a dnrRuleId
-                    // for any headers/queryparams rule that lacks one, then
-                    // persists, refreshes in-memory rules, broadcasts, and
-                    // syncs DNR.
+                    // Bulk persist path used by reorder, toggle-all and import.
+                    // S-2: new and changed rules are validated; invalid ones
+                    // are skipped (not silently accepted, not a hard failure
+                    // for the whole batch — one bad rule in an imported file
+                    // shouldn't block the N good ones). See _prepareBulkRules
+                    // for what happens to stored rules (PER-27) and ids
+                    // (PER-28). The per-rule decision runs inside the storage
+                    // chain, against the exact copy this write replaces.
                     if (!Array.isArray(request.rules)) {
                         throw new Error('rules array is required');
                     }
-                    const prepared = [];
-                    const rejected = [];
-                    for (const incoming of request.rules) {
-                        const validation = await this.validateRule(incoming);
-                        if (!validation.passed) {
-                            rejected.push({
-                                name: incoming && incoming.name,
-                                errors: validation.results.map((r) => r.message)
-                            });
-                            continue;
-                        }
-                        const rule = { ...incoming };
-                        if (typeof rule.id !== 'string' || !rule.id.trim()) {
-                            rule.id = generateId();
-                        }
-                        if ((rule.type === 'headers' || rule.type === 'queryparams') && !rule.dnrRuleId) {
-                            rule.dnrRuleId = await this.allocateDnrIdSerialized();
-                        }
-                        prepared.push(rule);
-                    }
-                    const bulkResult = await this.storage.replaceRules(prepared);
+                    let rejected = [];
+                    const bulkResult = await this.storage.replaceRules(async (stored) => {
+                        const prepared = await this._prepareBulkRules(request.rules, stored);
+                        rejected = prepared.rejected;
+                        return prepared.rules;
+                    });
                     if (!bulkResult || !bulkResult.success) {
                         return { success: false, error: (bulkResult && bulkResult.error) || 'Failed to save rules' };
                     }
@@ -788,6 +773,105 @@ class SpliceTapBackground {
         const outcome = await syncDnrRules(this.rules, this.isActive);
         this.dnrRejected = new Map((outcome.rejected || []).map((r) => [r.id, r.error]));
         return outcome.success ? undefined : outcome.error;
+    }
+
+    /**
+     * Decide what a bulk write (setRules) stores, rule by rule.
+     *
+     * PER-27: every incoming rule used to be re-validated, and any that failed
+     * was dropped — so Move up/down, Toggle-all and a merge import permanently
+     * deleted stored rules an earlier build had accepted, once a later build
+     * tightened the schema (a 120-character name, for one). Now:
+     *   - a rule identical to its stored copy (ignoring runtime-only fields)
+     *     is kept as stored, without re-validation — nothing about it changed;
+     *   - a new or changed rule is validated, and refused if invalid;
+     *   - a refused change to a stored rule keeps the stored copy, so a bulk
+     *     write can never delete a rule the caller did not leave out.
+     *
+     * PER-28: a replace-mode import could store two rules under one id, and
+     * toggle/delete by id then hit the wrong one or both. A repeated id is
+     * re-issued. Network-rule ids must be unique too (Chrome refuses the
+     * whole batch otherwise): stored copies keep theirs, and a new rule never
+     * trusts one it brought — it came from another profile's counter.
+     */
+    async _prepareBulkRules(incoming, stored) {
+        const storedById = new Map();
+        for (const rule of stored) {
+            if (rule && typeof rule.id === 'string' && !storedById.has(rule.id)) storedById.set(rule.id, rule);
+        }
+
+        const seenIds = new Set();
+        const rejected = [];
+        const chosen = []; // { rule, previous, asStored }
+        for (const raw of incoming) {
+            const rule = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? { ...raw } : raw;
+            let previous = null;
+            if (rule && typeof rule === 'object') {
+                if (typeof rule.id !== 'string' || !rule.id.trim() || seenIds.has(rule.id)) {
+                    rule.id = generateId();
+                } else {
+                    previous = storedById.get(rule.id) || null;
+                }
+                seenIds.add(rule.id);
+            }
+
+            if (previous && this._sameStoredRule(rule, previous)) {
+                chosen.push({ rule: previous, previous, asStored: true });
+                continue;
+            }
+
+            const validation = await this.validateRule(rule);
+            if (!validation.passed) {
+                rejected.push({
+                    id: rule && rule.id,
+                    name: rule && rule.name,
+                    errors: validation.results.map((r) => r.message),
+                    // The change was refused; the rule itself is still there.
+                    keptStored: previous ? true : undefined
+                });
+                if (previous) chosen.push({ rule: previous, previous, asStored: true });
+                continue;
+            }
+            chosen.push({ rule, previous, asStored: false });
+        }
+
+        const isDnr = (r) => r.type === 'headers' || r.type === 'queryparams';
+        const usedDnrIds = new Set();
+        const keepsOwnId = new Set();
+        for (const entry of chosen) {
+            const id = entry.rule.dnrRuleId;
+            if (entry.asStored && isDnr(entry.rule) && id && !usedDnrIds.has(id)) {
+                usedDnrIds.add(id);
+                keepsOwnId.add(entry);
+            }
+        }
+
+        const rules = [];
+        for (const entry of chosen) {
+            let rule = entry.rule;
+            if (isDnr(rule) && !keepsOwnId.has(entry)) {
+                const own = entry.previous && entry.previous.dnrRuleId;
+                const dnrRuleId = (own && !usedDnrIds.has(own)) ? own : await this.allocateDnrIdSerialized();
+                usedDnrIds.add(dnrRuleId);
+                rule = { ...rule, dnrRuleId };
+            }
+            rules.push(rule);
+        }
+        return { rules, rejected };
+    }
+
+    /**
+     * PER-27: is an incoming rule the stored rule, unchanged? hitCount moves
+     * on its own and testStatus is popup display state, so neither counts.
+     */
+    _sameStoredRule(incoming, stored) {
+        const comparable = (rule) => {
+            const copy = { ...this.storage.normalizeRule(rule) };
+            delete copy.hitCount;
+            delete copy.testStatus;
+            return copy;
+        };
+        return deepEqual(comparable(incoming), comparable(stored));
     }
 
     async validateRule(rule) {

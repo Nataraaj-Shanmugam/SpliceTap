@@ -288,7 +288,32 @@
         return true;
     }
 
-    const api = { ruleToDnr, syncDnrRules, validateHeadersMod, FORBIDDEN_HEADER_NAMES };
+    /**
+     * Structural equality for JSON-shaped values. Object key order is ignored
+     * and a key holding `undefined` counts as absent (it would not survive a
+     * message or storage round trip); array order is significant.
+     */
+    function deepEqual(a, b) {
+        if (a === b) return true;
+        if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+        if (Array.isArray(a) !== Array.isArray(b)) return false;
+        if (Array.isArray(a)) {
+            if (a.length !== b.length) return false;
+            for (let i = 0; i < a.length; i++) {
+                if (!deepEqual(a[i], b[i])) return false;
+            }
+            return true;
+        }
+        const keysA = Object.keys(a).filter((k) => a[k] !== undefined);
+        const keysB = Object.keys(b).filter((k) => b[k] !== undefined);
+        if (keysA.length !== keysB.length) return false;
+        for (const key of keysA) {
+            if (!deepEqual(a[key], b[key])) return false;
+        }
+        return true;
+    }
+
+    const api = { ruleToDnr, syncDnrRules, validateHeadersMod, FORBIDDEN_HEADER_NAMES, deepEqual };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;

@@ -200,9 +200,24 @@ export class SpliceTapStorage {
      * popup (getRules -> combine -> setRules), so a rule created between those
      * two steps can still be missed; fixing that needs the merge to move into
      * the background, which is a larger change than a launch fix.
+     *
+     * PER-27: `rules` may instead be a function, called with the stored rules
+     * from inside the chain and returning the array to write. setRules decides
+     * per rule against the stored copy, so that copy must be the one this
+     * write replaces, not one a concurrent mutation has since changed.
      */
     async replaceRules(rules) {
-        return this._serializeMutation(() => this.saveRules(rules));
+        return this._serializeMutation(async () => {
+            if (typeof rules !== 'function') return this.saveRules(rules);
+            try {
+                const next = await rules(await this.getRules());
+                if (!Array.isArray(next)) return { success: false, error: 'rules array is required' };
+                return await this.saveRules(next);
+            } catch (error) {
+                console.error('Failed to replace rules:', error);
+                return { success: false, error: error.message };
+            }
+        });
     }
 
     /**
