@@ -349,6 +349,18 @@ describe('SEC2-7: log and capture entries are copied field by field, with size c
     });
 });
 
+describe('PER-67: the context-menu entry says what it does', () => {
+    test('it offers a new rule for the site, not to mock a request', async () => {
+        const { mock } = await setup();
+        const created = [];
+        mock.chrome.contextMenus.create = (item) => { created.push(item); };
+
+        mock.events.onInstalled._emit({ reason: 'install' });
+
+        expect(created.map((item) => item.title)).toEqual(['New SpliceTap rule for this site…']);
+    });
+});
+
 // ---- service_worker/dnr.js ----------------------------------------------
 
 const dnr = require('../service_worker/dnr');

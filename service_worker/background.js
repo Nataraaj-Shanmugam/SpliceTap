@@ -1132,7 +1132,10 @@ class SpliceTapBackground {
             try {
                 chrome.contextMenus.create({
                     id: "splicetap-add-rule",
-                    title: "Mock this request",
+                    // PER-67: it opens a blank editor prefilled with this
+                    // site's host; "Mock this request" promised a request it
+                    // never had.
+                    title: "New SpliceTap rule for this site…",
                     contexts: ["action", "page"]
                 });
             } catch (error) {
