@@ -300,20 +300,99 @@
 
     const PATCH_NOT_JSON_NOTE = 'Patch skipped — response body is not valid JSON';
 
-    // Helper: redact obviously-sensitive query parameter values and cap length
-    // before a URL is persisted into the interception log (S-8). Best-effort:
+    // Helper: redact obviously-sensitive values and cap length before a URL
+    // is persisted into the interception log or a capture (S-8). Best-effort:
     // if the URL can't be parsed, log it as-is rather than throwing.
-    const SENSITIVE_QUERY_KEY_RE = /^(access_token|token|api[_-]?key|apikey|key|secret|password|pwd|auth|authorization|session|sid)$/i;
+    //
+    // PER-4: this redacted only a fixed list of exact names, so session_id,
+    // JSESSIONID, id_token, refresh_token, access-token, code, client_secret,
+    // jwt, X-Amz-Signature, sig, user[token], an #access_token= fragment and
+    // a /reset/<token> path all reached the log and captures. A query or
+    // fragment key is now sensitive when its name CONTAINS any of these, in
+    // any letter case and with any separator; that redacts some harmless
+    // keys too (author, keyword), which only costs a value in the log.
+    const SENSITIVE_KEY_PARTS = [
+        'token', 'secret', 'session', 'sid', 'sig', 'signature', 'auth', 'key', 'password',
+        'passwd', 'pwd', 'code', 'jwt', 'credential', 'nonce', 'otp'
+    ];
+    const REDACTED = '[redacted]';
+    // A path segment that looks like a token: 24+ URL-safe characters with
+    // both letters and digits (opaque ids, signed links), or a JWT.
+    const TOKEN_SEGMENT = /^[A-Za-z0-9_-]{24,}$/;
+    const JWT_SEGMENT = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*$/;
     const MAX_LOGGED_URL_LENGTH = 2000;
+
+    function isSensitiveKey(name) {
+        const lower = String(name).toLowerCase();
+        for (let i = 0; i < SENSITIVE_KEY_PARTS.length; i++) {
+            if (lower.indexOf(SENSITIVE_KEY_PARTS[i]) !== -1) return true;
+        }
+        return false;
+    }
+
+    function looksLikeToken(segment) {
+        if (JWT_SEGMENT.test(segment)) return true;
+        return TOKEN_SEGMENT.test(segment) && /[A-Za-z]/.test(segment) && /[0-9]/.test(segment);
+    }
+
+    /** Redact sensitive keys in place; true when anything changed. */
+    function redactParams(params) {
+        const keys = [];
+        params.forEach((value, key) => { keys.push(key); });
+        let changed = false;
+        for (let i = 0; i < keys.length; i++) {
+            if (isSensitiveKey(keys[i])) {
+                params.set(keys[i], REDACTED);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    // '#a=b&c=d' (an OAuth implicit-flow fragment) or '#/route?a=b'.
+    function redactFragment(hash) {
+        const fragment = hash.slice(1);
+        if (fragment.indexOf('=') === -1) return hash;
+        const query = fragment.indexOf('?');
+        const prefix = query === -1 ? '' : fragment.slice(0, query + 1);
+        const params = new URLSearchParams(query === -1 ? fragment : fragment.slice(query + 1));
+        return redactParams(params) ? '#' + prefix + params.toString() : hash;
+    }
+
+    // Token-shaped segments, and ;name=value path parameters (;jsessionid=…).
+    function redactPath(pathname) {
+        const segments = pathname.split('/');
+        let changed = false;
+        for (let i = 0; i < segments.length; i++) {
+            const parts = segments[i].split(';');
+            let decoded = parts[0];
+            try { decoded = decodeURIComponent(parts[0]); } catch (e) { /* keep it encoded */ }
+            if (looksLikeToken(decoded)) {
+                parts[0] = REDACTED;
+                changed = true;
+            }
+            for (let j = 1; j < parts.length; j++) {
+                const eq = parts[j].indexOf('=');
+                if (eq > 0 && isSensitiveKey(parts[j].slice(0, eq))) {
+                    parts[j] = parts[j].slice(0, eq + 1) + REDACTED;
+                    changed = true;
+                }
+            }
+            segments[i] = parts.join(';');
+        }
+        return changed ? segments.join('/') : pathname;
+    }
+
     function sanitizeUrlForLog(rawUrl) {
         let safeUrl = rawUrl;
         try {
             const parsed = new NativeURL(rawUrl, baseUrl());
-            parsed.searchParams.forEach((value, key) => {
-                if (SENSITIVE_QUERY_KEY_RE.test(key)) {
-                    parsed.searchParams.set(key, '[redacted]');
-                }
-            });
+            redactParams(parsed.searchParams);
+            if (parsed.hash) parsed.hash = redactFragment(parsed.hash);
+            if (/^https?:$/.test(parsed.protocol)) {
+                const path = redactPath(parsed.pathname);
+                if (path !== parsed.pathname) parsed.pathname = path;
+            }
             // Always the absolute URL. A page calling fetch('/api/x') used to
             // be logged — and captured — as the bare relative path, so the
             // DevTools log lost the origin, and a rule built from a capture

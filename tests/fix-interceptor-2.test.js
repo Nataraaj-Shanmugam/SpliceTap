@@ -402,6 +402,70 @@ describe('PER-52: no XHR body for 204/205/304 or HEAD, matching fetch', () => {
     });
 });
 
+// ---- PER-4: redaction --------------------------------------------------------
+
+describe('PER-4: secrets in the URL are redacted in the log and in captures', () => {
+    const SECRET = 'LEAKME7f3a';
+    const token = 'f3a9c2e8b1d4a7c6e5f8a2b3c4d5e6f7';
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+
+    // Every case SEC2-4 found leaking, plus the path forms.
+    const leaked = [
+        `/api/users?session_id=${SECRET}`,
+        `/api/users?sessionid=${SECRET}`,
+        `/api/users?JSESSIONID=${SECRET}`,
+        `/api/users?id_token=${SECRET}`,
+        `/api/users?refresh_token=${SECRET}`,
+        `/api/users?access-token=${SECRET}`,
+        `/api/users?code=${SECRET}`,
+        `/api/users?client_secret=${SECRET}`,
+        `/api/users?jwt=${SECRET}`,
+        `/api/users?X-Amz-Signature=${SECRET}`,
+        `/api/users?sig=${SECRET}`,
+        `/api/users?user[token]=${SECRET}`,
+        `/api/users#access_token=${SECRET}&state=s1`,
+        `/api/users#/callback?id_token=${SECRET}`,
+        `/api/users/reset/${token}${SECRET}`,
+        `/api/users/verify/${jwt}${SECRET}`,
+        `/api/users;jsessionid=${SECRET}`
+    ];
+
+    async function logged(path) {
+        const h = withRules([mockRule()]);
+        const entries = h.collect(h.channels.log);
+        await h.fetch('https://example.test' + path);
+        return entries[0].url;
+    }
+
+    for (const path of leaked) {
+        test(`redacts ${path.replace(SECRET, '<secret>')}`, async () => {
+            const url = await logged(path);
+            expect(url).not.toContain(SECRET);
+            expect(url).toMatch(/redacted/i);
+        });
+    }
+
+    test('keeps what is not sensitive', async () => {
+        expect(await logged('/api/users/42?page=2&q=shoes#section')).toBe('https://example.test/api/users/42?page=2&q=shoes#section');
+        expect(await logged('/api/users/report-2024-final.pdf')).toBe('https://example.test/api/users/report-2024-final.pdf');
+    });
+
+    test('keeps the rest of the URL around a redacted value', async () => {
+        const url = await logged(`/api/users?page=2&refresh_token=${SECRET}#access_token=${SECRET}&state=s1`);
+        expect(url).toBe('https://example.test/api/users?page=2&refresh_token=%5Bredacted%5D#access_token=%5Bredacted%5D&state=s1');
+    });
+
+    test('captures are redacted the same way', async () => {
+        const h = withRules([], { state: { settings: { captureArmed: true } } });
+        const captured = h.collect(h.channels.capture);
+        await h.fetch(`https://example.test/api/other/${token}?X-Amz-Signature=${SECRET}`);
+        await h.flush();
+        expect(captured).toHaveLength(1);
+        expect(captured[0].url).not.toContain(SECRET);
+        expect(captured[0].url).not.toContain(token);
+    });
+});
+
 // ---- contract A: PER-19, PER-54, PER-56 -------------------------------------
 
 const chaosOn = { settings: { chaosMode: { enabled: true, failureRate: 1 } } };
