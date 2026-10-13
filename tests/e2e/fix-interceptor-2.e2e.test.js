@@ -446,4 +446,145 @@ describe('fix-interceptor-2: XHR and fetch fidelity in a real browser', () => {
             await h.bg({ type: 'settingsUpdated', settings: { ...settings, chaosMode: { enabled: false, failureRate: 0.1 } } });
         }
     });
+
+    // ---- fetch fidelity: PER-18, 41, 42, 45, 48 ----------------------------
+
+    test('PER-18: a patch rule lets event streams and NDJSON through as they arrive (fetch and XHR)', async () => {
+        // A page service worker serves the streams: a local security agent on
+        // the test machine buffers text/event-stream from the network.
+        await setRules(mock('pt', '*/sws/*', {}, { mode: 'patch', patch: { x: 1 } }));
+        await open(aux.base + '/plain');
+        await page.evaluate(async () => { await window.navigator.serviceWorker.register('/sw.js'); await window.navigator.serviceWorker.ready; });
+        await page.reload({ waitUntil: 'load' });
+        await waitFor(() => page.evaluate(() => !!window.navigator.serviceWorker.controller), { label: 'service worker control' });
+        await waitFor(async () => (await pageFetch(page, '/api/control')).marker === 'true', { label: 'rules after reload' });
+
+        const timings = await page.evaluate(async () => {
+            const viaFetch = async (path) => {
+                const t0 = performance.now();
+                const reader = (await fetch(path)).body.getReader();
+                const at = [];
+                for (;;) { const { done } = await reader.read(); if (done) break; at.push(performance.now() - t0); }
+                return at;
+            };
+            const viaXHR = (path) => new Promise((res) => {
+                const t0 = performance.now();
+                const x = new XMLHttpRequest();
+                const at = [];
+                x.onprogress = () => at.push(performance.now() - t0);
+                x.onloadend = () => res({ at, text: x.responseText });
+                x.open('GET', path); x.send();
+            });
+            return { sse: await viaFetch('/sws/feed'), ndjson: await viaFetch('/sws/ndjson'), xhr: await viaXHR('/sws/feed') };
+        });
+        // Five chunks 250 ms apart: the first arrives long before the last.
+        for (const at of [timings.sse, timings.ndjson, timings.xhr.at]) {
+            expect(at.length).toBeGreaterThanOrEqual(4);
+            expect(at[at.length - 1] - at[0]).toBeGreaterThan(600);
+        }
+        expect(timings.xhr.text).toBe('data: 0\n\ndata: 1\n\ndata: 2\n\ndata: 3\n\ndata: 4\n\n');
+    });
+
+    test('PER-18: with capture armed, an endless stream is not buffered and an event stream not captured', async () => {
+        await setRules();
+        await open(aux.base + '/plain');
+        await page.evaluate(async () => { await window.navigator.serviceWorker.register('/sw.js'); await window.navigator.serviceWorker.ready; });
+        await page.reload({ waitUntil: 'load' });
+        await waitFor(() => page.evaluate(() => !!window.navigator.serviceWorker.controller), { label: 'service worker control' });
+        await h.bg({ type: 'setCaptureArmed', armed: true });
+        await sleep(300);
+
+        const read = await page.evaluate(async () => {
+            const reader = (await fetch('/sws/big')).body.getReader();
+            let bytes = 0;
+            while (bytes < 400 * 1024) bytes += (await reader.read()).value.byteLength;
+            reader.cancel();
+            const feed = await fetch('/sws/feed');
+            await feed.text();
+            return bytes;
+        });
+        expect(read).toBeGreaterThanOrEqual(400 * 1024);
+        await sleep(400);
+        const { captures } = await h.bg({ type: 'getCaptures' });
+        expect((captures || []).filter((c) => /\/sws\//.test(c.url))).toEqual([]);
+    });
+
+    test('PER-41: a patched response loses the real Content-Length and Content-Encoding', async () => {
+        await setRules(mock('gz', '*/gz*', {}, { mode: 'patch', patch: { added: 'x'.repeat(50) } }),
+            mock('len', '*/len*', {}, { mode: 'patch', patch: { added: 'y'.repeat(50) } }));
+        await open(aux.base + '/plain');
+        const r = await page.evaluate(async () => {
+            const viaFetch = async (path) => {
+                const res = await fetch(path);
+                const body = await res.json();
+                return { ce: res.headers.get('content-encoding'), cl: res.headers.get('content-length'), added: body.added.length, marker: res.headers.get('x-splicetap') };
+            };
+            const viaXHR = (path) => new Promise((res) => {
+                const x = new XMLHttpRequest();
+                x.onloadend = () => res({ ce: x.getResponseHeader('content-encoding'), cl: x.getResponseHeader('content-length'), added: JSON.parse(x.responseText).added.length, marker: x.getResponseHeader('x-splicetap') });
+                x.open('GET', path); x.send();
+            });
+            return { gz: await viaFetch('/gz'), len: await viaFetch('/len'), xhr: await viaXHR('/len') };
+        });
+        for (const result of [r.gz, r.len, r.xhr]) {
+            expect(result).toEqual({ ce: null, cl: null, added: 50, marker: 'true' });
+        }
+    });
+
+    test('PER-42: clone, HEAD and 3xx redirect modes match real fetch', async () => {
+        await setRules(
+            mock('m', '*/api/mock*'),
+            mock('m302', '*/api/m302*', '', { statusCode: 302, headers: { Location: '/target' } })
+        );
+        await open(aux.base + '/plain');
+        const r = await page.evaluate(async () => {
+            const out = {};
+            const res = await fetch('/api/mock');
+            out.clone = { url: res.clone().url === res.url && res.url.endsWith('/api/mock'), type: res.type };
+            const head = await fetch('/api/mock', { method: 'HEAD' });
+            out.head = { status: head.status, body: await head.text() };
+            try { await fetch('/api/m302', { redirect: 'error' }); out.error = 'resolved'; } catch (e) { out.error = e.name; }
+            const manual = await fetch('/api/m302', { redirect: 'manual' });
+            out.manual = { status: manual.status, type: manual.type };
+            const followed = await fetch('/api/m302');
+            out.follow = { status: followed.status, redirected: followed.redirected, url: followed.url.endsWith('/target'), body: await followed.json() };
+            return out;
+        });
+        expect(r).toEqual({
+            clone: { url: true, type: 'basic' },
+            head: { status: 200, body: '' },
+            error: 'TypeError',
+            manual: { status: 0, type: 'opaqueredirect' },
+            follow: { status: 200, redirected: true, url: true, body: { target: true, method: 'GET' } }
+        });
+    });
+
+    test('PER-45: a delay rule does not lose a keepalive request sent on pagehide', async () => {
+        await setRules({ id: 'd', name: 'd', enabled: true, type: 'delay', match: { url: '*/ka/*', method: '*' }, delayMs: 300 });
+        await open(aux.base + '/plain');
+        await page.evaluate(() => window.addEventListener('pagehide', () => { fetch('/ka/delayed', { method: 'POST', body: 'bye', keepalive: true }); }));
+        await page.goto(aux.base + '/plain?next', { waitUntil: 'load' });
+        await waitFor(() => aux.hits.some((x) => x.path === '/ka/delayed'), { label: 'keepalive request at the server' });
+    });
+
+    test('PER-48: chaos mode leaves blob: and data: fetches alone', async () => {
+        await setRules();
+        const { settings } = await h.bg({ type: 'getRules' });
+        await h.bg({ type: 'settingsUpdated', settings: { ...settings, chaosMode: { enabled: true, failureRate: 1 } } });
+        try {
+            page = await h.openPage();
+            await sleep(400);
+            const r = await page.evaluate(async () => {
+                const out = {};
+                const blobUrl = URL.createObjectURL(new Blob(['{"local":1}'], { type: 'application/json' }));
+                for (const [k, url] of [['blob', blobUrl], ['data', 'data:application/json,{"a":1}'], ['http', '/api/x']]) {
+                    try { await fetch(url); out[k] = 'ok'; } catch (e) { out[k] = 'failed'; }
+                }
+                return out;
+            });
+            expect(r).toEqual({ blob: 'ok', data: 'ok', http: 'failed' });
+        } finally {
+            await h.bg({ type: 'settingsUpdated', settings: { ...settings, chaosMode: { enabled: false, failureRate: 0.1 } } });
+        }
+    });
 });

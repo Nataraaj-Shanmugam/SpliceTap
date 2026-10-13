@@ -8,6 +8,7 @@
  * keepalive) is covered by tests/e2e/fix-interceptor-2.e2e.test.js.
  */
 
+const { ReadableStream } = require('stream/web');
 const { createInterceptor } = require('./helpers/injected-harness');
 
 function mockRule(overrides = {}) {
@@ -625,5 +626,231 @@ describe('PER-19: a patch that does not apply leaves the response alone and says
         const response = await h.fetch('https://example.test/api/users');
         expect(await response.json()).toEqual({ a: 1, added: 1 });
         expect(logged[0].note).toBeUndefined();
+    });
+});
+
+// ---- fetch fidelity: PER-18, 41, 42, 45, 48 ------------------------------------
+
+/** A response whose body is a stream the test feeds by hand. */
+function controlledStream(contentType) {
+    let controller;
+    let pulls = 0;
+    const body = new ReadableStream({
+        start(c) { controller = c; },
+        pull() { pulls++; }
+    });
+    const response = new Response(body, { headers: { 'Content-Type': contentType } });
+    return { response, push: (text) => controller.enqueue(new TextEncoder().encode(text)), close: () => controller.close(), pulls: () => pulls };
+}
+
+describe('PER-18: only JSON is patched; streams pass straight through', () => {
+    for (const type of ['text/event-stream', 'application/x-ndjson', 'text/plain']) {
+        test(`fetch: a ${type} response is returned at once, unread`, async () => {
+            const stream = controlledStream(type);
+            const h = withRules([patchRule({ added: 1 })], { originalFetch: async () => stream.response });
+            const logged = h.collect(h.channels.log);
+            // The stream never ends: awaiting its body would never resolve.
+            const response = await h.fetch('https://example.test/api/users');
+            expect(response).toBe(stream.response);
+            expect(response.bodyUsed).toBe(false);
+            expect(logged[0].note).toBe(`Patch skipped — response is not a JSON object (${type})`);
+        });
+    }
+
+    test('fetch: application/problem+json is still patched', async () => {
+        const h = withRules([patchRule({ added: 1 })], { originalFetch: jsonResponder('{"a":1}', 400, 'application/problem+json') });
+        const response = await h.fetch('https://example.test/api/users');
+        expect(await response.json()).toEqual({ a: 1, added: 1 });
+    });
+
+    test('XHR: an event stream reaches the page chunk by chunk', async () => {
+        const stream = controlledStream('text/event-stream');
+        const h = withRules([patchRule({ added: 1 })], { originalFetch: async () => stream.response });
+        const xhr = h.newXHR();
+        const done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.send();
+        stream.push('data: 0\n\n');
+        await sleep(20);
+        expect(xhr.readyState).toBe(3);
+        expect(xhr.responseText).toBe('data: 0\n\n');
+        stream.push('data: 1\n\n');
+        stream.close();
+        const result = await done;
+        expect(result.responseText).toBe('data: 0\n\ndata: 1\n\n');
+        expect(result.marker).toBeNull();
+    });
+
+    test('capture reads no more than its cap from an endless stream', async () => {
+        let pulls = 0;
+        const chunk = new TextEncoder().encode('x'.repeat(16384));
+        const endless = () => new Response(new ReadableStream({ pull(c) { pulls++; c.enqueue(chunk); } }), {
+            headers: { 'Content-Type': 'text/plain' }
+        });
+        const h = withRules([], { originalFetch: async () => endless(), state: { settings: { captureArmed: true } } });
+        const captured = h.collect(h.channels.capture);
+        await h.fetch('https://example.test/api/stream');
+        await sleep(50);
+        const settled = pulls;
+        await sleep(50);
+        expect(pulls).toBe(settled);
+        expect(pulls).toBeLessThan(20);
+        expect(captured).toHaveLength(0);
+    });
+
+    test('capture skips an event stream', async () => {
+        const stream = controlledStream('text/event-stream');
+        const h = withRules([], { originalFetch: async () => stream.response, state: { settings: { captureArmed: true } } });
+        const captured = h.collect(h.channels.capture);
+        await h.fetch('https://example.test/api/feed');
+        stream.push('data: 0\n\n');
+        stream.close();
+        await sleep(20);
+        expect(captured).toHaveLength(0);
+    });
+});
+
+describe('PER-41: a patched response drops the real length, encoding and digests', () => {
+    const responder = async () => new Response('{"a":1}', {
+        headers: {
+            'Content-Type': 'application/json', 'Content-Length': '7', 'Content-Encoding': 'gzip',
+            'Content-MD5': 'abc', Digest: 'sha-256=abc', 'X-Kept': 'yes'
+        }
+    });
+
+    test('fetch', async () => {
+        const h = withRules([patchRule({ added: 'x'.repeat(50) })], { originalFetch: responder });
+        const response = await h.fetch('https://example.test/api/users');
+        for (const name of ['content-length', 'content-encoding', 'content-md5', 'digest']) {
+            expect(response.headers.get(name)).toBeNull();
+        }
+        expect(response.headers.get('x-kept')).toBe('yes');
+        expect(response.headers.get('x-splicetap')).toBe('true');
+    });
+
+    test('XHR', async () => {
+        const h = withRules([patchRule({ added: 'x'.repeat(50) })], { originalFetch: responder });
+        const xhr = h.newXHR();
+        const done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.send();
+        await done;
+        expect(xhr.getResponseHeader('content-length')).toBeNull();
+        expect(xhr.getResponseHeader('content-encoding')).toBeNull();
+        expect(xhr.getResponseHeader('x-kept')).toBe('yes');
+    });
+});
+
+describe('PER-42: mocked fetch responses behave like real ones', () => {
+    const statusMock = (statusCode, headers = {}, body = { mocked: true }) => mockRule({
+        response: { statusCode, headers: { 'Content-Type': 'application/json', ...headers }, body, delay: 0, mode: 'static' }
+    });
+
+    test('clone() keeps url, type and an overridden status', async () => {
+        const h = withRules([statusMock(299), mockRule({ id: 'odd', match: { url: '*/api/odd*', method: '*' }, response: { statusCode: 601, headers: {}, body: '', delay: 0, mode: 'static' } })]);
+        const response = await h.fetch('/api/users');
+        const copy = response.clone();
+        expect(copy.url).toBe('https://example.test/api/users');
+        expect(copy.type).toBe('basic');
+        expect(copy.clone().url).toBe('https://example.test/api/users');
+
+        const odd = await h.fetch('/api/odd');
+        expect(odd.clone().status).toBe(601);
+        expect(odd.clone().ok).toBe(false);
+    });
+
+    test('type is basic from this origin and cors from another', async () => {
+        const h = withRules([mockRule({ match: { url: '*', method: '*' } })]);
+        expect((await h.fetch('/api/users')).type).toBe('basic');
+        expect((await h.fetch('https://other.test/api/users')).type).toBe('cors');
+    });
+
+    test('a HEAD mock has a null body', async () => {
+        const h = withRules([mockRule()]);
+        const response = await h.fetch('/api/users', { method: 'HEAD' });
+        expect(response.status).toBe(200);
+        expect(response.body).toBeNull();
+        expect(await response.text()).toBe('');
+    });
+
+    test("a 3xx mock rejects under redirect: 'error'", async () => {
+        const h = withRules([statusMock(302, { Location: '/api/elsewhere' })]);
+        const logged = h.collect(h.channels.log);
+        await expect(h.fetch('/api/users', { redirect: 'error' })).rejects.toThrow(TypeError);
+        expect(logged[0].note).toMatch(/redirect mode is 'error'/);
+    });
+
+    test("a 3xx mock is an opaque redirect under redirect: 'manual'", async () => {
+        const h = withRules([statusMock(301, { Location: '/api/elsewhere' })]);
+        const response = await h.fetch('/api/users', { redirect: 'manual' });
+        expect(response.type).toBe('opaqueredirect');
+        expect(response.status).toBe(0);
+        expect(response.url).toBe('https://example.test/api/users');
+        expect(response.body).toBeNull();
+        expect(response.clone().type).toBe('opaqueredirect');
+    });
+
+    test('a 3xx mock with a Location is followed by default, to a mocked target', async () => {
+        const target = mockRule({ id: 't', name: 'Target', match: { url: '*/api/target*', method: '*' }, response: { statusCode: 200, headers: {}, body: { target: true }, delay: 0, mode: 'static' } });
+        const h = withRules([statusMock(302, { Location: '/api/target' }), target]);
+        const response = await h.fetch('/api/users');
+        expect(response.status).toBe(200);
+        expect(response.redirected).toBe(true);
+        expect(response.url).toBe('https://example.test/api/target');
+        expect(await response.json()).toEqual({ target: true });
+    });
+
+    test('a 303 turns a POST into a GET without its body', async () => {
+        const h = withRules([statusMock(303, { Location: 'https://example.test/next' })]);
+        const response = await h.fetch('/api/users', { method: 'POST', body: 'payload', headers: { 'Content-Type': 'text/plain', 'X-Keep': '1' } });
+        expect(response.redirected).toBe(true);
+        const [url, init] = h.passthroughCalls[0];
+        expect(url).toBe('https://example.test/next');
+        expect(init.method).toBe('GET');
+        expect(init.body).toBeUndefined();
+        expect(init.headers.get('content-type')).toBeNull();
+        expect(init.headers.get('x-keep')).toBe('1');
+    });
+
+    test('a redirect loop stops after 20 hops', async () => {
+        const h = withRules([statusMock(307, { Location: '/api/users' })]);
+        await expect(h.fetch('/api/users')).rejects.toThrow(TypeError);
+    });
+
+    test('a 3xx mock without a Location is returned as is', async () => {
+        const h = withRules([statusMock(304)]);
+        const response = await h.fetch('/api/users');
+        expect(response.status).toBe(304);
+        expect(response.redirected).toBe(false);
+    });
+});
+
+describe('PER-45: a delay rule lets keepalive requests leave at once', () => {
+    test('the hold is skipped and the log says so', async () => {
+        const h = withRules([delayRule(500)]);
+        const logged = h.collect(h.channels.log);
+        const start = Date.now();
+        await h.fetch('https://example.test/api/users', { method: 'POST', body: 'bye', keepalive: true });
+        expect(Date.now() - start).toBeLessThan(200);
+        expect(h.passthroughCalls).toHaveLength(1);
+        expect(logged[0]).toMatchObject({ ruleType: 'delay', note: 'Delay skipped — keepalive request' });
+    });
+});
+
+describe('PER-48: chaos mode only fails network requests', () => {
+    test('fetch of data: and blob: URLs is untouched', async () => {
+        const h = withRules([], { state: chaosOn });
+        await expect(h.fetch('data:application/json,{"a":1}')).resolves.toBeDefined();
+        await expect(h.fetch('blob:https://example.test/3f0c8b5e-1111-2222-3333-444455556666')).resolves.toBeDefined();
+        await expect(h.fetch('https://example.test/api/x')).rejects.toThrow(/Chaos/);
+    });
+
+    test('XHR to a data: URL is untouched', async () => {
+        const h = withRules([], { state: chaosOn });
+        const xhr = h.newXHR();
+        const done = settle(xhr);
+        xhr.open('GET', 'data:application/json,{"a":1}');
+        xhr.send();
+        expect((await done).status).toBe(200);
     });
 });

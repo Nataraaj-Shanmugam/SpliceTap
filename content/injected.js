@@ -109,6 +109,7 @@
     // Store originals
     const originalFetch = window.fetch;
     const originalXHR = window.XMLHttpRequest;
+    let spliceTapFetch = null; // the wrapper installed as window.fetch
 
     // State
     let tmState = {
@@ -139,6 +140,13 @@
         return Math.random();
     }
 
+    // PER-48: chaos mode simulates network failures, so it only touches
+    // http(s) requests. It failed blob: and data: fetches, which never reach
+    // the network.
+    function isNetworkUrl(url) {
+        return typeof url === 'string' && /^https?:/i.test(url);
+    }
+
     // Helper: is chaos mode currently enabled? (used by the zero-rule early-out
     // so chaos mode still fires even when the user has no regular rules — P-1)
     function isChaosModeActive() {
@@ -162,6 +170,26 @@
     const CAPTURE_MAX_BODY = 100 * 1024;
     const CAPTURE_TEXTUAL = /^(application\/(json|.*\+json|xml|javascript|x-www-form-urlencoded)|text\/)/i;
 
+    /** A body's text, or null once it passes `limit` bytes (the rest is left unread). */
+    async function readCapped(body, limit) {
+        if (!body) return '';
+        const reader = body.getReader();
+        const decoder = new TextDecoder();
+        let bytes = 0;
+        let text = '';
+        for (;;) {
+            const step = await reader.read();
+            if (step.done) break;
+            bytes += step.value.byteLength;
+            if (bytes > limit) {
+                reader.cancel().catch(() => {});
+                return null;
+            }
+            text += decoder.decode(step.value, { stream: true });
+        }
+        return text + decoder.decode();
+    }
+
     function emitCapture(entry) {
         if (!CAPTURE_EVENT) return;
         document.dispatchEvent(new CustomEvent(CAPTURE_EVENT, { detail: entry }));
@@ -177,10 +205,16 @@
         try {
             const contentType = response.headers.get('content-type') || '';
             if (!CAPTURE_TEXTUAL.test(contentType)) return;
+            // PER-18: an event stream is never complete, so it is not a
+            // response a rule can be built from.
+            if (mimeEssence(contentType) === 'text/event-stream') return;
+            if (Number(response.headers.get('content-length')) > CAPTURE_MAX_BODY) return;
 
-            const clone = response.clone();
-            const text = await clone.text();
-            if (text.length > CAPTURE_MAX_BODY) return;
+            // PER-18: read at most the cap, then stop. clone().text() read
+            // the whole body first, so an endless text stream was buffered
+            // without bound while capture was armed.
+            const text = await readCapped(response.clone().body, CAPTURE_MAX_BODY);
+            if (text === null) return;
 
             const headers = {};
             response.headers.forEach((v, k) => { headers[k] = v; });
@@ -736,10 +770,12 @@
         return headers;
     }
 
-    function buildMockResponse(bodyText, status, statusText, headersInit) {
+    // `overrides` (optional): url, redirected, type — what a real response
+    // would report and a constructed one cannot (Q-28, PER-42).
+    function buildMockResponse(bodyText, status, statusText, headersInit, overrides) {
         const numericStatus = Number.isFinite(status) ? status : 200;
         const inRange = numericStatus >= 200 && numericStatus <= 599;
-        const nullBody = NULL_BODY_STATUSES.has(numericStatus) || !inRange;
+        const nullBody = bodyText === null || NULL_BODY_STATUSES.has(numericStatus) || !inRange;
         const constructStatus = inRange ? numericStatus : 200;
         const headers = buildHeadersSafe(headersInit);
 
@@ -754,17 +790,141 @@
             response = new Response(null, { status: 200, statusText, headers });
         }
 
+        const props = objectAssign({}, overrides || {});
         if (constructStatus !== numericStatus) {
-            try {
-                Object.defineProperty(response, 'status', { value: numericStatus, configurable: true });
-                Object.defineProperty(response, 'ok', {
-                    value: numericStatus >= 200 && numericStatus < 300, configurable: true
-                });
-            } catch (e) {
-                // Environment won't allow the override — keep the constructed status/ok.
+            props.status = numericStatus;
+            props.ok = numericStatus >= 200 && numericStatus < 300;
+        }
+        return overrideResponse(response, props);
+    }
+
+    // Response.prototype.clone, captured: overrideResponse() reapplies its
+    // properties to every clone through it.
+    const nativeResponseClone = Response.prototype.clone;
+
+    /**
+     * Own-property overrides on a Response (url, status, ok, type,
+     * redirected). PER-42: clone() returned a plain clone, so a mocked
+     * response's clone lost its url (and the status of a 1xx/6xx mock); the
+     * overrides now carry over to every clone.
+     */
+    function overrideResponse(response, props) {
+        const names = objectKeys(props);
+        if (names.length === 0) return response;
+        try {
+            for (let i = 0; i < names.length; i++) {
+                defineProperty(response, names[i], { __proto__: null, value: props[names[i]], configurable: true });
             }
+            defineOwn(response, 'clone', function clone() {
+                return overrideResponse(reflectApply(nativeResponseClone, this, []), props);
+            });
+        } catch (e) {
+            // Environment won't allow the override — keep the constructed values.
         }
         return response;
+    }
+
+    function absoluteHref(url) {
+        try {
+            return new NativeURL(url).href;
+        } catch (e) {
+            return url;
+        }
+    }
+
+    // A real fetch response's type: 'basic' from this origin, else 'cors'.
+    // (A no-cors request to another origin really gets an unreadable
+    // 'opaque' response; a mock stays readable, as the README says.)
+    function responseTypeFor(url) {
+        try {
+            return new NativeURL(url).origin === new NativeURL(baseUrl()).origin ? 'basic' : 'cors';
+        } catch (e) {
+            return 'basic';
+        }
+    }
+
+    // PER-42: what fetch returns for a 3xx under redirect: 'manual' — an
+    // 'opaqueredirect' response: status 0, no headers, no body.
+    function opaqueRedirect(url) {
+        return overrideResponse(Response.error(), { type: 'opaqueredirect', url: absoluteHref(url) });
+    }
+
+    const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
+    const MAX_REDIRECTS = 20;
+    // Marks an init this file built to follow a mocked redirect, with the hop count.
+    const REDIRECT_HOPS = typeof Symbol === 'function' ? Symbol('splicetapRedirectHops') : '__splicetapRedirectHops';
+    // Headers that describe a request body, dropped when a redirect turns the request into a GET.
+    const REQUEST_BODY_HEADERS = ['content-encoding', 'content-language', 'content-location', 'content-type'];
+
+    /**
+     * PER-42: follow a mocked 3xx with a Location under the default
+     * redirect: 'follow', as fetch does — up to 20 hops, 303 (and a POST
+     * answered by 301/302) becoming a GET without its body. The target may
+     * itself be mocked. The page gets the final response with
+     * `redirected: true`.
+     */
+    async function followMockedRedirect(thisArg, rule, status, url, method, location, resource, config, isRequestObj, startedAt) {
+        let target;
+        try {
+            target = new NativeURL(location, url).href;
+        } catch (e) {
+            return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        const hops = ((config && config[REDIRECT_HOPS]) || 0) + 1;
+        if (hops > MAX_REDIRECTS) {
+            logInterception(rule, url, method, status, { finalStatus: 'failed', startedAt, note: 'Too many redirects' });
+            return Promise.reject(new TypeError('Failed to fetch'));
+        }
+
+        const init = isRequestObj ? await requestInit(resource) : objectAssign({}, config || {});
+        init.method = method;
+        if ((status === 303 && method !== 'HEAD') || ((status === 301 || status === 302) && method === 'POST')) {
+            init.method = 'GET';
+            delete init.body;
+            const headers = new Headers(init.headers || undefined);
+            for (let i = 0; i < REQUEST_BODY_HEADERS.length; i++) headers.delete(REQUEST_BODY_HEADERS[i]);
+            init.headers = headers;
+        }
+        init.redirect = 'follow';
+        init[REDIRECT_HOPS] = hops;
+
+        // Through this file's own fetch, not window.fetch: a page wrapper
+        // around fetch would otherwise see one call twice.
+        const followed = reflectApply(spliceTapFetch, thisArg, [target, init])
+            .then((response) => overrideResponse(response, { redirected: true }));
+        return logWhenSettled(followed, rule, url, method, {
+            startedAt, redirectedTo: target, note: `Mocked ${status} redirect followed`
+        });
+    }
+
+    // PER-41: a patched body is new, so the real response's length,
+    // encoding and digests no longer describe it — a gzip response kept
+    // `Content-Encoding: gzip` over the decoded, re-serialised JSON.
+    const STALE_AFTER_PATCH = ['content-length', 'content-encoding', 'content-md5', 'digest'];
+
+    function patchedHeaders(headers) {
+        const out = {};
+        headers.forEach((value, key) => {
+            if (STALE_AFTER_PATCH.indexOf(String(key).toLowerCase()) === -1) out[key] = value;
+        });
+        return out;
+    }
+
+    function isJsonMime(essence) {
+        return essence === 'application/json' || /\+json$/.test(essence);
+    }
+
+    /**
+     * PER-18 / PER-42: why a patch cannot apply, judged from the status and
+     * headers alone, before any of the body is read — or null.
+     */
+    function patchSkipBeforeReading(real, method) {
+        if (hasNoBody(real.status, method)) return 'Patch skipped — response has no body';
+        const essence = mimeEssence(real.headers.get('content-type'));
+        if (!isJsonMime(essence)) {
+            return `Patch skipped — response is not a JSON object (${(essence || 'no content type').slice(0, 80)})`;
+        }
+        return null;
     }
 
     const EMPTY_HEADERS = Object.freeze({});
@@ -882,12 +1042,13 @@
         // extra allocation, before any promise/array/object is created, for
         // the common "installed but nothing to do" case. Chaos mode has no
         // rule dependency, so it must still gate this bail (correctness).
-        window.fetch = function (...args) {
+        spliceTapFetch = function (...args) {
             if (!tmState.active || (tmState.rules.length === 0 && !isChaosModeActive() && !isCaptureArmed())) {
                 return originalFetch.apply(this, args);
             }
             return handleInterceptedFetch.apply(this, args);
         };
+        window.fetch = spliceTapFetch;
 
         async function handleInterceptedFetch(...args) {
             const startedAt = Date.now();
@@ -910,8 +1071,8 @@
                 return Promise.reject(abortError());
             }
 
-            // 1. Chaos Mode Check
-            if (tmState.settings?.chaosMode?.enabled) {
+            // 1. Chaos Mode Check — network requests only (PER-48).
+            if (tmState.settings?.chaosMode?.enabled && isNetworkUrl(url)) {
                 if (getSecureRandom() < (tmState.settings.chaosMode.failureRate || 0.1) && relayAlive()) {
                     log(`Chaos Mode: Blocked ${url}`);
                     logChaos(url, method, startedAt);
@@ -958,6 +1119,13 @@
             }
 
             if (effectiveType === 'delay') {
+                // PER-45: a keepalive request is how a page reports on its
+                // way out; held in page JavaScript it died with the page.
+                // It leaves at once.
+                if ((config && config.keepalive) || (isRequestObj && resource.keepalive)) {
+                    logInterception(rule, url, method, null, { startedAt, note: 'Delay skipped — keepalive request' });
+                    return reflectApply(originalFetch, this, args);
+                }
                 log(`Delaying ${method} ${url} by ${rule.delayMs}ms (Rule: ${rule.name})`);
                 try {
                     await sleepAbortable(rule.delayMs, signal);
@@ -990,7 +1158,17 @@
             const cfg = getResponseConfig(rule);
 
             if (cfg.mode === 'patch') {
-                const real = await originalFetch.apply(this, args);
+                const real = await reflectApply(originalFetch, this, args);
+
+                // PER-18: only a JSON response is patched. Waiting for any
+                // other body held an event stream or NDJSON feed back until
+                // it ended (and one that never ends, forever); those now pass
+                // straight through, unread.
+                const skippedUnread = patchSkipBeforeReading(real, method);
+                if (skippedUnread) {
+                    logInterception(rule, url, method, real.status, { note: skippedUnread });
+                    return real;
+                }
 
                 let data;
                 try {
@@ -1018,26 +1196,18 @@
                     return Promise.reject(abortError());
                 }
 
-                const mergedHeaders = {};
-                real.headers.forEach((value, key) => { mergedHeaders[key] = value; });
+                const mergedHeaders = patchedHeaders(real.headers);
                 mergedHeaders['x-splicetap'] = 'true';
                 mergedHeaders['x-splicetap-rule'] = ruleMarker(rule.name);
 
                 log(`Patched ${method} ${url} (Rule: ${rule.name})`);
                 logInterception(rule, url, method, real.status);
 
-                const patchedResponse = buildMockResponse(jsonStringify(merged), real.status, real.statusText, mergedHeaders);
-                // Q-28: a freshly constructed Response can't carry these, but
-                // patch mode is "the real response, plus a merge" — best-effort
-                // restore them from the real response.
-                try {
-                    Object.defineProperty(patchedResponse, 'url', { value: real.url, configurable: true });
-                    Object.defineProperty(patchedResponse, 'redirected', { value: real.redirected, configurable: true });
-                    Object.defineProperty(patchedResponse, 'type', { value: real.type, configurable: true });
-                } catch (e) {
-                    // ignore if the environment won't allow the override
-                }
-                return patchedResponse;
+                // Q-28: a freshly constructed Response can't carry url,
+                // redirected or type, but patch mode is "the real response,
+                // plus a merge" — restore them from the real response.
+                return buildMockResponse(jsonStringify(merged), real.status, real.statusText, mergedHeaders,
+                    { url: real.url, redirected: real.redirected, type: real.type });
             }
 
             // mode === 'static' (existing behavior)
@@ -1050,8 +1220,31 @@
                 return Promise.reject(abortError());
             }
 
-            const body = processDynamicResponse(cfg.body, { url, method });
-            const responseBody = typeof body === 'string' ? body : jsonStringify(body);
+            // PER-42: a 3xx mock follows the request's redirect mode, as a
+            // real one does. It was handed to the page as a 302 whatever the
+            // mode: 'error' resolved, and the default 'follow' stopped there.
+            if (REDIRECT_STATUSES.indexOf(cfg.statusCode) !== -1) {
+                const mode = (config && config.redirect) || (isRequestObj ? resource.redirect : 'follow');
+                if (mode === 'error') {
+                    logInterception(rule, url, method, cfg.statusCode, { note: "Redirect refused — the request's redirect mode is 'error'" });
+                    return Promise.reject(new TypeError('Failed to fetch'));
+                }
+                if (mode === 'manual') {
+                    logInterception(rule, url, method, cfg.statusCode);
+                    return opaqueRedirect(url);
+                }
+                const location = headerValue(cfg.headers, 'location');
+                if (location !== undefined && location !== null && String(location) !== '') {
+                    return followMockedRedirect(this, rule, cfg.statusCode, url, method, String(location), resource, config, isRequestObj, startedAt);
+                }
+            }
+
+            // PER-42: no body for HEAD, as for a null-body status (Q-2).
+            let responseBody = null;
+            if (!hasNoBody(cfg.statusCode, method)) {
+                const body = processDynamicResponse(cfg.body, { url, method });
+                responseBody = typeof body === 'string' ? body : jsonStringify(body);
+            }
 
             const headerObj = withDefaultContentType(cfg.headers);
             headerObj['x-splicetap'] = 'true';
@@ -1059,17 +1252,12 @@
 
             logInterception(rule, url, method, cfg.statusCode);
 
-            const mocked = buildMockResponse(responseBody, cfg.statusCode, cfg.statusText, headerObj);
-            // A constructed Response has an empty `url`. Real ones report the
-            // URL that was fetched, and code that logs it or resolves relative
-            // links against it saw "" from a mock. Patch mode already restores
-            // this (Q-28); static mocks now match.
-            try {
-                Object.defineProperty(mocked, 'url', { value: new NativeURL(url).href, configurable: true });
-            } catch (e) {
-                // Environment won't allow the override — leave it empty.
-            }
-            return mocked;
+            // A constructed Response has an empty `url` and type 'default'.
+            // Real ones report the URL that was fetched and 'basic' (same
+            // origin) or 'cors'; code that logs the URL or resolves relative
+            // links against it saw "" from a mock.
+            return buildMockResponse(responseBody, cfg.statusCode, cfg.statusText, headerObj,
+                { url: absoluteHref(url), type: responseTypeFor(url) });
         }
     }
 
@@ -1554,6 +1742,7 @@
         function runPatchFlow(rule, body) {
             const cfg = getResponseConfig(rule);
             const gen = generation;
+            const stale = () => gen !== generation || mockDone;
             armTimeout();
 
             (async () => {
@@ -1562,7 +1751,6 @@
                 // originalSend(), so a non-JSON or empty response (text, a
                 // 204) reached the server twice.
                 let real;
-                let rawBody;
                 try {
                     // S-7/Q-18: map withCredentials instead of hard-coding
                     // 'include'. QA-6: with a signal, so xhr.abort() cancels
@@ -1575,21 +1763,39 @@
                         credentials: xhr.withCredentials ? 'include' : 'same-origin',
                         signal: patchAbort.signal
                     });
-                    rawBody = await real.arrayBuffer();
                 } catch (error) {
                     // A network failure, as the native XHR would have seen it.
-                    if (gen !== generation || mockDone) return;
+                    if (stale()) return;
                     log('XHR patch mode: the request failed:', error);
                     failRequest('error');
                     return;
                 }
-                if (gen !== generation || mockDone) return;
-                patchAbort = null;
+                if (stale()) return;
 
-                const realText = new TextDecoder().decode(rawBody);
                 const realHeaders = {};
                 real.headers.forEach((value, key) => { realHeaders[key] = value; });
 
+                // PER-18: only JSON is patched. Anything else (an event
+                // stream, NDJSON) is delivered as it arrives, unchanged.
+                const skippedUnread = patchSkipBeforeReading(real, requestMethod);
+                if (skippedUnread) {
+                    logInterception(rule, requestAbsUrl, requestMethod, real.status, { note: skippedUnread });
+                    await deliverStreaming(real, realHeaders, stale);
+                    return;
+                }
+
+                let rawBody;
+                try {
+                    rawBody = await real.arrayBuffer();
+                } catch (error) {
+                    if (stale()) return;
+                    failRequest('error');
+                    return;
+                }
+                if (stale()) return;
+                patchAbort = null;
+
+                const realText = new TextDecoder().decode(rawBody);
                 let mergedText;
                 try {
                     const data = jsonParse(realText);
@@ -1612,7 +1818,8 @@
                     return;
                 }
 
-                const mergedHeaders = realHeaders;
+                // PER-41: without the real body's length and encoding.
+                const mergedHeaders = patchedHeaders(real.headers);
                 mergedHeaders['x-splicetap'] = 'true';
                 mergedHeaders['x-splicetap-rule'] = ruleMarker(rule.name);
 
@@ -1621,6 +1828,58 @@
 
                 finishMock(mergedText, real.status, real.statusText || 'OK', mergedHeaders, undefined, real.url);
             })();
+        }
+
+        /**
+         * PER-18: hand a real response to the page chunk by chunk, as a
+         * native XHR does — LOADING with the text so far and a progress
+         * event per chunk — so a stream is not held back until it ends.
+         */
+        async function deliverStreaming(real, headers, stale) {
+            completeUpload();
+            advanceTo(2, real.status, real.statusText, headers);
+            const responseType = xhr.responseType || '';
+            const textual = responseType === '' || responseType === 'text';
+            const total = Number(real.headers.get('content-length')) || 0;
+            const chunks = [];
+            let loaded = 0;
+            let text = '';
+            if (real.body) {
+                const reader = real.body.getReader();
+                const decoder = new TextDecoder();
+                for (;;) {
+                    let step;
+                    try {
+                        step = await reader.read();
+                    } catch (error) {
+                        if (!stale()) failRequest('error');
+                        return;
+                    }
+                    if (stale()) {
+                        reader.cancel().catch(() => {});
+                        return;
+                    }
+                    if (step.done) break;
+                    chunks.push(step.value);
+                    loaded += step.value.byteLength;
+                    text += decoder.decode(step.value, { stream: true });
+                    advanceTo(3, real.status, real.statusText, headers);
+                    if (textual) {
+                        setState('responseText', text);
+                        setState('response', text);
+                    }
+                    fireProgress(xhr, 'progress', loaded, total, total > 0);
+                }
+                text += decoder.decode();
+            }
+            patchAbort = null;
+            const raw = new Uint8Array(loaded);
+            let offset = 0;
+            for (let i = 0; i < chunks.length; i++) {
+                raw.set(chunks[i], offset);
+                offset += chunks[i].byteLength;
+            }
+            finishMock(text, real.status, real.statusText, headers, raw.buffer, real.url);
         }
 
         // Override open
@@ -1756,8 +2015,8 @@
             }
             sendStart = Date.now();
 
-            // Chaos Mode check (moved from open())
-            if (tmState.settings?.chaosMode?.enabled &&
+            // Chaos Mode check (moved from open()) — network requests only (PER-48).
+            if (tmState.settings?.chaosMode?.enabled && isNetworkUrl(requestAbsUrl) &&
                 getSecureRandom() < (tmState.settings.chaosMode.failureRate || 0.1) &&
                 relayAlive()) {
                 log(`Chaos Mode: Blocked XHR ${requestUrl}`);
