@@ -7,6 +7,96 @@
 (function (global) {
     'use strict';
 
+    // PER-2 (Contract B): this runs in the page's realm and is handed every
+    // rule, so anything it calls through a prototype or a global is a hook the
+    // page can install before its first request: a getter on Object.prototype
+    // fires when a rule lacks a property, a String.prototype method receives
+    // each URL pattern, Array.prototype[Symbol.iterator] sees the rule list,
+    // Map.prototype.get sees the cache keys. This file loads at document_start,
+    // before any page script, so what it captures here is the genuine built-in.
+    // Every built-in applied to rule data below is one of these, called with
+    // the object as its first argument (uncurryThis) rather than looked up on
+    // it, over index loops, and over rules that may be null-prototype objects
+    // and arrays (state sync copies them so: there is no prototype to hook).
+    const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+
+    const NativeRegExp = RegExp;
+    const NativeString = String;
+    const isArray = Array.isArray;
+    const objectKeys = Object.keys;
+    const objectCreate = Object.create;
+    const objectSetPrototypeOf = Object.setPrototypeOf;
+    const objectDefineProperty = Object.defineProperty;
+    const hasOwnProperty = uncurryThis(Object.prototype.hasOwnProperty);
+    const jsonParse = JSON.parse;
+    const mathMax = Math.max;
+    const mathMin = Math.min;
+    const mathFloor = Math.floor;
+    const dateNow = Date.now;
+    const stringStartsWith = uncurryThis(String.prototype.startsWith);
+    const stringEndsWith = uncurryThis(String.prototype.endsWith);
+    const stringIncludes = uncurryThis(String.prototype.includes);
+    const stringIndexOf = uncurryThis(String.prototype.indexOf);
+    const stringSlice = uncurryThis(String.prototype.slice);
+    const stringRepeat = uncurryThis(String.prototype.repeat);
+    const stringReplace = uncurryThis(String.prototype.replace);
+    const stringToLowerCase = uncurryThis(String.prototype.toLowerCase);
+    const stringToUpperCase = uncurryThis(String.prototype.toUpperCase);
+    // RegExp.prototype.test and String.prototype.replace/split look exec (and
+    // @@replace, @@split) up on the object at call time, so a page that
+    // replaced those would still see the text. The builtin exec reads nothing
+    // from the regex but lastIndex, so matching goes through it directly.
+    const regexExec = uncurryThis(RegExp.prototype.exec);
+    const mapGet = uncurryThis(Map.prototype.get);
+    const mapSet = uncurryThis(Map.prototype.set);
+    const mapDelete = uncurryThis(Map.prototype.delete);
+    const mapKeys = uncurryThis(Map.prototype.keys);
+    const mapSize = uncurryThis(Object.getOwnPropertyDescriptor(Map.prototype, 'size').get);
+    const mapIteratorNext = uncurryThis(Object.getPrototypeOf(new Map().keys()).next);
+    const setHas = uncurryThis(Set.prototype.has);
+    const setAdd = uncurryThis(Set.prototype.add);
+    // console.error is handed patterns (and the engine's error for one, which
+    // quotes it), so a page that replaced it would read them.
+    const consoleObject = typeof console !== 'undefined' ? console : null;
+    const consoleError = consoleObject && typeof consoleObject.error === 'function'
+        ? uncurryThis(consoleObject.error)
+        : null;
+    function reportError(message, detail) {
+        if (consoleError) consoleError(consoleObject, message, detail);
+    }
+
+    // A read that never reaches the prototype chain. Rules from the state sync
+    // are null-prototype already; this keeps an ordinary object (a unit test, a
+    // caller that did not copy) from hitting an Object.prototype getter named
+    // `headers` or `graphql` when the rule simply lacks one.
+    function own(object, key) {
+        return hasOwnProperty(object, key) ? object[key] : undefined;
+    }
+
+    // Lists built here hold pattern-derived text, so they have no prototype to
+    // hook: no setter at an index, no iterator, and only the helpers below.
+    function newList() {
+        const list = [];
+        objectSetPrototypeOf(list, null);
+        return list;
+    }
+    function listPush(list, value) {
+        list[list.length] = value;
+    }
+    function listIncludes(list, value) {
+        for (let i = 0; i < list.length; i++) if (list[i] === value) return true;
+        return false;
+    }
+    function listAddUnique(list, value) {
+        if (!listIncludes(list, value)) listPush(list, value);
+    }
+    function nullProtoTable(entries) {
+        const table = objectCreate(null);
+        const keys = objectKeys(entries);
+        for (let i = 0; i < keys.length; i++) table[keys[i]] = entries[keys[i]];
+        return table;
+    }
+
     // Rule types handled by the interceptor (fetch/XHR patch). 'headers' and
     // 'queryparams' are DNR-backed and are never matched here.
     const INTERCEPTOR_TYPES = new Set(['mock', 'block', 'delay', 'redirect']);
@@ -65,21 +155,85 @@
     const PROBE_SLOW_MS = 5;      // one probe slower than this, twice running, is catastrophic
     const PROBE_ADAPT_MS = 0.4;   // slower than this: step the repetitions by 2, not 4
     const PROBE_TOTAL_MS = 150;   // hard bound on the whole check
-    const probeNow = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-        ? () => performance.now()
-        : () => Date.now();
+    const performanceNow = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? uncurryThis(performance.now)
+        : null;
+    const probeNow = performanceNow ? () => performanceNow(performance) : () => dateNow();
 
     // The default terminator. Built rather than written as an escape or a
     // literal: U+FFFF is a noncharacter, and a literal one in a shipped file
     // makes Chrome refuse to load the extension (scripts/chromium-text.js).
     const PROBE_DEFAULT_TERMINATOR = String.fromCharCode(0xFFFF);
 
-    const CONTROL_ESCAPES = { n: '\n', r: '\r', t: '\t', f: '\f', v: '\v' };
-    const CLASS_ESCAPE_SAMPLES = { d: '0', w: 'a', s: ' ' };
+    // Lookup tables keyed by a character of the pattern: no prototype, so a
+    // getter on Object.prototype never learns which character was asked for.
+    const CONTROL_ESCAPES = nullProtoTable({ n: '\n', r: '\r', t: '\t', f: '\f', v: '\v' });
+    const CLASS_ESCAPE_SAMPLES = nullProtoTable({ d: '0', w: 'a', s: ' ' });
     // A character each negated class escape REFUSES. A terminator the pattern
     // can consume ends nothing: \W and \D happily eat U+FFFF, so a probe that
     // ends in it matches and never backtracks.
-    const REFUSED_BY_ESCAPE = { D: '0', W: 'a', S: ' ' };
+    const REFUSED_BY_ESCAPE = nullProtoTable({ D: '0', W: 'a', S: ' ' });
+
+    const REGEX_SPECIALS = '.*+?^${}()|[]\\';
+
+    function isDigit(ch) {
+        return ch >= '0' && ch <= '9';
+    }
+    function isAlphanumeric(ch) {
+        return isDigit(ch) || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+    }
+
+    // Does the `{` at body[from] open a counted quantifier ({3}, {3,}, {3,5})?
+    // This read the next 16 characters with /^\{\d+(,\d*)?\}/.
+    function isBraceQuantifier(body, from) {
+        const window = stringSlice(body, from, from + 16);
+        let j = 1;
+        let digits = 0;
+        while (j < window.length && isDigit(window[j])) { j++; digits++; }
+        if (digits === 0) return false;
+        if (j < window.length && window[j] === ',') {
+            j++;
+            while (j < window.length && isDigit(window[j])) j++;
+        }
+        return j < window.length && window[j] === '}';
+    }
+
+    // The text with every regex metacharacter escaped.
+    function escapeRegExp(text) {
+        const source = NativeString(text);
+        let out = '';
+        for (let i = 0; i < source.length; i++) {
+            const c = source[i];
+            out += stringIndexOf(REGEX_SPECIALS, c) !== -1 ? '\\' + c : c;
+        }
+        return out;
+    }
+
+    // A wildcard pattern as regex source: every character literal, '*' as '.*'.
+    function wildcardToRegexSource(pattern) {
+        let out = '';
+        for (let i = 0; i < pattern.length; i++) {
+            const c = pattern[i];
+            if (c === '*') out += '.*';
+            else out += stringIndexOf(REGEX_SPECIALS, c) !== -1 ? '\\' + c : c;
+        }
+        return out;
+    }
+
+    // String.prototype.split for a one-character separator, without the @@split
+    // lookup split performs on its separator (a hook there receives the text).
+    function splitOn(text, separator) {
+        const parts = newList();
+        let from = 0;
+        for (;;) {
+            const at = stringIndexOf(text, separator, from);
+            if (at === -1) break;
+            listPush(parts, stringSlice(text, from, at));
+            from = at + separator.length;
+        }
+        listPush(parts, stringSlice(text, from));
+        return parts;
+    }
 
     /**
      * Read the literal material out of a regex body: the runs of literal text
@@ -90,67 +244,70 @@
      * probes.
      */
     function analyzePattern(body) {
-        const runs = [];
-        const chars = [];
-        const refused = [];
+        const runs = newList();
+        const chars = newList();
+        const refused = newList();
         let prefix = '';
         let leading = true;
         let run = '';
 
-        const addChar = (c) => { if (!chars.includes(c)) chars.push(c); };
+        // body[k] past the end falls through to String.prototype[k], so every
+        // read that can overshoot goes through here.
+        const at = (k) => (k >= 0 && k < body.length ? body[k] : undefined);
+        const addChar = (c) => listAddUnique(chars, c);
         const flush = () => {
-            if (run.length > 0) runs.push(run);
+            if (run.length > 0) listPush(runs, run);
             if (leading) { prefix = run; leading = false; }
             run = '';
         };
         const skipTo = (from, ch) => {
-            const close = body.indexOf(ch, from);
+            const close = stringIndexOf(body, ch, from);
             return close === -1 ? body.length : close;
         };
 
         for (let i = 0; i < body.length; i++) {
             const c = body[i];
             if (c === '\\') {
-                const next = body[++i];
+                const next = at(++i);
                 if (next === undefined) break;
                 if (CONTROL_ESCAPES[next]) {
                     run += CONTROL_ESCAPES[next];
-                } else if (/[A-Za-z0-9]/.test(next)) {
+                } else if (isAlphanumeric(next)) {
                     // \d \w \s \b, a backreference, \xHH, \p{..}: no literal.
                     flush();
-                    if (REFUSED_BY_ESCAPE[next]) refused.push(REFUSED_BY_ESCAPE[next]);
-                    if ((next === 'p' || next === 'P') && body[i + 1] === '{') i = skipTo(i, '}');
-                    if (next === 'k' && body[i + 1] === '<') i = skipTo(i, '>');
+                    if (REFUSED_BY_ESCAPE[next]) listPush(refused, REFUSED_BY_ESCAPE[next]);
+                    if ((next === 'p' || next === 'P') && at(i + 1) === '{') i = skipTo(i, '}');
+                    if (next === 'k' && at(i + 1) === '<') i = skipTo(i, '>');
                 } else {
                     run += next;
                     addChar(next);
                 }
             } else if (c === '*' || c === '+' || c === '?'
-                || (c === '{' && /^\{\d+(,\d*)?\}/.test(body.slice(i, i + 16)))) {
+                || (c === '{' && isBraceQuantifier(body, i))) {
                 if (c === '{') i = skipTo(i, '}');
                 if (run.length > 0) {
                     // The quantifier binds to the last character only.
-                    const last = run.slice(-1);
-                    run = run.slice(0, -1);
+                    const last = stringSlice(run, -1);
+                    run = stringSlice(run, 0, -1);
                     flush();
-                    runs.push(last);
+                    listPush(runs, last);
                 }
             } else if (c === '(') {
                 flush();
-                if (body[i + 1] === '?') {
+                if (at(i + 1) === '?') {
                     i++;
-                    const kind = body[i + 1];
+                    const kind = at(i + 1);
                     if (kind === ':' || kind === '=' || kind === '!') {
                         i++;
                     } else if (kind === '<') {
                         i++;
-                        if (body[i + 1] === '=' || body[i + 1] === '!') i++;
+                        if (at(i + 1) === '=' || at(i + 1) === '!') i++;
                         else i = skipTo(i, '>');
                     }
                 }
             } else if (c === '.') {
                 flush();
-                refused.push('\n'); // the one character '.' will not consume
+                listPush(refused, '\n'); // the one character '.' will not consume
             } else if (c === ')' || c === '|' || c === '$') {
                 flush();
             } else if (c === '^') {
@@ -158,26 +315,26 @@
             } else if (c === '[') {
                 flush();
                 let j = i + 1;
-                const negated = body[j] === '^';
+                const negated = at(j) === '^';
                 if (negated) j++;
-                const members = [];
+                const members = newList();
                 for (; j < body.length && body[j] !== ']'; j++) {
                     let m = body[j];
                     if (m === '\\') {
-                        m = body[++j];
+                        m = at(++j);
                         if (m === undefined) break;
-                        if (/[A-Za-z0-9]/.test(m)) {
-                            if (CLASS_ESCAPE_SAMPLES[m]) members.push(CLASS_ESCAPE_SAMPLES[m]);
+                        if (isAlphanumeric(m)) {
+                            if (CLASS_ESCAPE_SAMPLES[m]) listPush(members, CLASS_ESCAPE_SAMPLES[m]);
                             continue;
                         }
                     }
-                    members.push(m);
+                    listPush(members, m);
                 }
                 i = j;
                 if (negated) {
-                    if (members.length > 0) refused.push(members[0]);
+                    if (members.length > 0) listPush(refused, members[0]);
                 } else {
-                    members.slice(0, 4).forEach(addChar);
+                    for (let k = 0; k < members.length && k < 4; k++) addChar(members[k]);
                 }
             } else {
                 run += c;
@@ -186,46 +343,57 @@
         }
         flush();
 
-        return { runs, chars, refused, prefix: prefix.slice(0, 60) };
+        return { runs, chars, refused, prefix: stringSlice(prefix, 0, 60) };
     }
 
     function probeUnits(info) {
-        const derived = info.runs.filter((r) => r.length <= PROBE_MAX_UNIT).slice(0, 12);
-        const singles = info.chars.slice(0, 8);
-        // Two of the pattern's characters alternating: (a|b)+ style ambiguity.
-        const pairs = [];
-        for (let a = 0; a < Math.min(3, singles.length); a++) {
-            for (let b = a + 1; b < Math.min(3, singles.length); b++) pairs.push(singles[a] + singles[b]);
+        const units = newList();
+        // The pattern's own literal runs.
+        let derived = 0;
+        for (let i = 0; i < info.runs.length && derived < 12; i++) {
+            if (info.runs[i].length <= PROBE_MAX_UNIT) { listAddUnique(units, info.runs[i]); derived++; }
         }
-        return Array.from(new Set([...derived, ...singles, ...pairs, ...PROBE_FIXED_UNITS]));
+        // Its single characters, and two of them alternating: (a|b)+ style ambiguity.
+        const singles = mathMin(8, info.chars.length);
+        for (let i = 0; i < singles; i++) listAddUnique(units, info.chars[i]);
+        const pairable = mathMin(3, singles);
+        for (let a = 0; a < pairable; a++) {
+            for (let b = a + 1; b < pairable; b++) listAddUnique(units, info.chars[a] + info.chars[b]);
+        }
+        for (let i = 0; i < PROBE_FIXED_UNITS.length; i++) listAddUnique(units, PROBE_FIXED_UNITS[i]);
+        return units;
     }
 
     function isCatastrophicRegex(regexBody) {
         let re;
         try {
-            re = new RegExp(regexBody, 'i');
+            re = new NativeRegExp(regexBody, 'i');
         } catch (error) {
             return true;
         }
 
         const info = analyzePattern(regexBody);
         const prefixes = info.prefix ? ['', info.prefix] : [''];
-        const terminators = Array.from(new Set([PROBE_DEFAULT_TERMINATOR, ...info.refused])).slice(0, 4);
+        const terminators = newList();
+        listPush(terminators, PROBE_DEFAULT_TERMINATOR);
+        for (let i = 0; i < info.refused.length && terminators.length < 4; i++) listAddUnique(terminators, info.refused[i]);
         const start = probeNow();
 
         const time = (text) => {
             const began = probeNow();
-            re.test(text);
+            regexExec(re, text);
             return probeNow() - began;
         };
 
         try {
-            for (const unit of probeUnits(info)) {
-                const maxReps = Math.min(PROBE_MAX_REPS, Math.floor(PROBE_MAX_LENGTH / unit.length));
-                for (const prefix of prefixes) {
-                    for (const end of terminators) {
+            const units = probeUnits(info);
+            for (let u = 0; u < units.length; u++) {
+                const unit = units[u];
+                const maxReps = mathMin(PROBE_MAX_REPS, mathFloor(PROBE_MAX_LENGTH / unit.length));
+                for (let p = 0; p < prefixes.length; p++) {
+                    for (let t = 0; t < terminators.length; t++) {
                         for (let reps = PROBE_MIN_REPS; reps <= maxReps;) {
-                            const text = prefix + unit.repeat(reps) + end;
+                            const text = prefixes[p] + stringRepeat(unit, reps) + terminators[t];
                             const took = time(text);
                             // A lone slow probe can be a GC pause or a busy
                             // machine; an exponential one is slow every time.
@@ -258,23 +426,25 @@
      * a 'never' descriptor (fail closed) rather than throwing or hanging.
      */
     function compilePattern(pattern) {
-        const cached = patternCache.get(pattern);
+        const cached = mapGet(patternCache, pattern);
         if (cached) return cached;
 
         let compiled;
         try {
-            if (pattern.startsWith('/') && pattern.endsWith('/')) {
-                const regexBody = pattern.slice(1, -1);
+            if (typeof pattern !== 'string') {
+                compiled = { kind: 'never' };
+            } else if (stringStartsWith(pattern, '/') && stringEndsWith(pattern, '/')) {
+                const regexBody = stringSlice(pattern, 1, -1);
                 if (regexBody.length === 0) {
                     // Q-10: '/' or '//' must not become an empty regex that matches everything.
                     compiled = { kind: 'never' };
                 } else if (isCatastrophicRegex(regexBody)) {
-                    console.error('SpliceTap: refusing potentially catastrophic regex pattern:', pattern);
+                    reportError('SpliceTap: refusing potentially catastrophic regex pattern:', pattern);
                     compiled = { kind: 'never' };
                 } else {
-                    compiled = { kind: 'regex', regex: new RegExp(regexBody, 'i') };
+                    compiled = { kind: 'regex', regex: new NativeRegExp(regexBody, 'i') };
                 }
-            } else if (pattern.includes('*')) {
+            } else if (stringIncludes(pattern, '*')) {
                 // PERF-7: the overwhelmingly common shapes here are '*/api/x*',
                 // '/api/x*' and '*/api/x' — a single literal with stars around
                 // it. Those are exactly includes/startsWith/endsWith, so
@@ -285,13 +455,20 @@
                 // The anchored '^...$' form the regex branch uses makes these
                 // equivalences exact: '*X*' is "contains X", 'X*' is "starts
                 // with X", '*X' is "ends with X".
-                const segments = pattern.split('*');
-                const literals = segments.filter((segment) => segment.length > 0);
+                const segments = splitOn(pattern, '*');
+                let literalCount = 0;
+                let firstLiteral = '';
+                for (let i = 0; i < segments.length; i++) {
+                    if (segments[i].length > 0) {
+                        if (literalCount === 0) firstLiteral = segments[i];
+                        literalCount++;
+                    }
+                }
 
-                if (literals.length === 0) {
+                if (literalCount === 0) {
                     compiled = { kind: 'any' }; // '*', '**', ...
-                } else if (literals.length === 1) {
-                    const literal = literals[0].toLowerCase();
+                } else if (literalCount === 1) {
+                    const literal = stringToLowerCase(firstLiteral);
                     const openLeft = segments[0] === '';
                     const openRight = segments[segments.length - 1] === '';
 
@@ -303,25 +480,22 @@
                         compiled = { kind: 'suffix', lower: literal };
                     }
                 } else {
-                    const regexPattern = pattern
-                        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                        .replace(/\\\*/g, '.*');
-                    compiled = { kind: 'regex', regex: new RegExp('^' + regexPattern + '$', 'i') };
+                    compiled = { kind: 'regex', regex: new NativeRegExp('^' + wildcardToRegexSource(pattern) + '$', 'i') };
                 }
             } else {
-                compiled = { kind: 'substring', lower: pattern.toLowerCase() };
+                compiled = { kind: 'substring', lower: stringToLowerCase(pattern) };
             }
         } catch (error) {
-            console.error('Error compiling URL pattern:', error);
+            reportError('Error compiling URL pattern:', error);
             compiled = { kind: 'never' };
         }
 
         // A loop, not an if: the cap follows the rule set (PER-36), so it can
         // also shrink between scans.
-        while (patternCache.size >= patternCacheMax) {
-            patternCache.delete(patternCache.keys().next().value);
+        while (mapSize(patternCache) >= patternCacheMax) {
+            mapDelete(patternCache, mapIteratorNext(mapKeys(patternCache)).value);
         }
-        patternCache.set(pattern, compiled);
+        mapSet(patternCache, pattern, compiled);
         return compiled;
     }
 
@@ -341,17 +515,17 @@
         if (compiled.kind === 'any') return true;
 
         if (compiled.kind === 'regex') {
-            return compiled.regex.test(url);
+            return regexExec(compiled.regex, url) !== null;
         }
 
         if (url !== lastUrl) {
             lastUrl = url;
-            lastUrlLower = url.toLowerCase();
+            lastUrlLower = stringToLowerCase(url);
         }
 
-        if (compiled.kind === 'prefix') return lastUrlLower.startsWith(compiled.lower);
-        if (compiled.kind === 'suffix') return lastUrlLower.endsWith(compiled.lower);
-        return lastUrlLower.includes(compiled.lower);
+        if (compiled.kind === 'prefix') return stringStartsWith(lastUrlLower, compiled.lower);
+        if (compiled.kind === 'suffix') return stringEndsWith(lastUrlLower, compiled.lower);
+        return stringIncludes(lastUrlLower, compiled.lower);
     }
 
     /**
@@ -360,21 +534,27 @@
      * value compare is substring. Empty/absent ruleHeaders -> true.
      */
     function matchHeaders(requestHeaders, ruleHeaders) {
-        if (!ruleHeaders || Object.keys(ruleHeaders).length === 0) return true;
+        if (!ruleHeaders) return true;
+        const names = objectKeys(ruleHeaders);
+        if (names.length === 0) return true;
 
-        const normalizedRequestHeaders = {};
+        // No prototype: a rule's header name is looked up here, and a request
+        // header called "__proto__" is data, not a prototype swap.
+        const normalizedRequestHeaders = objectCreate(null);
         if (requestHeaders) {
-            Object.keys(requestHeaders).forEach((key) => {
-                normalizedRequestHeaders[key.toLowerCase()] = requestHeaders[key];
-            });
+            const keys = objectKeys(requestHeaders);
+            for (let i = 0; i < keys.length; i++) {
+                normalizedRequestHeaders[stringToLowerCase(keys[i])] = requestHeaders[keys[i]];
+            }
         }
 
-        return Object.keys(ruleHeaders).every((name) => {
-            const expected = ruleHeaders[name];
-            const actual = normalizedRequestHeaders[name.toLowerCase()];
+        for (let i = 0; i < names.length; i++) {
+            const expected = ruleHeaders[names[i]];
+            const actual = normalizedRequestHeaders[stringToLowerCase(names[i])];
             if (actual === undefined || actual === null) return false;
-            return String(actual).toLowerCase().includes(String(expected).toLowerCase());
-        });
+            if (!stringIncludes(stringToLowerCase(NativeString(actual)), stringToLowerCase(NativeString(expected)))) return false;
+        }
+        return true;
     }
 
     /**
@@ -386,18 +566,17 @@
      */
     function queryOperationNames(query) {
         if (typeof query !== 'string' || query === '') return [];
-        const text = query
-            .replace(/"""[\s\S]*?"""/g, '""')
-            .replace(/"(?:[^"\\\r\n]|\\.)*"/g, '""')
-            .replace(/#[^\r\n]*/g, '');
+        let text = stringReplace(query, /"""[\s\S]*?"""/g, '""');
+        text = stringReplace(text, /"(?:[^"\\\r\n]|\\.)*"/g, '""');
+        text = stringReplace(text, /#[^\r\n]*/g, '');
         const token = /[{}()]|\b(?:query|mutation|subscription)\b[\s,]+([_A-Za-z][_0-9A-Za-z]*)/g;
-        const names = [];
+        const names = newList();
         let depth = 0;
         let found;
-        while ((found = token.exec(text)) !== null) {
+        while ((found = regexExec(token, text)) !== null) {
             if (found[0] === '{' || found[0] === '(') depth++;
-            else if (found[0] === '}' || found[0] === ')') depth = Math.max(0, depth - 1);
-            else if (depth === 0) names.push(found[1]);
+            else if (found[0] === '}' || found[0] === ')') depth = mathMax(0, depth - 1);
+            else if (depth === 0) listPush(names, found[1]);
         }
         return names;
     }
@@ -409,9 +588,10 @@
     function addOperationNames(names, operation) {
         if (!operation || typeof operation !== 'object') return;
         if (typeof operation.operationName === 'string' && operation.operationName !== '') {
-            names.add(operation.operationName);
+            setAdd(names, operation.operationName);
         } else {
-            for (const name of queryOperationNames(operation.query)) names.add(name);
+            const declared = queryOperationNames(operation.query);
+            for (let i = 0; i < declared.length; i++) setAdd(names, declared[i]);
         }
     }
 
@@ -428,20 +608,24 @@
 
         if (typeof bodyText === 'string' && bodyText !== '') {
             try {
-                const parsed = JSON.parse(bodyText);
-                (Array.isArray(parsed) ? parsed : [parsed]).forEach((operation) => addOperationNames(names, operation));
+                const parsed = jsonParse(bodyText);
+                if (isArray(parsed)) {
+                    for (let i = 0; i < parsed.length; i++) addOperationNames(names, parsed[i]);
+                } else {
+                    addOperationNames(names, parsed);
+                }
             } catch (error) {
                 unparsed = bodyText;
             }
         }
 
         if (typeof url === 'string') {
-            const hash = url.indexOf('#');
-            const noFragment = hash === -1 ? url : url.slice(0, hash);
-            const queryStart = noFragment.indexOf('?');
+            const hash = stringIndexOf(url, '#');
+            const noFragment = hash === -1 ? url : stringSlice(url, 0, hash);
+            const queryStart = stringIndexOf(noFragment, '?');
             if (queryStart !== -1) {
                 try {
-                    const params = new URLSearchParams(noFragment.slice(queryStart + 1));
+                    const params = new URLSearchParams(stringSlice(noFragment, queryStart + 1));
                     addOperationNames(names, { operationName: params.get('operationName'), query: params.get('query') });
                 } catch (error) {
                     // A query string that will not parse names no operation.
@@ -465,20 +649,22 @@
      * GraphQL rule (PER-38: 36 ms per request with 50 rules and a 565 KB body).
      */
     function matchGraphQL(bodyText, graphqlMatch, url, memo) {
-        if (!graphqlMatch || !graphqlMatch.operationName) return true;
+        const wanted = graphqlMatch ? own(graphqlMatch, 'operationName') : undefined;
+        if (!wanted) return true;
 
-        let request = memo && memo.graphql;
+        let request = memo ? own(memo, 'graphql') : undefined;
         if (!request) {
             request = readGraphQLRequest(bodyText, url);
-            if (memo) memo.graphql = request;
+            if (memo) {
+                objectDefineProperty(memo, 'graphql', { value: request, writable: true, enumerable: true, configurable: true });
+            }
         }
 
-        if (request.names.has(graphqlMatch.operationName)) return true;
+        if (setHas(request.names, wanted)) return true;
         if (request.unparsed === null) return false;
 
-        const escapedName = graphqlMatch.operationName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp('"operationName"\\s*:\\s*"' + escapedName + '"');
-        return regex.test(request.unparsed);
+        const regex = new NativeRegExp('"operationName"\\s*:\\s*"' + escapeRegExp(wanted) + '"');
+        return regexExec(regex, request.unparsed) !== null;
     }
 
     /**
@@ -487,33 +673,37 @@
      * matches any method.
      */
     function findMatchingRule(rules, request) {
-        if (!Array.isArray(rules)) return null;
+        if (!isArray(rules)) return null;
         const { url, method, headers, bodyText } = request || {};
 
         // PER-36: keep every pattern of this rule set cached (see the cache).
-        patternCacheMax = Math.max(PATTERN_CACHE_MIN, rules.length);
+        patternCacheMax = mathMax(PATTERN_CACHE_MIN, rules.length);
 
         // PERF-7: this uppercased the *request's* method once per rule, so a
         // page with N rules allocated N throwaway strings for every request to
         // compare against a value that cannot change mid-scan.
-        const requestMethod = String(method || '').toUpperCase();
+        const requestMethod = stringToUpperCase(NativeString(method || ''));
 
         // PER-38: filled by the first GraphQL rule that gets this far.
-        const graphqlMemo = {};
+        const graphqlMemo = objectCreate(null);
 
-        for (const rule of rules) {
-            if (!rule || !rule.enabled) continue;
+        // PER-2: an index loop (for...of asks the rule list for its iterator)
+        // and own-property reads (a rule lacking `headers` must not fall
+        // through to a getter on Object.prototype).
+        for (let i = 0; i < rules.length; i++) {
+            const rule = rules[i];
+            if (!rule || !own(rule, 'enabled')) continue;
 
-            const type = rule.type || 'mock';
-            if (!INTERCEPTOR_TYPES.has(type)) continue;
+            const type = own(rule, 'type') || 'mock';
+            if (!setHas(INTERCEPTOR_TYPES, type)) continue;
 
-            const match = rule.match || {};
-            const ruleMethod = (match.method || '*').toUpperCase();
+            const match = own(rule, 'match') || {};
+            const ruleMethod = stringToUpperCase(own(match, 'method') || '*');
             if (ruleMethod !== '*' && requestMethod !== ruleMethod) continue;
 
-            if (!matchUrl(url, match.url)) continue;
-            if (!matchHeaders(headers, match.headers)) continue;
-            if (!matchGraphQL(bodyText, match.graphql, url, graphqlMemo)) continue;
+            if (!matchUrl(url, own(match, 'url'))) continue;
+            if (!matchHeaders(headers, own(match, 'headers'))) continue;
+            if (!matchGraphQL(bodyText, own(match, 'graphql'), url, graphqlMemo)) continue;
 
             return rule;
         }

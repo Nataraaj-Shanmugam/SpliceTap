@@ -20,22 +20,33 @@ const rule = (overrides = {}) => ({
 const base = (overrides = {}) => rule({ match: { url: '*/api/x*', method: 'GET' }, ...overrides });
 const errorsOf = (r) => S.validateRule(r).errors.join(' | ');
 
-/** Count `new RegExp(...)` calls made while fn runs. */
-function countCompilations(fn) {
+/**
+ * A fresh copy of the matcher whose `new RegExp(...)` calls are counted.
+ *
+ * PER-2: the matcher takes RegExp (and JSON.parse, and every other built-in it
+ * applies to rule data) from the realm when it loads, so a page — or a test —
+ * that replaces one afterwards is not seen. The counter therefore has to be in
+ * place while the module loads. `compilations(fn)` runs fn and returns the
+ * count, so a cache that survives between calls can still be measured.
+ */
+function loadCountingMatcher() {
+    const state = { count: 0 };
     const Original = globalThis.RegExp;
-    let count = 0;
     globalThis.RegExp = new Proxy(Original, {
         construct(target, args, newTarget) {
-            count++;
+            state.count++;
             return Reflect.construct(target, args, newTarget);
         }
     });
+    let loaded;
     try {
-        fn();
+        jest.isolateModules(() => { loaded = require('../src/matcher'); });
     } finally {
         globalThis.RegExp = Original;
     }
-    return count;
+    return Object.assign({}, loaded, {
+        compilations(fn) { state.count = 0; fn(); return state.count; }
+    });
 }
 
 describe('PER-3 — the ReDoS guard probes the pattern\'s own units', () => {
@@ -219,10 +230,14 @@ describe('PER-38 — the request body is parsed at most once per lookup', () => 
         bodyText: JSON.stringify({ operationName, query: '{ a }' })
     });
 
+    // PER-2: JSON.parse is captured when the matcher loads, so the spy goes in
+    // first and fn gets a copy loaded under it.
     function parseCalls(fn) {
         const spy = jest.spyOn(JSON, 'parse');
         try {
-            fn();
+            let fresh;
+            jest.isolateModules(() => { fresh = require('../src/matcher'); });
+            fn(fresh);
             return spy.mock.calls.length;
         } finally {
             spy.mockRestore();
@@ -232,15 +247,15 @@ describe('PER-38 — the request body is parsed at most once per lookup', () => 
     test('50 GraphQL rules cost one parse, not fifty', () => {
         const rules = graphqlRules(50);
         let hit;
-        const calls = parseCalls(() => { hit = findMatchingRule(rules, request('op49')); });
+        const calls = parseCalls((m) => { hit = m.findMatchingRule(rules, request('op49')); });
         expect(hit && hit.id).toBe('g49');
         expect(calls).toBe(1);
     });
 
     test('a lookup that never reaches a GraphQL rule parses nothing', () => {
         const rules = graphqlRules(50);
-        const calls = parseCalls(() => {
-            findMatchingRule(rules, { url: 'https://api.test/other', method: 'POST', bodyText: '{"operationName":"op1"}' });
+        const calls = parseCalls((m) => {
+            m.findMatchingRule(rules, { url: 'https://api.test/other', method: 'POST', bodyText: '{"operationName":"op1"}' });
         });
         expect(calls).toBe(0);
     });
@@ -262,27 +277,30 @@ describe('PER-36 — the pattern cache survives a rule set larger than 500', () 
     const miss = { url: 'https://api.test/nothing-matches-this', method: 'GET' };
 
     test('a second pass over 600 patterns compiles nothing', () => {
+        const m = loadCountingMatcher();
         const rules = wildcardRules(600, 'big');
-        const first = countCompilations(() => { findMatchingRule(rules, miss); });
-        const second = countCompilations(() => { findMatchingRule(rules, miss); });
+        const first = m.compilations(() => { m.findMatchingRule(rules, miss); });
+        const second = m.compilations(() => { m.findMatchingRule(rules, miss); });
         expect(first).toBe(600);
         expect(second).toBe(0);
     });
 
     test('and again at 1200, well past the old cap', () => {
+        const m = loadCountingMatcher();
         const rules = wildcardRules(1200, 'huge');
-        findMatchingRule(rules, miss);
-        expect(countCompilations(() => { findMatchingRule(rules, miss); })).toBe(0);
+        m.findMatchingRule(rules, miss);
+        expect(m.compilations(() => { m.findMatchingRule(rules, miss); })).toBe(0);
     });
 
     test('the cache is still bounded for a stream of unique patterns (small rule set)', () => {
-        findMatchingRule([rule()], miss); // brings the cap back to its floor
+        const m = loadCountingMatcher();
+        m.findMatchingRule([rule()], miss); // the cap is at its floor
         const stream = Array.from({ length: 700 }, (_, i) => `*/stream-${i}/*end`);
-        for (const pattern of stream) matchUrl(miss.url, pattern);
+        for (const pattern of stream) m.matchUrl(miss.url, pattern);
         // The first patterns were evicted, so asking again recompiles them.
-        expect(countCompilations(() => { matchUrl(miss.url, stream[0]); })).toBe(1);
+        expect(m.compilations(() => { m.matchUrl(miss.url, stream[0]); })).toBe(1);
         // The newest are still cached.
-        expect(countCompilations(() => { matchUrl(miss.url, stream[699]); })).toBe(0);
+        expect(m.compilations(() => { m.matchUrl(miss.url, stream[699]); })).toBe(0);
     });
 });
 
