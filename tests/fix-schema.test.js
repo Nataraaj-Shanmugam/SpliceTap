@@ -702,7 +702,8 @@ describe('PER-41 — __proto__ and constructor keys survive the merge', () => {
     test('a __proto__ key in the patch is kept as data and does not touch the prototype', () => {
         const patch = JSON.parse('{"__proto__": {"x": 1}, "a": 1}');
         const result = jsonMergePatch({ b: 2 }, patch);
-        expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+        // PER-2: the merge builds prototype-less objects, so the proto is null, and a "__proto__" key is data on it.
+        expect(Object.getPrototypeOf(result)).toBeNull();
         expect(Object.prototype.hasOwnProperty.call(result, '__proto__')).toBe(true);
         expect(JSON.parse(JSON.stringify(result))).toEqual(JSON.parse('{"b": 2, "__proto__": {"x": 1}, "a": 1}'));
         expect(result.x).toBeUndefined();
@@ -712,7 +713,7 @@ describe('PER-41 — __proto__ and constructor keys survive the merge', () => {
     test('a __proto__ key in the original survives an unrelated patch', () => {
         const original = JSON.parse('{"__proto__": {"k": 1}, "b": 2}');
         const result = jsonMergePatch(original, { a: 1 });
-        expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+        expect(Object.getPrototypeOf(result)).toBeNull();
         expect(JSON.stringify(result)).toBe('{"__proto__":{"k":1},"b":2,"a":1}');
     });
 

@@ -7,9 +7,91 @@
 (function (global) {
     'use strict';
 
+    // PER-2 (Contract B): this runs in the page's realm and is handed every
+    // mock body, so anything it calls through a prototype or a global is a hook
+    // the page can install before its first request. This file loads at
+    // document_start, before any page script, so what it captures here is the
+    // genuine built-in. Everything applied to rule data goes through these,
+    // called with the text as the first argument (uncurryThis) rather than
+    // looked up on it. Math.random, Date and the Number methods are left to
+    // the realm: they only ever see generated values, and a page that seeds
+    // Math.random or fakes the clock expects {{randomInt}} and {{timestamp}} to
+    // follow.
+    const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+    const NativeString = String;
+    const nativeParseInt = parseInt;
+    const jsonStringify = JSON.stringify;
+    const jsonParse = JSON.parse;
+    const mathMin = Math.min;
+    const mathMax = Math.max;
+    const stringIndexOf = uncurryThis(String.prototype.indexOf);
+    const stringSlice = uncurryThis(String.prototype.slice);
+    // String.prototype.replace with a regex dispatches to
+    // RegExp.prototype[Symbol.replace], which looks exec up on the regex at
+    // call time: a page that replaced either would be handed the whole body.
+    // The builtin exec reads nothing from the regex but lastIndex, so
+    // substitution is a loop over it.
+    const regexExec = uncurryThis(RegExp.prototype.exec);
+    const consoleObject = typeof console !== 'undefined' ? console : null;
+    const consoleError = consoleObject && typeof consoleObject.error === 'function'
+        ? uncurryThis(consoleObject.error)
+        : null;
+    function reportError(message, detail) {
+        if (consoleError) consoleError(consoleObject, message, detail);
+    }
+
     // Any body without this substring cannot contain a placeholder token, so
     // the entire replace/parse pipeline below can be skipped (P-7).
     const PLACEHOLDER_MARKER = '{{';
+
+    // One regex per token, built once. Every one is global, so exec walks the
+    // text from lastIndex (reset before each use).
+    const RE_TIMESTAMP = /{{timestamp}}/g;
+    const RE_TIMESTAMP_MS = /{{timestamp_ms}}/g;
+    const RE_DATE = /{{date}}/g;
+    const RE_TIME = /{{time}}/g;
+    const RE_GUID = /{{guid}}/g;
+    const RE_RANDOM_INT = /{{randomInt}}/g;
+    const RE_RANDOM_INT_MAX = /{{randomInt:(\d+)}}/g;
+    const RE_RANDOM_FLOAT = /{{randomFloat}}/g;
+    const RE_RANDOM_STRING = /{{randomString}}/g;
+    const RE_RANDOM_STRING_LEN = /{{randomString:(\d+)}}/g;
+    const RE_RANDOM_EMAIL = /{{randomEmail}}/g;
+    const RE_RANDOM_BOOL = /{{randomBool}}/g;
+    const RE_REQUEST_URL = /{{request\.url}}/g;
+    const RE_REQUEST_METHOD = /{{request\.method}}/g;
+
+    /**
+     * Replace every match of the global regex `re` in `text` with
+     * replacer(matchedText, firstGroup). The result is the same as
+     * text.replace(re, replacer) for a replacer that returns a string.
+     */
+    function replaceAll(text, re, replacer) {
+        let out = '';
+        let last = 0;
+        let matched = false;
+        re.lastIndex = 0;
+        for (;;) {
+            const m = regexExec(re, text);
+            if (m === null) break;
+            matched = true;
+            const whole = m[0];
+            // m[1] past the end of the match array falls through to
+            // Array.prototype[1]: read it only when the regex had a group.
+            const group = m.length > 1 ? m[1] : undefined;
+            out += stringSlice(text, last, m.index) + replacer(whole, group);
+            last = m.index + whole.length;
+            if (whole.length === 0) re.lastIndex = last + 1;
+        }
+        re.lastIndex = 0;
+        return matched ? out + stringSlice(text, last) : text;
+    }
+
+    // Everything before the first `separator` (all of `text` without one).
+    function beforeFirst(text, separator) {
+        const at = stringIndexOf(text, separator);
+        return at === -1 ? text : stringSlice(text, 0, at);
+    }
 
     /**
      * Process dynamic response placeholders, always returning a string.
@@ -28,9 +110,26 @@
      * occasionally shorter than 10 when the float had trailing zeros.
      */
     function randomString(length) {
-        const n = Math.min(Math.max(0, length || 0), MAX_RANDOM_STRING);
+        const n = mathMin(mathMax(0, length || 0), MAX_RANDOM_STRING);
         let out = '';
         for (let i = 0; i < n; i++) out += ALPHANUMERIC[Math.floor(Math.random() * ALPHANUMERIC.length)];
+        return out;
+    }
+
+    // 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx' with each x and y a random hex digit.
+    function randomGuid() {
+        const template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx';
+        let out = '';
+        for (let i = 0; i < template.length; i++) {
+            const c = template[i];
+            if (c === 'x' || c === 'y') {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                out += v.toString(16);
+            } else {
+                out += c;
+            }
+        }
         return out;
     }
 
@@ -45,44 +144,38 @@
         // page with only a console error. Escape those two for JSON string
         // context; leave them raw when the body is plain text.
         const forContext = (value) => {
-            const s = String(value);
-            return jsonContext ? JSON.stringify(s).slice(1, -1) : s;
+            const s = NativeString(value);
+            return jsonContext ? stringSlice(jsonStringify(s), 1, -1) : s;
         };
-        // Date/time placeholders — arguments are replacer callbacks so Date()
-        // is only constructed when the token is actually present (P-7 #2).
-        bodyStr = bodyStr.replace(/{{timestamp}}/g, () => new Date().toISOString());
-        bodyStr = bodyStr.replace(/{{timestamp_ms}}/g, () => Date.now().toString());
-        bodyStr = bodyStr.replace(/{{date}}/g, () => new Date().toISOString().split('T')[0]);
-        bodyStr = bodyStr.replace(/{{time}}/g, () => new Date().toTimeString().split(' ')[0]);
+        // Date/time placeholders — the replacer callbacks only run (and Date()
+        // is only constructed) when the token is actually present (P-7 #2).
+        bodyStr = replaceAll(bodyStr, RE_TIMESTAMP, () => new Date().toISOString());
+        bodyStr = replaceAll(bodyStr, RE_TIMESTAMP_MS, () => Date.now().toString());
+        bodyStr = replaceAll(bodyStr, RE_DATE, () => beforeFirst(new Date().toISOString(), 'T'));
+        bodyStr = replaceAll(bodyStr, RE_TIME, () => beforeFirst(new Date().toTimeString(), ' '));
 
         // GUID/UUID
-        bodyStr = bodyStr.replace(/{{guid}}/g, () =>
-            'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-                const r = Math.random() * 16 | 0;
-                const v = c === 'x' ? r : (r & 0x3 | 0x8);
-                return v.toString(16);
-            })
-        );
+        bodyStr = replaceAll(bodyStr, RE_GUID, randomGuid);
 
         // Random values
-        bodyStr = bodyStr.replace(/{{randomInt}}/g, () =>
+        bodyStr = replaceAll(bodyStr, RE_RANDOM_INT, () =>
             Math.floor(Math.random() * 1000).toString()
         );
         // Inclusive of max, as documented — and consistent with {{randomInt}},
         // which is 0–999 inclusive. This returned 0..max-1.
-        bodyStr = bodyStr.replace(/{{randomInt:(\d+)}}/g, (match, max) =>
-            Math.floor(Math.random() * (parseInt(max, 10) + 1)).toString()
+        bodyStr = replaceAll(bodyStr, RE_RANDOM_INT_MAX, (match, max) =>
+            Math.floor(Math.random() * (nativeParseInt(max, 10) + 1)).toString()
         );
-        bodyStr = bodyStr.replace(/{{randomFloat}}/g, () =>
+        bodyStr = replaceAll(bodyStr, RE_RANDOM_FLOAT, () =>
             (Math.random() * 100).toFixed(2)
         );
-        bodyStr = bodyStr.replace(/{{randomString}}/g, () => randomString(10));
-        bodyStr = bodyStr.replace(/{{randomString:(\d+)}}/g, (match, length) =>
-            randomString(parseInt(length, 10))
+        bodyStr = replaceAll(bodyStr, RE_RANDOM_STRING, () => randomString(10));
+        bodyStr = replaceAll(bodyStr, RE_RANDOM_STRING_LEN, (match, length) =>
+            randomString(nativeParseInt(length, 10))
         );
 
         // Random email
-        bodyStr = bodyStr.replace(/{{randomEmail}}/g, () => {
+        bodyStr = replaceAll(bodyStr, RE_RANDOM_EMAIL, () => {
             const names = ['john', 'jane', 'bob', 'alice', 'charlie', 'david', 'emma'];
             const domains = ['example.com', 'test.com', 'demo.com', 'mail.com'];
             const name = names[Math.floor(Math.random() * names.length)];
@@ -91,17 +184,17 @@
         });
 
         // Random boolean
-        bodyStr = bodyStr.replace(/{{randomBool}}/g, () =>
+        bodyStr = replaceAll(bodyStr, RE_RANDOM_BOOL, () =>
             Math.random() > 0.5 ? 'true' : 'false'
         );
 
-        // Request details (if provided). Callback form avoids treating '$'
+        // Request details (if provided). The replacer form avoids treating '$'
         // sequences inside the request URL/method as replacement patterns.
         if (requestDetails && requestDetails.url) {
-            bodyStr = bodyStr.replace(/{{request\.url}}/g, () => forContext(requestDetails.url));
+            bodyStr = replaceAll(bodyStr, RE_REQUEST_URL, () => forContext(requestDetails.url));
         }
         if (requestDetails && requestDetails.method) {
-            bodyStr = bodyStr.replace(/{{request\.method}}/g, () => forContext(requestDetails.method));
+            bodyStr = replaceAll(bodyStr, RE_REQUEST_METHOD, () => forContext(requestDetails.method));
         }
 
         return bodyStr;
@@ -113,14 +206,16 @@
      * object in -> object out (via JSON round-trip), string in -> string out.
      * Bodies with no '{{' token are returned untouched, skipping the entire
      * replace pipeline and (for object input) both JSON operations (P-7 #1).
+     * An object body may be a null-prototype one (the state sync copies rules
+     * that way, PER-2).
      */
     function processDynamicResponse(body, requestDetails = {}) {
         if (!body) return body;
 
         const isObject = typeof body !== 'string';
-        const bodyStr = isObject ? JSON.stringify(body) : body;
+        const bodyStr = isObject ? jsonStringify(body) : body;
 
-        if (bodyStr.indexOf(PLACEHOLDER_MARKER) === -1) {
+        if (stringIndexOf(bodyStr, PLACEHOLDER_MARKER) === -1) {
             return body;
         }
 
@@ -130,9 +225,9 @@
 
         if (isObject) {
             try {
-                return JSON.parse(processedStr);
+                return jsonParse(processedStr);
             } catch (e) {
-                console.error('Failed to parse dynamic body:', e);
+                reportError('Failed to parse dynamic body:', e);
                 return body;
             }
         }

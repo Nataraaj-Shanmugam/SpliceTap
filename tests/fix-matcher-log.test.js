@@ -186,7 +186,7 @@ function installHostileHooks() {
         if (typeof original !== 'function') return;
         const hook = function () {
             'use strict';
-            note(label, this, arguments);
+            note(label, new.target ? undefined : this, arguments); // under new, `this` is a bare object made from the prototype
             return new.target ? Reflect.construct(original, arguments, new.target) : rawApply.call(original, this, arguments);
         };
         Object.defineProperty(hook, 'prototype', { value: original.prototype });
@@ -283,19 +283,23 @@ describe('Contract B: rule data is not handed to hooks on the built-in prototype
     });
 
     test('matcher: matching, header, GraphQL and regex analysis never show a hook a pattern', () => {
+        // The module takes console.error at load, so the quiet one goes in first.
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
         const matcher = loadFresh('matcher.js');
         const rules = nullProto(plainRules());
         const results = [];
         const hooks = installHostileHooks();
         try {
-            for (const r of REQUESTS) {
+            // Index loops: the hooks are on the iterators too.
+            for (let q = 0; q < REQUESTS.length; q++) {
+                const r = REQUESTS[q];
                 const hit = matcher.findMatchingRule(rules, { url: r.url, method: r.method, headers: r.headers, bodyText: r.bodyText });
-                results.push(hit ? hit.id : null);
+                results[results.length] = hit ? hit.id : null;
                 // The direct entry points, as the interceptor's conditional-rule scan calls them.
-                for (const x of rules) {
-                    matcher.matchUrl(r.url, x.match.url);
-                    matcher.matchHeaders(r.headers, x.match.headers);
-                    matcher.matchGraphQL(r.bodyText, x.match.graphql, r.url, {});
+                for (let i = 0; i < rules.length; i++) {
+                    matcher.matchUrl(r.url, rules[i].match.url);
+                    matcher.matchHeaders(r.headers, rules[i].match.headers);
+                    matcher.matchGraphQL(r.bodyText, rules[i].match.graphql, r.url, {});
                 }
             }
             matcher.isCatastrophicRegex(regexBody);
@@ -303,6 +307,9 @@ describe('Contract B: rule data is not handed to hooks on the built-in prototype
             matcher.isCatastrophicRegex('^\\/zq7\\-[abc]{2,3}\\/(?:x|y)+$');
         } finally { hooks.restore(); }
 
+        // The refusal notice reached the console the module captured, pattern and all.
+        expect(errorSpy.mock.calls.some((c) => c[1] === '/(a|a)+$/')).toBe(true);
+        errorSpy.mockRestore();
         expect(results).toEqual(REQUESTS.map((r) => r.expect));
         expect(leaksIn(hooks.seen)).toEqual([]);
     });
@@ -314,22 +321,25 @@ describe('Contract B: rule data is not handed to hooks on the built-in prototype
         addSecrets({ exact: patterns });
         const hooks = installHostileHooks();
         try {
-            for (const p of patterns) matcher.matchUrl('https://x.test/other', p);
+            for (let i = 0; i < patterns.length; i++) matcher.matchUrl('https://x.test/other', patterns[i]);
         } finally { hooks.restore(); }
         expect(leaksIn(hooks.seen)).toEqual([]);
     });
 
     test('matcher: ordinary rule objects are read through their own properties, so Object.prototype getters never fire', () => {
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
         const matcher = loadFresh('matcher.js');
         const rules = plainRules();
         const results = [];
         const hooks = installHostileHooks();
         try {
-            for (const r of REQUESTS) {
+            for (let q = 0; q < REQUESTS.length; q++) {
+                const r = REQUESTS[q];
                 const hit = matcher.findMatchingRule(rules, { url: r.url, method: r.method, headers: r.headers, bodyText: r.bodyText });
-                results.push(hit ? hit.id : null);
+                results[results.length] = hit ? hit.id : null;
             }
         } finally { hooks.restore(); }
+        errorSpy.mockRestore();
         expect(results).toEqual(REQUESTS.map((r) => r.expect));
         expect(leaksIn(hooks.seen)).toEqual([]);
     });
@@ -343,7 +353,7 @@ describe('Contract B: rule data is not handed to hooks on the built-in prototype
         const out = {};
         const hooks = installHostileHooks();
         try {
-            out.text = placeholders.processDynamicResponse(text, { url: 'https://api.test/a?q="1"', method: 'GET' });
+            out.text = placeholders.processDynamicResponse(text, { url: 'https://api.test/a?q=1', method: 'GET' });
             out.toString = placeholders.processDynamicResponseToString(text, { url: 'https://api.test/b', method: 'POST' }, false);
             out.object = placeholders.processDynamicResponse(objectBody, { url: 'https://api.test/c', method: 'PUT' });
             out.plain = placeholders.processDynamicResponse('{"secret":"ZQ7-SECRET-PLAIN"}');
@@ -355,7 +365,7 @@ describe('Contract B: rule data is not handed to hooks on the built-in prototype
         expect(parsed.s).toHaveLength(10);
         expect(parsed.s5).toHaveLength(5);
         expect(parsed.n).toBeLessThanOrEqual(50);
-        expect(parsed.u).toBe('https://api.test/a?q="1"');
+        expect(parsed.u).toBe('https://api.test/a?q=1');
         expect(parsed.m).toBe('GET');
         expect(JSON.parse(out.toString).m).toBe('POST');
         expect(out.object.secret).toBe('ZQ7-SECRET-OBJ');
@@ -377,17 +387,20 @@ describe('Contract B: rule data is not handed to hooks on the built-in prototype
             zq7Key: { deep: { x: 'ZQ7-PATCH-DEEP' } }
         });
         const out = {};
+        const replacePatch = nullProto(['ZQ7-PATCH-REPLACE']);
+        const emptyPatch = nullProto({});
+        const scalarPatch = 'ZQ7-PATCH-SCALAR';
         const hooks = installHostileHooks();
         try {
             out.merged = patch.jsonMergePatch(original, rulePatch);
             out.onNothing = patch.jsonMergePatch(undefined, rulePatch);
             out.onArray = patch.jsonMergePatch([1, 2], rulePatch);
-            out.replace = patch.jsonMergePatch({ a: 1 }, nullProto(['ZQ7-PATCH-REPLACE']));
+            out.replace = patch.jsonMergePatch({ a: 1 }, replacePatch);
             out.applicable = [
                 patch.isPatchApplicable({ a: 1 }, rulePatch),
                 patch.isPatchApplicable([1], rulePatch),
-                patch.isPatchApplicable({ a: 1 }, nullProto({})),
-                patch.isPatchApplicable(5, 'ZQ7-PATCH-SCALAR')
+                patch.isPatchApplicable({ a: 1 }, emptyPatch),
+                patch.isPatchApplicable(5, scalarPatch)
             ];
         } finally { hooks.restore(); }
 

@@ -7,8 +7,24 @@
 (function (global) {
     'use strict';
 
-    const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
-    const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+    // PER-2 (Contract B): the patch is rule data and this runs in the page's
+    // realm, so nothing here is looked up on a prototype at call time. This
+    // file loads at document_start, before any page script, so what it
+    // captures is the genuine built-in. The patch may be a null-prototype
+    // object or array (the state sync copies rules that way), and the objects
+    // a merge builds have no prototype either: the interceptor stringifies the
+    // result, and JSON.stringify asks every object it visits for `toJSON`,
+    // which on an ordinary object is a lookup a page getter on
+    // Object.prototype would answer with the merged patch values.
+    const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+    const isArray = Array.isArray;
+    const objectKeys = Object.keys;
+    const objectCreate = Object.create;
+    const objectDefineProperty = Object.defineProperty;
+    const hasOwnProperty = uncurryThis(Object.prototype.hasOwnProperty);
+
+    const isPlainObject = (v) => v !== null && typeof v === 'object' && !isArray(v);
+    const hasOwn = (object, key) => hasOwnProperty(object, key);
 
     // PER-41: `target[key] = value` with key "__proto__" does not create a key,
     // it swaps the object's prototype — so a JSON document with a "__proto__"
@@ -16,12 +32,13 @@
     // the original). Define the property instead. This also keeps the merge
     // from ever writing through to Object.prototype.
     function setOwn(target, key, value) {
-        Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
+        objectDefineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
     }
 
     function copyOwn(source) {
-        const copy = {};
-        for (const key of Object.keys(source)) setOwn(copy, key, source[key]);
+        const copy = objectCreate(null);
+        const keys = objectKeys(source);
+        for (let i = 0; i < keys.length; i++) setOwn(copy, keys[i], source[keys[i]]);
         return copy;
     }
 
@@ -29,8 +46,10 @@
     function merge(original, patch) {
         if (!isPlainObject(patch)) return patch;
 
-        const target = isPlainObject(original) ? copyOwn(original) : {};
-        for (const key of Object.keys(patch)) {
+        const target = isPlainObject(original) ? copyOwn(original) : objectCreate(null);
+        const keys = objectKeys(patch);
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
             const value = patch[key];
             if (value === null) {
                 delete target[key];
@@ -53,7 +72,7 @@
      */
     function isPatchApplicable(target, patch) {
         if (!isPlainObject(patch)) return true;
-        if (Object.keys(patch).length === 0) return false;
+        if (objectKeys(patch).length === 0) return false;
         return target === undefined || target === null || isPlainObject(target);
     }
 
@@ -68,6 +87,8 @@
      *   for each key in patch: null deletes the key, an object recurses,
      *   anything else replaces the value. Nested levels follow the RFC:
      *   a non-object value is replaced by the merged object.
+     * The objects it builds have no prototype (see the top of the file); a
+     * caller that stringifies the result sees no difference.
      */
     function jsonMergePatch(original, patch) {
         if (original !== undefined && original !== null && !isPatchApplicable(original, patch)) {
