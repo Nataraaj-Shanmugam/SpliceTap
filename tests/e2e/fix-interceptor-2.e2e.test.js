@@ -587,4 +587,156 @@ describe('fix-interceptor-2: XHR and fetch fidelity in a real browser', () => {
             await h.bg({ type: 'settingsUpdated', settings: { ...settings, chaosMode: { enabled: false, failureRate: 0.1 } } });
         }
     });
+
+    // ---- contract B: PER-2 residual ----------------------------------------
+
+    // Tokens that exist only in rule data: a mock body, a regex pattern's
+    // source and a wildcard pattern no request ever uses.
+    const SECRETS = ['ZEBRA-SECRET-7731', 'q[x]-match', 'never-ZQ9', 'never-zq9'];
+    let hookLeaks = null;
+
+    /**
+     * Runs in the page, before its first request: every hook contract B
+     * lists, plus the event plumbing. Each hit that carries a secret (or, for
+     * the event hooks, a nonced channel name) is recorded with the extension
+     * script nearest on the stack — 'content/injected.js', a shared module
+     * under 'src/', or null for the page's own calls, which are ignored.
+     */
+    function installHooks(secrets) {
+        'use strict';
+        Error.stackTraceLimit = 100;
+        const stringify = JSON.stringify;
+        const includes = String.prototype.includes;
+        const startsWith = String.prototype.startsWith;
+        const leaks = [];
+        window.__hookLeaks = leaks;
+        window.__hookHits = 0;
+        let busy = false;
+        const scriptOnStack = () => {
+            const match = /chrome-extension:\/\/[a-p]+\/([\w/.-]+\.js)/.exec(new Error().stack || '');
+            return match ? match[1] : null;
+        };
+        const asText = (value) => {
+            if (typeof value === 'string') return value;
+            if (value instanceof RegExp) return value.source;
+            try { return stringify(value) || ''; } catch (e) { return ''; }
+        };
+        const carriesSecret = (values) => {
+            for (let i = 0; i < values.length; i++) {
+                const text = asText(values[i]);
+                for (let j = 0; j < secrets.length; j++) if (includes.call(text, secrets[j])) return true;
+            }
+            return false;
+        };
+        const isChannel = (type) => typeof type === 'string' && startsWith.call(type, '__splicetap_');
+        function record(label, values, test) {
+            if (busy) return;
+            busy = true;
+            try {
+                window.__hookHits++;
+                if ((test || carriesSecret)(values)) leaks.push({ label, script: scriptOnStack() });
+            } finally {
+                busy = false;
+            }
+        }
+        const wrap = (owner, name, label) => {
+            const original = owner[name];
+            if (typeof original !== 'function') return;
+            owner[name] = function (...args) {
+                record(label, [this, ...args]);
+                return original.apply(this, args);
+            };
+        };
+
+        // Getters on Object.prototype, fired by a read of a property the
+        // object lacks; setters keep ordinary assignment working.
+        const names = ['patch', 'headers', 'graphql', 'body', 'mode', 'delay', 'delayMs', 'statusText', 'statusCode',
+            'redirect', 'destination', 'response', 'match', 'url', 'type', 'operationName', 'toJSON', 'then', Symbol.iterator];
+        for (const name of names) {
+            Object.defineProperty(Object.prototype, name, {
+                configurable: true,
+                get() { record('Object.prototype.' + String(name), [this]); return undefined; },
+                set(value) { Object.defineProperty(this, name, { value, writable: true, enumerable: true, configurable: true }); }
+            });
+        }
+        for (const name of ['startsWith', 'endsWith', 'includes', 'indexOf', 'lastIndexOf', 'slice', 'substring', 'substr', 'split',
+            'toLowerCase', 'toUpperCase', 'replace', 'replaceAll', 'trim', 'match', 'search', 'charAt', 'charCodeAt', 'concat', 'padStart', 'at']) {
+            wrap(String.prototype, name, 'String.prototype.' + name);
+        }
+        for (const name of ['map', 'forEach', 'filter', 'some', 'every', 'find', 'findIndex', 'indexOf', 'includes', 'join', 'slice', 'concat', 'reduce']) {
+            wrap(Array.prototype, name, 'Array.prototype.' + name);
+        }
+        const arrayIterator = Array.prototype[Symbol.iterator];
+        Array.prototype[Symbol.iterator] = function () { record('Array.prototype[Symbol.iterator]', [this]); return arrayIterator.call(this); };
+        const iteratorProto = Object.getPrototypeOf([][Symbol.iterator]());
+        const iteratorNext = iteratorProto.next;
+        iteratorProto.next = function () { const step = iteratorNext.call(this); record('ArrayIterator.next', [step && step.value]); return step; };
+        wrap(Array, 'isArray', 'Array.isArray');
+        for (const name of ['get', 'set', 'has', 'delete']) wrap(Map.prototype, name, 'Map.prototype.' + name);
+        for (const name of ['has', 'add']) wrap(Set.prototype, name, 'Set.prototype.' + name);
+        for (const name of ['exec', 'test']) wrap(RegExp.prototype, name, 'RegExp.prototype.' + name);
+        wrap(RegExp.prototype, Symbol.replace, 'RegExp.prototype[Symbol.replace]');
+        for (const name of ['stringify', 'parse']) wrap(JSON, name, 'JSON.' + name);
+        for (const name of ['keys', 'assign', 'entries', 'values']) wrap(Object, name, 'Object.' + name);
+
+        // The nonced channel: a page that learns it can read every rule.
+        const channel = (values) => isChannel(values[0] && values[0].type);
+        const dispatch = EventTarget.prototype.dispatchEvent;
+        EventTarget.prototype.dispatchEvent = function (event) {
+            record('EventTarget.prototype.dispatchEvent', [event], channel);
+            return dispatch.call(this, event);
+        };
+        const NativeCustomEvent = window.CustomEvent;
+        window.CustomEvent = function CustomEvent(type, init) {
+            record('CustomEvent', [{ type }], channel);
+            return new NativeCustomEvent(type, init);
+        };
+        window.CustomEvent.prototype = NativeCustomEvent.prototype;
+        const detail = Object.getOwnPropertyDescriptor(NativeCustomEvent.prototype, 'detail');
+        Object.defineProperty(NativeCustomEvent.prototype, 'detail', {
+            configurable: true,
+            get() { record('CustomEvent.prototype.detail', [this], channel); return detail.get.call(this); }
+        });
+    }
+
+    test('contract B (injected.js half): no hook the page installs receives rule data from injected.js', async () => {
+        await setRules(
+            mock('secret', '/\\/api\\/q[x]-match-(\\d+)/', { token: 'ZEBRA-SECRET-7731' }),
+            mock('unused', '*/api/never-ZQ9*', { token: 'ZEBRA-SECRET-7731' })
+        );
+        await open();
+        await page.evaluate(installHooks, SECRETS);
+
+        // Matching and non-matching requests through both APIs, then a rule
+        // change, so a state sync happens under the hooks too.
+        const outcome = await page.evaluate(async () => {
+            const viaFetch = async (path) => (await fetch(path)).headers.get('x-splicetap');
+            const viaXHR = (path) => new Promise((resolve) => {
+                const x = new XMLHttpRequest();
+                x.onloadend = () => resolve(x.getResponseHeader('x-splicetap'));
+                x.open('GET', path);
+                x.send();
+            });
+            return [await viaFetch('/api/qx-match-1'), await viaFetch('/api/other'), await viaXHR('/api/qx-match-2'), await viaXHR('/api/other')];
+        });
+        await h.saveRule(mock('another', '*/api/another*'));
+        await sleep(400);
+        const after = await page.evaluate(async () => [(await fetch('/api/qx-match-3')).headers.get('x-splicetap'), (await fetch('/api/another')).headers.get('x-splicetap')]);
+        hookLeaks = await page.evaluate(() => window.__hookLeaks.slice());
+        const hits = await page.evaluate(() => window.__hookHits);
+
+        expect(outcome).toEqual(['true', null, 'true', null]);
+        expect(after).toEqual(['true', 'true']);
+        expect(hits).toBeGreaterThan(0); // the hooks were live
+        expect(hookLeaks.filter((leak) => leak.script === 'content/injected.js')).toEqual([]);
+    });
+
+    // TODO(contract B, A2b): flip to `test` once the matcher half (src/matcher.js,
+    // src/placeholders.js, src/patch.js capturing their built-ins) is merged.
+    // Until then the shared modules still hand patterns to String.prototype,
+    // Map.prototype and Array.isArray, so this is expected to fail.
+    test.failing('contract B (with the A2b matcher half): no hook receives rule data at all', () => {
+        expect(hookLeaks).not.toBeNull();
+        expect(hookLeaks.filter((leak) => leak.script !== null)).toEqual([]);
+    });
 });

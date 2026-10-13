@@ -854,3 +854,76 @@ describe('PER-48: chaos mode only fails network requests', () => {
         expect((await done).status).toBe(200);
     });
 });
+
+// ---- contract B: PER-2 residual (the injected.js half) -------------------------
+
+describe('contract B: Object.prototype hooks never see rule data', () => {
+    const SECRET = 'SECRET-BODY-91c3';
+    const PATTERN = 'never-match-7Q2';
+    const HOOKED = ['patch', 'headers', 'graphql', 'body', 'mode', 'delay', 'statusText', 'redirect', 'response', 'toJSON', 'then', SYMBOL_ITERATOR()];
+
+    function SYMBOL_ITERATOR() { return Symbol.iterator; }
+
+    /**
+     * Getters (with pass-through setters) on Object.prototype, as a page can
+     * install before its first request. Each records any `this` that carries
+     * the secret body or the pattern.
+     */
+    function installHooks() {
+        const stringify = JSON.stringify;
+        const leaks = [];
+        let busy = false;
+        for (const name of HOOKED) {
+            Object.defineProperty(Object.prototype, name, {
+                configurable: true,
+                get() {
+                    if (busy) return undefined;
+                    busy = true;
+                    try {
+                        const text = stringify(this);
+                        if (typeof text === 'string' && (text.includes(SECRET) || text.includes(PATTERN))) leaks.push(String(name));
+                    } catch (e) {
+                        // not serialisable: nothing to learn from it here
+                    } finally {
+                        busy = false;
+                    }
+                    return undefined;
+                },
+                set(value) {
+                    Object.defineProperty(this, name, { value, writable: true, enumerable: true, configurable: true });
+                }
+            });
+        }
+        return { leaks, remove: () => { for (const name of HOOKED) delete Object.prototype[name]; } };
+    }
+
+    test('rules synced, matched and mocked under the hooks leak nothing', async () => {
+        const h = createInterceptor();
+        const rules = [
+            mockRule({ id: 'never', match: { url: `*/${PATTERN}*`, method: '*' } }),
+            mockRule({
+                response: { statusCode: 200, headers: { 'X-Note': SECRET }, body: { token: SECRET }, delay: 0, mode: 'static' }
+            }),
+            { id: 'd', name: 'Slow', enabled: true, type: 'delay', match: { url: '*/api/slow*', method: '*' }, delayMs: 5 }
+        ];
+        const hooks = installHooks();
+        let results;
+        try {
+            h.syncState({ rules });
+            const mocked = await h.fetch('https://example.test/api/users');
+            const passed = await h.fetch('https://example.test/api/other');
+            const slow = await h.fetch('https://example.test/api/slow');
+            const xhr = h.newXHR();
+            // Resolved with the marker only: the response text is the page's
+            // own data, and a promise resolved with it reads `then`.
+            const marker = new Promise((resolve) => xhr.addEventListener('loadend', () => resolve(xhr.getResponseHeader('x-splicetap'))));
+            xhr.open('GET', '/api/users');
+            xhr.send();
+            results = { mocked: mocked.headers.get('x-splicetap'), passed: passed.headers.get('x-splicetap'), slow: slow.status, xhr: await marker };
+        } finally {
+            hooks.remove();
+        }
+        expect(results).toEqual({ mocked: 'true', passed: null, slow: 200, xhr: 'true' });
+        expect(hooks.leaks).toEqual([]);
+    });
+});

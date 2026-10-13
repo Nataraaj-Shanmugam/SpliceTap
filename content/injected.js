@@ -58,6 +58,107 @@
     const getPrototypeOf = Object.getPrototypeOf;
     const setPrototypeOf = Object.setPrototypeOf;
 
+    // Contract B (PER-2 residual): a page can also reach rule data through
+    // prototypes it hooks before its first request — a getter on
+    // Object.prototype fires when a rule lacks the property read (`this` is
+    // the rule's own object), String.prototype and RegExp.prototype methods
+    // receive patterns, Array.prototype's iterator sees the rule list, and a
+    // wrapped dispatchEvent or CustomEvent `detail` getter sees the nonced
+    // channel (and with it, on the next sync, every rule). These scripts run
+    // at document_start, before any page script, so what is captured here is
+    // genuine. Rule data is copied into null-prototype objects on every sync
+    // (toNullProto), and the paths that handle it call these instead of
+    // looking methods up on the data.
+    const hasOwnProperty = Object.prototype.hasOwnProperty;
+    const stringIndexOf = String.prototype.indexOf;
+    const stringSlice = String.prototype.slice;
+    const stringTrim = String.prototype.trim;
+    const stringToLowerCase = String.prototype.toLowerCase;
+    const stringToUpperCase = String.prototype.toUpperCase;
+    const regexpExec = RegExp.prototype.exec;
+    const NativeRegExp = RegExp;
+    const SymbolIterator = Symbol.iterator;
+    const encodeURIComponentNative = encodeURIComponent;
+    const eventDispatch = document.dispatchEvent; // EventTarget.prototype's, before any page script
+    const NativeCustomEvent = CustomEvent;
+    const customEventDetail = (Object.getOwnPropertyDescriptor(CustomEvent.prototype, 'detail') || {}).get;
+    const consoleLog = console.log;
+
+    const hasOwn = (object, key) => reflectApply(hasOwnProperty, object, [key]);
+    const indexOf = (text, search) => reflectApply(stringIndexOf, text, [search]);
+    const slice = (text, start, end) => reflectApply(stringSlice, text, [start, end]);
+    const trim = (text) => reflectApply(stringTrim, text, []);
+    const lower = (text) => reflectApply(stringToLowerCase, text, []);
+    const upper = (text) => reflectApply(stringToUpperCase, text, []);
+    const matches = (regex, text) => reflectApply(regexpExec, regex, [text]) !== null;
+    /** list.indexOf(value) !== -1, without Array.prototype. */
+    function contains(list, value) {
+        for (let i = 0; i < list.length; i++) if (list[i] === value) return true;
+        return false;
+    }
+
+    /** CustomEvent `detail` through the captured getter. */
+    function eventDetail(event) {
+        return customEventDetail ? reflectApply(customEventDetail, event, []) : event && event.detail;
+    }
+
+    /** Dispatch a CustomEvent on the document with the captured built-ins. */
+    function emit(type, detail) {
+        const event = detail === undefined
+            ? new NativeCustomEvent(type)
+            : new NativeCustomEvent(type, { __proto__: null, detail });
+        return reflectApply(eventDispatch, document, [event]);
+    }
+
+    // The iterator a copied rule list carries: `for...of` over it then reads
+    // only own properties (Array.prototype[Symbol.iterator] and the array
+    // iterator's next() are page-replaceable).
+    function ownValues() {
+        const list = this;
+        let index = 0;
+        const iterator = objectCreate(null);
+        iterator.next = function next() {
+            const step = objectCreate(null);
+            step.done = index >= list.length;
+            step.value = step.done ? undefined : list[index++];
+            return step;
+        };
+        return iterator;
+    }
+
+    const MAX_COPY_DEPTH = 100;
+
+    /**
+     * A deep copy made of null-prototype objects and arrays, so a property
+     * a rule lacks reads as undefined without consulting Object.prototype.
+     * Only own enumerable properties are read from the source, and nothing
+     * is assigned until the copy's prototype is null (an assignment would
+     * otherwise run a setter the page put on Object.prototype).
+     * `iterable`: arrays get an own iterator (ownValues).
+     */
+    function toNullProto(value, iterable, depth) {
+        if (value === null || typeof value !== 'object') return value;
+        const level = depth || 0;
+        if (level > MAX_COPY_DEPTH) return null;
+        if (isArray(value)) {
+            const out = [];
+            setPrototypeOf(out, null);
+            for (let i = 0; i < value.length; i++) {
+                out[i] = hasOwn(value, i) ? toNullProto(value[i], iterable, level + 1) : undefined;
+            }
+            if (iterable) defineProperty(out, SymbolIterator, { __proto__: null, value: ownValues });
+            return out;
+        }
+        const out = objectCreate(null);
+        const keys = objectKeys(value);
+        for (let i = 0; i < keys.length; i++) out[keys[i]] = toNullProto(value[keys[i]], iterable, level + 1);
+        return out;
+    }
+
+    function ownValue(object, key) {
+        return object && typeof object === 'object' && hasOwn(object, key) ? object[key] : undefined;
+    }
+
     // PER-43: an own property defined on the instance. Plain assignment
     // (`xhr.open = fn`) silently does nothing once a page has frozen
     // XMLHttpRequest.prototype — an inherited read-only property blocks the
@@ -126,7 +227,7 @@
     // Helper: Logging with debug mode check
     function log(msg, ...args) {
         if (tmState.settings?.debugMode) {
-            console.log(`%c[SpliceTap] ${msg}`, 'color: #2563eb; font-weight: bold;', ...args);
+            reflectApply(consoleLog, console, [`%c[SpliceTap] ${msg}`, 'color: #2563eb; font-weight: bold;', ...args]);
         }
     }
 
@@ -192,7 +293,7 @@
 
     function emitCapture(entry) {
         if (!CAPTURE_EVENT) return;
-        document.dispatchEvent(new CustomEvent(CAPTURE_EVENT, { detail: entry }));
+        emit(CAPTURE_EVENT, entry);
     }
 
     /**
@@ -267,24 +368,29 @@
             ruleId: rule.id,
             ruleName: rule.name,
             ruleType: rule.type || 'mock',
-            status
+            status,
+            ...(outcome ? outcomeFields(outcome) : null)
         };
-        if (outcome) addOutcome(detail, outcome);
-        document.dispatchEvent(new CustomEvent(LOG_INTERCEPTION_EVENT, { detail }));
+        emit(LOG_INTERCEPTION_EVENT, detail);
     }
 
     const LOG_NOTE_MAX = 200;
     const MAX_REDIRECTED_TO_LENGTH = 2048;
 
-    function addOutcome(detail, outcome) {
+    // Collected in a null-prototype object and spread into the entry (a
+    // literal defines its properties; assigning them could run a setter a
+    // page put on Object.prototype — contract B).
+    function outcomeFields(outcome) {
+        const fields = objectCreate(null);
         if (typeof outcome.startedAt === 'number') {
-            detail.elapsedMs = Math.max(0, Math.round(Date.now() - outcome.startedAt));
+            fields.elapsedMs = Math.max(0, Math.round(Date.now() - outcome.startedAt));
         }
-        if (outcome.finalStatus !== undefined) detail.finalStatus = outcome.finalStatus;
+        if (outcome.finalStatus !== undefined) fields.finalStatus = outcome.finalStatus;
         if (typeof outcome.redirectedTo === 'string') {
-            detail.redirectedTo = sanitizeUrlForLog(outcome.redirectedTo).slice(0, MAX_REDIRECTED_TO_LENGTH);
+            fields.redirectedTo = slice(sanitizeUrlForLog(outcome.redirectedTo), 0, MAX_REDIRECTED_TO_LENGTH);
         }
-        if (typeof outcome.note === 'string') detail.note = outcome.note.slice(0, LOG_NOTE_MAX);
+        if (typeof outcome.note === 'string') fields.note = slice(outcome.note, 0, LOG_NOTE_MAX);
+        return fields;
     }
 
     // PER-54: a chaos-mode failure left no trace in the log.
@@ -297,10 +403,10 @@
             kind: 'chaos',
             ruleId: null,
             ruleName: 'Chaos mode',
-            status: 'failed'
+            status: 'failed',
+            ...outcomeFields({ __proto__: null, startedAt })
         };
-        addOutcome(detail, { startedAt });
-        document.dispatchEvent(new CustomEvent(LOG_INTERCEPTION_EVENT, { detail }));
+        emit(LOG_INTERCEPTION_EVENT, detail);
     }
 
     /**
@@ -310,10 +416,10 @@
      */
     function logWhenSettled(promise, rule, url, method, outcome) {
         return promise.then((response) => {
-            logInterception(rule, url, method, response.status, objectAssign({ finalStatus: response.status }, outcome));
+            logInterception(rule, url, method, response.status, { __proto__: null, finalStatus: response.status, ...outcome });
             return response;
         }, (error) => {
-            logInterception(rule, url, method, null, objectAssign({ finalStatus: 'failed' }, outcome));
+            logInterception(rule, url, method, null, { __proto__: null, finalStatus: 'failed', ...outcome });
             throw error;
         });
     }
@@ -473,18 +579,26 @@
      */
     function findRule(request, rawUrl) {
         const rules = tmState.rules;
-        const hit = findMatchingRule(rules, request);
+        const hit = findMatchingRule(rules, matchRequest(request.url, request));
         if (rawUrl === request.url) return hit;
 
-        const rawHit = findMatchingRule(rules, {
-            url: rawUrl, method: request.method, headers: request.headers, bodyText: request.bodyText
-        });
+        const rawHit = findMatchingRule(rules, matchRequest(rawUrl, request));
         if (!hit || !rawHit || hit === rawHit) return hit || rawHit;
         for (let i = 0; i < rules.length; i++) {
             if (rules[i] === hit) return hit;
             if (rules[i] === rawHit) return rawHit;
         }
         return hit;
+    }
+
+    // Contract B: the request record the matcher reads, with no prototype.
+    function matchRequest(url, request) {
+        const record = objectCreate(null);
+        record.url = url;
+        record.method = request.method;
+        record.headers = request.headers;
+        record.bodyText = request.bodyText;
+        return record;
     }
 
     /**
@@ -498,11 +612,11 @@
         for (let i = 0; i < rules.length && rules[i] !== target; i++) {
             const rule = rules[i];
             if (!rule || !rule.enabled) continue;
-            const match = rule.match || {};
+            const match = rule.match || EMPTY_RECORD;
             const conditional = (match.headers && objectKeys(match.headers).length > 0) ||
                 (match.graphql && match.graphql.operationName);
             if (!conditional) continue;
-            const ruleMethod = String(match.method || '*').toUpperCase();
+            const ruleMethod = upper(String(match.method || '*'));
             if (ruleMethod !== '*' && ruleMethod !== method) continue;
             if (matchUrl(absUrl, match.url) || matchUrl(rawUrl, match.url)) return true;
         }
@@ -518,7 +632,9 @@
      */
     function relayAlive() {
         if (orphaned) return false;
-        if (PING_EVENT) document.dispatchEvent(new CustomEvent(PING_EVENT));
+        // Contract B: through the captured dispatch — a page that wrapped
+        // dispatchEvent read the nonce off this ping's event type.
+        if (PING_EVENT) emit(PING_EVENT);
         return !orphaned;
     }
 
@@ -529,12 +645,14 @@
     const PRINTABLE_ASCII = /^[\x20-\x7E]*$/;
     function ruleMarker(name) {
         const value = name === undefined || name === null ? '' : String(name);
-        if (PRINTABLE_ASCII.test(value)) return value;
+        if (matches(PRINTABLE_ASCII, value)) return value;
         try {
-            return encodeURIComponent(value);
+            return encodeURIComponentNative(value);
         } catch (e) {
             // A lone surrogate cannot be encoded.
-            return value.replace(/[^\x20-\x7E]/g, '?');
+            let out = '';
+            for (let i = 0; i < value.length; i++) out += value[i] >= ' ' && value[i] <= '~' ? value[i] : '?';
+            return out;
         }
     }
 
@@ -568,16 +686,19 @@
         });
     }
 
+    const EMPTY_RECORD = Object.freeze(objectCreate(null));
+
     // Helper: resolve rule.response with defaults so a legacy/hand-written
     // rule missing the `response` object entirely (or missing individual
     // fields) never throws (Q-5). Does not change the documented schema
     // Only fills in what a well-formed rule would have had.
     function getResponseConfig(rule) {
-        const r = rule.response || {};
+        const r = rule.response || EMPTY_RECORD;
         return {
+            __proto__: null,
             mode: r.mode || 'static',
-            body: r.body !== undefined ? r.body : {},
-            patch: r.patch !== undefined ? r.patch : {},
+            body: r.body !== undefined ? r.body : objectCreate(null),
+            patch: r.patch !== undefined ? r.patch : objectCreate(null),
             delay: r.delay || 0,
             statusCode: r.statusCode || 200,
             // The background fills a missing reason phrase from the status
@@ -589,6 +710,26 @@
             statusText: r.statusText !== undefined ? r.statusText : ((r.statusCode || 200) === 200 ? 'OK' : ''),
             headers: r.headers
         };
+    }
+
+    /**
+     * A rule's mock body as response text. Contract B: serialised with the
+     * captured JSON.stringify (a null-prototype body has no toJSON to look
+     * up), and handed to the placeholder engine only when it holds a `{{`
+     * token — so a body without placeholders never reaches a String method.
+     */
+    function renderBody(body, details) {
+        const text = typeof body === 'string' ? body : jsonStringify(body);
+        if (typeof text !== 'string' || indexOf(text, '{{') === -1) return text === undefined ? '' : text;
+        const processed = processDynamicResponse(body, details);
+        return typeof processed === 'string' ? processed : jsonStringify(toNullProto(processed));
+    }
+
+    /** A rule's patch with its placeholders filled, as a null-prototype value. */
+    function renderPatch(patch, details) {
+        const text = typeof patch === 'string' ? patch : jsonStringify(patch);
+        if (typeof text !== 'string' || indexOf(text, '{{') === -1) return patch;
+        return toNullProto(processDynamicResponse(patch, details));
     }
 
     // Helper: compute the destination URL for a redirect rule (supports $1..$9
@@ -604,8 +745,8 @@
     function computeRedirectUrl(sourceUrl, rule, rawUrl) {
         const destination = (rule.redirect && rule.redirect.destination) || sourceUrl; // Q-5: missing rule.redirect
         const pattern = rule.match && rule.match.url;
-        if (typeof pattern === 'string' && pattern.length >= 2 && pattern.startsWith('/') && pattern.endsWith('/')) {
-            const regexBody = pattern.slice(1, -1);
+        if (typeof pattern === 'string' && pattern.length >= 2 && pattern[0] === '/' && pattern[pattern.length - 1] === '/') {
+            const regexBody = slice(pattern, 1, -1);
             try {
                 // SEC-1: this compiled the raw body directly, bypassing the
                 // matcher's ReDoS guard entirely — so a pattern the matcher
@@ -618,17 +759,28 @@
                 // taken from the match. This used String.replace, which kept
                 // the unmatched prefix: an absolute URL against /\/api\/(.*)/
                 // became "https://hosthttp://localhost:3000/...".
-                const regex = new RegExp(regexBody, 'i');
-                const match = regex.exec(sourceUrl) ||
-                    (rawUrl !== undefined && rawUrl !== sourceUrl ? regex.exec(rawUrl) : null);
+                // Contract B: RegExp.prototype.exec captured; the
+                // substitution is a loop, not String.replace (which looks up
+                // the page-replaceable RegExp.prototype[Symbol.replace]).
+                const regex = new NativeRegExp(regexBody, 'i');
+                const match = reflectApply(regexpExec, regex, [sourceUrl]) ||
+                    (rawUrl !== undefined && rawUrl !== sourceUrl ? reflectApply(regexpExec, regex, [rawUrl]) : null);
                 if (!match) return destination;
-                return destination.replace(/\$(\d)/g, (ref, digit) => {
-                    const n = Number(digit);
-                    // $0 and references past the last group stay literal, as
-                    // they do in String.replace.
-                    if (n === 0 || n >= match.length) return ref;
-                    return match[n] === undefined ? '' : match[n];
-                });
+                const text = String(destination);
+                let out = '';
+                for (let i = 0; i < text.length; i++) {
+                    const digit = text[i + 1];
+                    if (text[i] === '$' && digit !== undefined && digit >= '0' && digit <= '9') {
+                        const n = Number(digit);
+                        // $0 and references past the last group stay
+                        // literal, as they do in String.replace.
+                        out += (n === 0 || n >= match.length) ? '$' + digit : (match[n] === undefined ? '' : match[n]);
+                        i++;
+                    } else {
+                        out += text[i];
+                    }
+                }
+                return out;
             } catch (e) {
                 return destination;
             }
@@ -709,7 +861,7 @@
     // --- Response construction helpers (Q-2, Q-24, Q-28) ---
 
     // Statuses the Fetch spec forbids from carrying a body at all.
-    const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+    const NULL_BODY_STATUSES = [101, 103, 204, 205, 304];
 
     // `new Headers(...)` throws on an invalid header name/value (Q-24, e.g. a
     // typo'd "Content Type" instead of "Content-Type"). Never let a bad rule
@@ -734,7 +886,7 @@
                 headers.append(names[i], headersInit[names[i]]);
             } catch (e) {
                 log(`Dropping invalid response header "${names[i]}" from rule`, e);
-                if (String(names[i]).toLowerCase() === 'content-type') droppedContentType = true;
+                if (lower(String(names[i])) === 'content-type') droppedContentType = true;
             }
         }
         // Keep the mock's JSON default rather than letting Response() pick
@@ -760,11 +912,17 @@
      * that Headers joined into "application/json, text/html".
      */
     function withDefaultContentType(userHeaders) {
-        const headers = objectAssign({}, userHeaders || {});
-        const names = objectKeys(headers);
+        // Contract B: a null-prototype copy. new Headers() looks up
+        // Symbol.iterator on its argument, and the markers are assigned
+        // next — on an ordinary object both reach Object.prototype.
+        const headers = objectCreate(null);
         let hasContentType = false;
-        for (let i = 0; i < names.length; i++) {
-            if (names[i].toLowerCase() === 'content-type') hasContentType = true;
+        if (userHeaders && typeof userHeaders === 'object') {
+            const names = objectKeys(userHeaders);
+            for (let i = 0; i < names.length; i++) {
+                headers[names[i]] = userHeaders[names[i]];
+                if (lower(names[i]) === 'content-type') hasContentType = true;
+            }
         }
         if (!hasContentType) headers['Content-Type'] = 'application/json';
         return headers;
@@ -775,7 +933,7 @@
     function buildMockResponse(bodyText, status, statusText, headersInit, overrides) {
         const numericStatus = Number.isFinite(status) ? status : 200;
         const inRange = numericStatus >= 200 && numericStatus <= 599;
-        const nullBody = bodyText === null || NULL_BODY_STATUSES.has(numericStatus) || !inRange;
+        const nullBody = bodyText === null || contains(NULL_BODY_STATUSES, numericStatus) || !inRange;
         const constructStatus = inRange ? numericStatus : 200;
         const headers = buildHeadersSafe(headersInit);
 
@@ -790,7 +948,7 @@
             response = new Response(null, { status: 200, statusText, headers });
         }
 
-        const props = objectAssign({}, overrides || {});
+        const props = objectAssign(objectCreate(null), overrides || EMPTY_RECORD);
         if (constructStatus !== numericStatus) {
             props.status = numericStatus;
             props.ok = numericStatus >= 200 && numericStatus < 300;
@@ -903,15 +1061,15 @@
     const STALE_AFTER_PATCH = ['content-length', 'content-encoding', 'content-md5', 'digest'];
 
     function patchedHeaders(headers) {
-        const out = {};
+        const out = objectCreate(null);
         headers.forEach((value, key) => {
-            if (STALE_AFTER_PATCH.indexOf(String(key).toLowerCase()) === -1) out[key] = value;
+            if (!contains(STALE_AFTER_PATCH, lower(String(key)))) out[key] = value;
         });
         return out;
     }
 
     function isJsonMime(essence) {
-        return essence === 'application/json' || /\+json$/.test(essence);
+        return essence === 'application/json' || matches(/\+json$/, essence);
     }
 
     /**
@@ -934,12 +1092,12 @@
     /** The type/subtype of a Content-Type value, lowercased ('' when absent). */
     function mimeEssence(contentType) {
         if (typeof contentType !== 'string') return '';
-        const semi = contentType.indexOf(';');
-        return (semi === -1 ? contentType : contentType.slice(0, semi)).trim().toLowerCase();
+        const semi = indexOf(contentType, ';');
+        return lower(trim(semi === -1 ? contentType : slice(contentType, 0, semi)));
     }
 
     function isXmlMime(essence) {
-        return essence === 'text/xml' || essence === 'application/xml' || /\+xml$/.test(essence);
+        return essence === 'text/xml' || essence === 'application/xml' || matches(/\+xml$/, essence);
     }
 
     /** A header's value from a plain header object, by name in any letter case. */
@@ -947,7 +1105,7 @@
         if (!headers) return undefined;
         const names = objectKeys(headers);
         for (let i = 0; i < names.length; i++) {
-            if (names[i].toLowerCase() === name) return headers[names[i]];
+            if (lower(names[i]) === name) return headers[names[i]];
         }
         return undefined;
     }
@@ -956,7 +1114,7 @@
     // a status the Response constructor cannot carry, or for HEAD. An XHR
     // mock of a 204 delivered the configured body.
     function hasNoBody(status, method) {
-        return method === 'HEAD' || NULL_BODY_STATUSES.has(status) || !(status >= 200 && status <= 599);
+        return method === 'HEAD' || contains(NULL_BODY_STATUSES, status) || !(status >= 200 && status <= 599);
     }
 
     // PER-16: the size an upload progress event reports for a request body.
@@ -1013,7 +1171,7 @@
     function buildDocument(text, essence) {
         const html = essence === 'text/html';
         if (!html && !isXmlMime(essence)) return null;
-        const type = DOM_PARSER_TYPES.indexOf(essence) !== -1 ? essence : 'application/xml';
+        const type = contains(DOM_PARSER_TYPES, essence) ? essence : 'application/xml';
         const input = parserInput(text);
         if (input !== null && domParse) {
             try {
@@ -1179,7 +1337,7 @@
                     return real;
                 }
 
-                const patchPayload = processDynamicResponse(cfg.patch, { url, method });
+                const patchPayload = renderPatch(cfg.patch, { url, method });
                 // PER-19: a patch that would not change the response leaves
                 // the real one untouched (no markers) and says why in the log.
                 const skipped = patchSkipReason(data, patchPayload);
@@ -1206,7 +1364,7 @@
                 // Q-28: a freshly constructed Response can't carry url,
                 // redirected or type, but patch mode is "the real response,
                 // plus a merge" — restore them from the real response.
-                return buildMockResponse(jsonStringify(merged), real.status, real.statusText, mergedHeaders,
+                return buildMockResponse(jsonStringify(toNullProto(merged)), real.status, real.statusText, mergedHeaders,
                     { url: real.url, redirected: real.redirected, type: real.type });
             }
 
@@ -1223,7 +1381,7 @@
             // PER-42: a 3xx mock follows the request's redirect mode, as a
             // real one does. It was handed to the page as a 302 whatever the
             // mode: 'error' resolved, and the default 'follow' stopped there.
-            if (REDIRECT_STATUSES.indexOf(cfg.statusCode) !== -1) {
+            if (contains(REDIRECT_STATUSES, cfg.statusCode)) {
                 const mode = (config && config.redirect) || (isRequestObj ? resource.redirect : 'follow');
                 if (mode === 'error') {
                     logInterception(rule, url, method, cfg.statusCode, { note: "Redirect refused — the request's redirect mode is 'error'" });
@@ -1242,8 +1400,7 @@
             // PER-42: no body for HEAD, as for a null-body status (Q-2).
             let responseBody = null;
             if (!hasNoBody(cfg.statusCode, method)) {
-                const body = processDynamicResponse(cfg.body, { url, method });
-                responseBody = typeof body === 'string' ? body : jsonStringify(body);
+                responseBody = renderBody(cfg.body, { url, method });
             }
 
             const headerObj = withDefaultContentType(cfg.headers);
@@ -1418,7 +1575,7 @@
                 logToken = null;
                 const status = xhr.status;
                 logInterception(rule, url, method, status > 0 ? status : null,
-                    objectAssign({ finalStatus: status > 0 ? status : 'failed' }, outcome));
+                    { __proto__: null, finalStatus: status > 0 ? status : 'failed', ...outcome });
             };
             xhr.addEventListener('loadend', onLoadend);
         }
@@ -1695,8 +1852,7 @@
             const statusText = cfg.statusText;
             let responseText = '';
             if (!hasNoBody(status, requestMethod)) {
-                const bodyContent = processDynamicResponse(cfg.body, { url: requestAbsUrl, method: requestMethod });
-                responseText = typeof bodyContent === 'string' ? bodyContent : jsonStringify(bodyContent);
+                responseText = renderBody(cfg.body, { url: requestAbsUrl, method: requestMethod });
             }
             const totalBytes = responseText.length;
             const delay = cfg.delay;
@@ -1799,7 +1955,7 @@
                 let mergedText;
                 try {
                     const data = jsonParse(realText);
-                    const patchPayload = processDynamicResponse(cfg.patch, { url: requestAbsUrl, method: requestMethod });
+                    const patchPayload = renderPatch(cfg.patch, { url: requestAbsUrl, method: requestMethod });
                     // PER-19: a patch that would not change the response
                     // delivers the real one, and the log says why.
                     const skipped = patchSkipReason(data, patchPayload);
@@ -1808,7 +1964,7 @@
                         finishMock(realText, real.status, real.statusText, realHeaders, rawBody, real.url);
                         return;
                     }
-                    mergedText = jsonStringify(jsonMergePatch(data, patchPayload));
+                    mergedText = jsonStringify(toNullProto(jsonMergePatch(data, patchPayload)));
                 } catch (error) {
                     // Not JSON (or nothing to merge into): deliver the real
                     // response unchanged, as fetch does.
@@ -1999,7 +2155,7 @@
                 const keys = objectKeys(mockResponseHeaders);
                 let text = '';
                 for (let i = 0; i < keys.length; i++) {
-                    text += `${keys[i].toLowerCase()}: ${mockResponseHeaders[keys[i]]}\r\n`;
+                    text += `${lower(keys[i])}: ${mockResponseHeaders[keys[i]]}\r\n`;
                 }
                 return text;
             }
@@ -2140,8 +2296,7 @@
                     const cfg = getResponseConfig(rule);
                     let responseText = '';
                     if (!hasNoBody(cfg.statusCode, requestMethod)) {
-                        const bodyContent = processDynamicResponse(cfg.body, { url: requestAbsUrl, method: requestMethod });
-                        responseText = typeof bodyContent === 'string' ? bodyContent : jsonStringify(bodyContent);
+                        responseText = renderBody(cfg.body, { url: requestAbsUrl, method: requestMethod });
                     }
                     takeOver(body);
                     logInterception(rule, requestUrl, requestMethod, cfg.statusCode);
@@ -2227,7 +2382,9 @@
     // Transport note: see the header comment and content/content.js — this is
     // a nonce-keyed CustomEvent on `document`, not window.postMessage/'message'.
     function onSyncState(event) {
-        const payload = event && event.detail;
+        // Contract B: through the captured `detail` getter — a page that
+        // wrapped CustomEvent.prototype's would get the whole payload.
+        const payload = eventDetail(event);
 
         // Validate payload
         if (!payload || typeof payload !== 'object') {
@@ -2236,9 +2393,14 @@
         }
         if (orphaned) return;
 
-        tmState.active = payload.active !== false;
-        tmState.rules = isArray(payload.rules) ? payload.rules : [];
-        tmState.settings = payload.settings || {};
+        // Contract B: copied into null-prototype objects and arrays, read
+        // through own properties only. The rule list carries its own
+        // iterator for the matcher's for...of.
+        const rules = ownValue(payload, 'rules');
+        const settings = ownValue(payload, 'settings');
+        tmState.active = ownValue(payload, 'active') !== false;
+        tmState.rules = toNullProto(isArray(rules) ? rules : [], true);
+        tmState.settings = settings && typeof settings === 'object' ? toNullProto(settings, true) : objectCreate(null);
 
         // Recompute derived flags once per sync rather than per request.
         // PER-2: index loops and captured built-ins, so no page-replaceable
@@ -2246,9 +2408,9 @@
         let usesHeaders = false;
         let usesGraphQL = false;
         let hasRedirect = false;
-        const rules = tmState.rules;
-        for (let i = 0; i < rules.length; i++) {
-            const r = rules[i];
+        const synced = tmState.rules;
+        for (let i = 0; i < synced.length; i++) {
+            const r = synced[i];
             if (!r || !r.enabled) continue;
             if (r.match && r.match.headers && objectKeys(r.match.headers).length > 0) usesHeaders = true;
             if (r.match && r.match.graphql && r.match.graphql.operationName) usesGraphQL = true;
@@ -2273,7 +2435,7 @@
     // bootstrap event.
     function onBootstrap(event) {
         document.removeEventListener(BOOTSTRAP_EVENT, onBootstrap, true);
-        const nonce = event && event.detail && event.detail.nonce;
+        const nonce = ownValue(eventDetail(event), 'nonce');
         if (typeof nonce !== 'string' || !nonce) return;
 
         // PER-1: tell the relay the nonce landed. When this script ran first,
