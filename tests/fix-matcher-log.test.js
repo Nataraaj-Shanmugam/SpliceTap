@@ -619,14 +619,15 @@ describe('Contract A (PER-54, PER-56): the background keeps the new log-entry fi
         expect(bg.rules.find((r) => r.id === 'a').hitCount).toBe(2);
     });
 
-    test('a rule entry may report a status of "failed"', async () => {
+    test('a rule entry may report a status of "failed"; any other word still refuses the entry', async () => {
         const { send } = await setup({ initial: { spliceTapRules: [mockRule('a')] } });
-        const entry = await logOne(send, base({ status: 'failed' }));
-        expect(entry.status).toBe('failed');
-        const other = await logOne(send, base({ status: 'weird' }));
-        expect(other.ruleId === 'a' ? other : null).toBe(other); // the previous entry stays; "weird" is not accepted
+        await send({
+            type: 'logInterceptionBatch',
+            entries: [base({ status: 'failed' }), base({ status: 'weird' })]
+        }, contentScript());
         const { entries } = await send({ type: 'getInterceptionLog' });
         expect(entries).toHaveLength(1);
+        expect(entries[0].status).toBe('failed');
     });
 
     test('a chaos entry\'s ruleName is capped like any other', async () => {

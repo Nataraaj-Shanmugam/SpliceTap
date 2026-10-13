@@ -36,6 +36,9 @@ const CONTENT_SCRIPT_MESSAGES = new Set([
 // SEC2-7: size caps for what a page-side relay can make the background keep.
 // CAPTURE_MAX_BODY matches the interceptor's own limit (injected.js).
 const LOG_TEXT_MAX = 256;
+// PER-54: a redirect destination is a URL, so it gets the URL cap; the note is a sentence.
+const LOG_REDIRECT_MAX = 2048;
+const LOG_NOTE_MAX = 200;
 const CAPTURE_MAX_BODY = 100 * 1024;
 const CAPTURE_MAX_HEADERS = 100;
 const CAPTURE_HEADER_VALUE_MAX = 8192;
@@ -167,15 +170,21 @@ class SpliceTapBackground {
         // otherwise claim any tab.
         // SEC2-7: copied field by field. Spreading the entry kept any extra
         // field a page put on it, uncapped, in the log and in session storage.
+        // PER-54: a chaos-mode failure belongs to no rule, so it is kept with
+        // a null ruleId whatever the page put there.
+        const isChaos = entry.kind === 'chaos';
         this.interceptionLog.push({
             ts: entry.ts,
             url: entry.url,
             method: entry.method,
-            ruleId: entry.ruleId,
+            ruleId: isChaos ? null : entry.ruleId,
             // Display only; a rule stored by an older build may have a long name.
             ruleName: entry.ruleName === undefined ? undefined : entry.ruleName.slice(0, LOG_TEXT_MAX),
             ruleType: entry.ruleType,
             status: entry.status,
+            // PER-54 / PER-56: each of these is dropped, not the entry, when
+            // its value is malformed (see _logOutcomeFields).
+            ...this._logOutcomeFields(entry),
             tabId: (sender && sender.tab && typeof sender.tab.id === 'number')
                 ? sender.tab.id
                 : null
@@ -190,7 +199,7 @@ class SpliceTapBackground {
         // getRules() call right after reflects it); the write to storage rides
         // the same throttle as stats/log persistence rather than a save per
         // intercepted request.
-        if (entry.ruleId) {
+        if (!isChaos && entry.ruleId) {
             // PERF-5: this was an Array.find per intercepted request —
             // O(rules × requests) on a busy page.
             const rule = this._ruleById(entry.ruleId);
@@ -207,13 +216,37 @@ class SpliceTapBackground {
         if (!entry || typeof entry !== 'object') return false;
         if (typeof entry.url !== 'string' || entry.url.length > 2048) return false;
         if (typeof entry.method !== 'string' || entry.method.length > 16) return false;
-        if (typeof entry.ruleId !== 'string' || entry.ruleId.length > LOG_TEXT_MAX) return false;
+        // PER-54: a chaos entry names no rule; its ruleId, if any, is ignored.
+        const isChaos = entry.kind === 'chaos';
+        if (!isChaos && (typeof entry.ruleId !== 'string' || entry.ruleId.length > LOG_TEXT_MAX)) return false;
         if (entry.ruleName !== undefined && typeof entry.ruleName !== 'string') return false;
         if (entry.ruleType !== undefined && (typeof entry.ruleType !== 'string' || entry.ruleType.length > 32)) return false;
-        if (entry.status !== undefined && entry.status !== null && typeof entry.status !== 'number') return false;
+        // 'failed': the request errored before any status existed (chaos mode,
+        // or a real request that threw).
+        if (entry.status !== undefined && entry.status !== null && entry.status !== 'failed' && typeof entry.status !== 'number') return false;
         if (entry.ts !== undefined && typeof entry.ts !== 'number') return false;
 
-        return !!this._ruleById(entry.ruleId);
+        return isChaos || !!this._ruleById(entry.ruleId);
+    }
+
+    /**
+     * PER-54 / PER-56 (Contract A): the optional outcome fields of a log
+     * entry, each copied only if it has the stated type and size, so a
+     * malformed value costs the field and never the entry.
+     *   kind         'rule' | 'chaos'
+     *   elapsedMs    integer >= 0
+     *   finalStatus  integer | 'failed'
+     *   redirectedTo string <= 2048
+     *   note         string <= 200
+     */
+    _logOutcomeFields(entry) {
+        const fields = {};
+        if (entry.kind === 'rule' || entry.kind === 'chaos') fields.kind = entry.kind;
+        if (Number.isInteger(entry.elapsedMs) && entry.elapsedMs >= 0) fields.elapsedMs = entry.elapsedMs;
+        if (Number.isInteger(entry.finalStatus) || entry.finalStatus === 'failed') fields.finalStatus = entry.finalStatus;
+        if (typeof entry.redirectedTo === 'string' && entry.redirectedTo.length <= LOG_REDIRECT_MAX) fields.redirectedTo = entry.redirectedTo;
+        if (typeof entry.note === 'string' && entry.note.length <= LOG_NOTE_MAX) fields.note = entry.note;
+        return fields;
     }
 
     /**
