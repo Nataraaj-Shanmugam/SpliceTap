@@ -1200,12 +1200,14 @@
         // extra allocation, before any promise/array/object is created, for
         // the common "installed but nothing to do" case. Chaos mode has no
         // rule dependency, so it must still gate this bail (correctness).
-        spliceTapFetch = function (...args) {
+        // PER-7: named and sized like the native fetch (name 'fetch', length 1).
+        spliceTapFetch = function fetch(...args) {
             if (!tmState.active || (tmState.rules.length === 0 && !isChaosModeActive() && !isCaptureArmed())) {
                 return originalFetch.apply(this, args);
             }
             return handleInterceptedFetch.apply(this, args);
         };
+        defineProperty(spliceTapFetch, 'length', { __proto__: null, value: 1 });
         window.fetch = spliceTapFetch;
 
         async function handleInterceptedFetch(...args) {

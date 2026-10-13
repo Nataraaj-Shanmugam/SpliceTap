@@ -113,6 +113,12 @@ describe('PER-14 / PER-7: the XMLHttpRequest wrapper behaves like the native con
         expect(XHR.DONE).toBe(4);
         expect(Object.getOwnPropertyDescriptor(XHR, 'prototype').writable).toBe(false);
     });
+
+    test('the fetch wrapper is named and sized like the native fetch', () => {
+        const h = withRules([mockRule()]);
+        expect(h.window.fetch.name).toBe('fetch');
+        expect(h.window.fetch.length).toBe(1);
+    });
 });
 
 describe('PER-43: a frozen XMLHttpRequest.prototype does not disable mocking', () => {
