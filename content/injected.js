@@ -51,6 +51,8 @@
     const NativeRequest = Request;
     const reflectApply = Reflect.apply;
     const reflectConstruct = Reflect.construct;
+    const reflectDeleteProperty = Reflect.deleteProperty;
+    const objectCreate = Object.create;
     const defineProperty = Object.defineProperty;
     const getPrototypeOf = Object.getPrototypeOf;
     const setPrototypeOf = Object.setPrototypeOf;
@@ -622,6 +624,113 @@
 
     const EMPTY_HEADERS = Object.freeze({});
 
+    // --- XHR delivery helpers (PER-16, PER-40, PER-47, PER-52) ---
+
+    /** The type/subtype of a Content-Type value, lowercased ('' when absent). */
+    function mimeEssence(contentType) {
+        if (typeof contentType !== 'string') return '';
+        const semi = contentType.indexOf(';');
+        return (semi === -1 ? contentType : contentType.slice(0, semi)).trim().toLowerCase();
+    }
+
+    function isXmlMime(essence) {
+        return essence === 'text/xml' || essence === 'application/xml' || /\+xml$/.test(essence);
+    }
+
+    /** A header's value from a plain header object, by name in any letter case. */
+    function headerValue(headers, name) {
+        if (!headers) return undefined;
+        const names = objectKeys(headers);
+        for (let i = 0; i < names.length; i++) {
+            if (names[i].toLowerCase() === name) return headers[names[i]];
+        }
+        return undefined;
+    }
+
+    // PER-52: what a fetch mock already does — no body for 204/205/304, for
+    // a status the Response constructor cannot carry, or for HEAD. An XHR
+    // mock of a 204 delivered the configured body.
+    function hasNoBody(status, method) {
+        return method === 'HEAD' || NULL_BODY_STATUSES.has(status) || !(status >= 200 && status <= 599);
+    }
+
+    // PER-16: the size an upload progress event reports for a request body.
+    function bodyByteLength(body) {
+        try {
+            if (typeof body === 'string') return new TextEncoder().encode(body).byteLength;
+            if (typeof Blob !== 'undefined' && body instanceof Blob) return body.size;
+            if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return body.byteLength;
+            if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+                return new TextEncoder().encode(body.toString()).byteLength;
+            }
+        } catch (e) {
+            // Unknown size: reported as 0.
+        }
+        return 0;
+    }
+
+    // PER-47: DOMParser's input is a Trusted Types sink, so on a page that
+    // enforces Trusted Types a mocked 'document' response was refused — a
+    // policy violation in the console — and the page got the raw string. A
+    // private pass-through policy (its createHTML is reachable only from
+    // here) lets the mock's own markup through. If the page restricts policy
+    // names, none can be made: the document is then built without an HTML
+    // sink, with the text as its body's content.
+    const DOM_PARSER_TYPES = ['text/html', 'text/xml', 'application/xml', 'application/xhtml+xml', 'image/svg+xml'];
+    const NativeDOMParser = typeof DOMParser !== 'undefined' ? DOMParser : null;
+    const domParse = NativeDOMParser && NativeDOMParser.prototype.parseFromString;
+    const trustedTypesFactory = window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function'
+        ? window.trustedTypes
+        : null;
+    const ttCreatePolicy = trustedTypesFactory && trustedTypesFactory.createPolicy;
+    const ttCreateHTML = window.TrustedTypePolicy ? window.TrustedTypePolicy.prototype.createHTML : null;
+    let ttPolicy; // undefined: not tried yet; null: the page refused it
+
+    /** The parser input for `text`, or null when this page will not accept one. */
+    function parserInput(text) {
+        if (!trustedTypesFactory) return text;
+        if (ttPolicy === undefined) {
+            try {
+                ttPolicy = reflectApply(ttCreatePolicy, trustedTypesFactory,
+                    ['splicetap-mock', { __proto__: null, createHTML: (s) => s }]);
+            } catch (e) {
+                ttPolicy = null;
+            }
+        }
+        if (!ttPolicy) return null;
+        return ttCreateHTML ? reflectApply(ttCreateHTML, ttPolicy, [text]) : ttPolicy.createHTML(text);
+    }
+
+    /**
+     * PER-40: the Document an XHR exposes for an HTML or XML response, or
+     * null for any other type, as natively. Never a string (PER-47).
+     */
+    function buildDocument(text, essence) {
+        const html = essence === 'text/html';
+        if (!html && !isXmlMime(essence)) return null;
+        const type = DOM_PARSER_TYPES.indexOf(essence) !== -1 ? essence : 'application/xml';
+        const input = parserInput(text);
+        if (input !== null && domParse) {
+            try {
+                return reflectApply(domParse, new NativeDOMParser(), [input, type]);
+            } catch (e) {
+                // Fall through to the sink-free document.
+            }
+        }
+        try {
+            const doc = document.implementation.createHTMLDocument('');
+            doc.body.textContent = text;
+            return doc;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // PER-17: the native timeout setter, to hand a delayed request only the
+    // time its xhr.timeout has left.
+    const nativeTimeoutAccessor = (originalXHR && originalXHR.prototype &&
+        Object.getOwnPropertyDescriptor(originalXHR.prototype, 'timeout')) || null;
+
     // --- INTERCEPTOR: FETCH ---
     if (spliceTapGlobalsReady) {
         // Sync outer wrapper: P-1/P-2. Bails to the real fetch, with zero
@@ -868,12 +977,27 @@
         let requestHeaderList = [];
         let requestIsAsync = true; // Q-12: sync XHR (open(..., false)) needs different delivery
         let isMocked = false;      // true while WE own the response lifecycle for this request
+        let mockDone = false;      // PER-39: that response has reached DONE
         let redirectHandled = false; // true once open() rewrote the URL for a redirect rule
         let isAborted = false;
         let patchAbort = null;   // QA-6: AbortController for patch mode's real request
+        let headersTimer = null;
         let mockTimeout = null;
         let progressInterval = null;
+        let timeoutTimer = null; // PER-17
         let mockResponseHeaders = null; // Q-7: headers exposed via getResponseHeader(All)?
+        let sendStart = 0;
+        // PER-15: bumped by open() and abort(). A timer or fetch callback
+        // belonging to an earlier request compares it and stands down, so an
+        // abandoned mock can no longer fire load on the object's next request.
+        let generation = 0;
+        // PER-15: own properties defined for a mocked response, removed by
+        // open() so a reused object reads the native state again.
+        let overridden = objectCreate(null);
+        let restoreTimeout = null; // PER-17: undoes the budget handed to a delayed request
+        // PER-16: the request body's upload, emulated for a mocked request.
+        let uploadPending = false;
+        let uploadTotal = 0;
 
         // Store original methods
         const originalOpen = xhr.open;
@@ -892,6 +1016,80 @@
             return merged;
         }
 
+        /** A read-only own property standing in for the native one (PER-15 records it). */
+        function setState(name, value) {
+            defineProperty(xhr, name, { __proto__: null, value, writable: false, enumerable: true, configurable: true });
+            overridden[name] = true;
+        }
+
+        function clearOverrides() {
+            const names = objectKeys(overridden);
+            for (let i = 0; i < names.length; i++) reflectDeleteProperty(xhr, names[i]);
+            overridden = objectCreate(null);
+            if (restoreTimeout) {
+                const restore = restoreTimeout;
+                restoreTimeout = null;
+                restore();
+            }
+        }
+
+        function clearTimers() {
+            if (headersTimer) { clearTimeout(headersTimer); headersTimer = null; }
+            if (mockTimeout) { clearTimeout(mockTimeout); mockTimeout = null; }
+            if (progressInterval) { clearInterval(progressInterval); progressInterval = null; }
+            if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null; }
+        }
+
+        // QA-6: cancel the real request patch mode has in flight, not just
+        // its delivery — otherwise the backend still completes the call.
+        function cancelPatchFetch() {
+            if (patchAbort) {
+                try { patchAbort.abort(); } catch (e) { /* already settled */ }
+                patchAbort = null;
+            }
+        }
+
+        /** setTimeout for the current request only (PER-15). */
+        function later(fn, ms) {
+            const gen = generation;
+            return setTimeout(() => { if (gen === generation) fn(); }, ms);
+        }
+
+        function fireProgress(target, type, loaded, total, lengthComputable) {
+            target.dispatchEvent(new ProgressEvent(type, { lengthComputable, loaded, total }));
+        }
+
+        function uploadTarget() {
+            try {
+                return xhr.upload || null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        // PER-16: a real XHR reports its request body's upload on
+        // xhr.upload — loadstart inside send(), then progress, load and
+        // loadend before the response's headers arrive. Mocks fired none of
+        // them, so upload progress UIs stayed at 0%. GET and HEAD send no
+        // body, and a synchronous request reports no upload, as natively.
+        function startUpload(body) {
+            uploadPending = requestIsAsync && body !== null && body !== undefined &&
+                requestMethod !== 'GET' && requestMethod !== 'HEAD';
+            uploadTotal = uploadPending ? bodyByteLength(body) : 0;
+            const upload = uploadPending && uploadTarget();
+            if (upload) fireProgress(upload, 'loadstart', 0, uploadTotal, true);
+        }
+
+        function completeUpload() {
+            if (!uploadPending) return;
+            uploadPending = false;
+            const upload = uploadTarget();
+            if (!upload) return;
+            fireProgress(upload, 'progress', uploadTotal, uploadTotal, true);
+            fireProgress(upload, 'load', uploadTotal, uploadTotal, true);
+            fireProgress(upload, 'loadend', uploadTotal, uploadTotal, true);
+        }
+
         // Shared response-delivery flow (defineProperty + event dispatch),
         // used by BOTH static mock and patch mock so behavior is identical.
         //
@@ -901,8 +1099,7 @@
         // dispatch fires). The manual `if (xhr.onX) xhr.onX(...)` calls
         // that used to follow every dispatchEvent() call in this file
         // caused every handler to run twice; they've been removed
-        // throughout (finishMock, runStaticMockFlow, abort, chaos, block,
-        // timeout). Q-8: block/chaos/timeout now also dispatch
+        // throughout. Q-8: block/chaos/timeout also dispatch
         // 'readystatechange' before their terminal event, matching load/
         // error/abort, so `onreadystatechange`-only code (readyState ===
         // 4 checks) sees those outcomes too.
@@ -917,11 +1114,11 @@
         function advanceTo(state, status, statusText, headers) {
             if (!requestIsAsync) return;
             mockResponseHeaders = headers || {};
-            Object.defineProperty(xhr, 'status', { value: status, writable: false, configurable: true });
-            Object.defineProperty(xhr, 'statusText', { value: statusText, writable: false, configurable: true });
+            setState('status', status);
+            setState('statusText', statusText);
             for (let next = 2; next <= state; next++) {
                 if (xhr.readyState >= next) continue;
-                Object.defineProperty(xhr, 'readyState', { value: next, writable: true, configurable: true });
+                setState('readyState', next);
                 xhr.dispatchEvent(new Event('readystatechange'));
             }
         }
@@ -940,26 +1137,123 @@
          * in Chrome), so a page listener added before send() always sees
          * it. One late loadstart is better than two.
          */
-        function takeOver() {
+        function takeOver(body) {
             isMocked = true;
             if (!requestIsAsync) return;
-            xhr.dispatchEvent(new ProgressEvent('loadstart'));
+            fireProgress(xhr, 'loadstart', 0, 0, false);
+            startUpload(body);
+        }
+
+        /**
+         * The spec's "request error steps" for a request this wrapper owns:
+         * DONE with a network error, readystatechange, then `type` and
+         * loadend on the upload (if it had not finished) and on the XHR.
+         * `type` is 'error' (block, chaos, a failed patch fetch), 'abort' or
+         * 'timeout'.
+         */
+        function failRequest(type) {
+            clearTimers();
+            mockDone = true;
+            mockResponseHeaders = objectCreate(null);
+            const responseType = xhr.responseType || '';
+            if (overridden.responseText) setState('responseText', '');
+            if (overridden.response) setState('response', responseType === '' || responseType === 'text' ? '' : null);
+            if (overridden.responseURL) setState('responseURL', '');
+            if (overridden.responseXML) setState('responseXML', null);
+            setState('status', 0);
+            setState('statusText', '');
+            setState('readyState', 4);
+            xhr.dispatchEvent(new Event('readystatechange'));
+            if (uploadPending) {
+                uploadPending = false;
+                const upload = uploadTarget();
+                if (upload) {
+                    fireProgress(upload, type, 0, 0, false);
+                    fireProgress(upload, 'loadend', 0, 0, false);
+                }
+            }
+            fireProgress(xhr, type, 0, 0, false);
+            fireProgress(xhr, 'loadend', 0, 0, false);
+        }
+
+        // PER-17: a mocked response honours xhr.timeout, counted from send().
+        function armTimeout() {
+            let limit = 0;
+            try { limit = xhr.timeout; } catch (e) { /* no timeout */ }
+            if (!requestIsAsync || !(limit > 0)) return;
+            timeoutTimer = later(() => {
+                timeoutTimer = null;
+                if (mockDone) return;
+                cancelPatchFetch();
+                failRequest('timeout');
+            }, Math.max(0, limit - (Date.now() - sendStart)));
+        }
+
+        /**
+         * PER-17: a delay rule's hold counts toward xhr.timeout. The native
+         * request it hands over to gets only the time left; reading
+         * xhr.timeout still shows what the page set.
+         */
+        function passTimeoutBudget(limit, elapsed) {
+            const setter = nativeTimeoutAccessor && nativeTimeoutAccessor.set;
+            if (!setter || !(limit > 0)) return;
+            let pageValue = limit;
+            const budget = (value) => (value > 0 ? Math.max(1, value - elapsed) : value);
+            reflectApply(setter, xhr, [budget(limit)]);
+            defineProperty(xhr, 'timeout', {
+                __proto__: null,
+                configurable: true,
+                enumerable: true,
+                get() { return pageValue; },
+                set(value) { pageValue = value; reflectApply(setter, xhr, [budget(value)]); }
+            });
+            overridden.timeout = true;
+            restoreTimeout = () => reflectApply(setter, xhr, [pageValue]);
+        }
+
+        // PER-40: responseXML, as natively — for responseType 'document' the
+        // response itself; for '' an XML response parsed on first read (HTML
+        // is only parsed for 'document'); otherwise null.
+        function defineResponseXML(responseType, responseText, essence, documentValue) {
+            if (responseType === 'document') {
+                setState('responseXML', documentValue);
+                return;
+            }
+            if (!isXmlMime(essence)) {
+                setState('responseXML', null);
+                return;
+            }
+            let parsed;
+            let built = false;
+            defineProperty(xhr, 'responseXML', {
+                __proto__: null,
+                configurable: true,
+                enumerable: true,
+                get() {
+                    if (!built) {
+                        built = true;
+                        parsed = buildDocument(responseText, essence);
+                    }
+                    return parsed;
+                }
+            });
+            overridden.responseXML = true;
         }
 
         // `rawBody` (optional): the response's own bytes, for a real
         // response delivered unchanged (PER-13), so arraybuffer and blob
         // reads see them rather than a UTF-8 re-encoding of the text.
-        function finishMock(responseText, status, statusText, headers, rawBody) {
-            if (isAborted) return;
+        // `responseUrl` (optional): the URL the real response came from.
+        function finishMock(responseText, status, statusText, headers, rawBody, responseUrl) {
+            if (isAborted || mockDone) return;
+            clearTimers();
             try {
+                completeUpload();
                 advanceTo(3, status, statusText, headers);
                 // Real responses report the URL that was fetched; a mock
                 // left it empty. (fetch mocks already set response.url.)
                 try {
-                    Object.defineProperty(xhr, 'responseURL', {
-                        value: new NativeURL(requestAbsUrl).href,
-                        configurable: true
-                    });
+                    setState('responseURL', responseUrl || new NativeURL(requestAbsUrl).href);
                 } catch (e) {
                     // unparseable URL — leave responseURL as the browser has it
                 }
@@ -967,6 +1261,7 @@
 
                 // Q-7: respect responseType instead of always returning text.
                 const responseType = xhr.responseType || '';
+                const essence = mimeEssence(headerValue(headers, 'content-type'));
                 let responseValue = responseText;
                 if (responseType === 'json') {
                     try {
@@ -984,139 +1279,171 @@
                     }
                 } else if (responseType === 'blob' && typeof Blob !== 'undefined') {
                     try {
-                        responseValue = new Blob([rawBody || responseText]);
+                        responseValue = new Blob([rawBody || responseText], { type: essence });
                     } catch (e) {
                         // keep text fallback
                     }
-                } else if (responseType === 'document' && typeof DOMParser !== 'undefined') {
-                    // QA-7: this fell through to the text fallback, so
-                    // `xhr.response.querySelector(...)` — valid against a
-                    // real XHR — threw on a mocked one. Parse as the
-                    // declared content type, matching what the browser does.
-                    try {
-                        const declared = (headers && (headers['content-type'] || headers['Content-Type'])) || '';
-                        const mime = /xml/i.test(declared) ? 'application/xml' : 'text/html';
-                        responseValue = new DOMParser().parseFromString(responseText, mime);
-                    } catch (e) {
-                        // keep text fallback
-                    }
+                } else if (responseType === 'document') {
+                    // QA-7 / PER-40 / PER-47: a Document for HTML or XML,
+                    // null for anything else — never the text.
+                    responseValue = buildDocument(responseText, essence);
                 }
 
-                Object.defineProperty(xhr, 'responseText', { value: responseText, writable: false, configurable: true });
-                Object.defineProperty(xhr, 'response', { value: responseValue, writable: false, configurable: true });
-                Object.defineProperty(xhr, 'status', { value: status, writable: false, configurable: true });
-                Object.defineProperty(xhr, 'statusText', { value: statusText, writable: false, configurable: true });
-                Object.defineProperty(xhr, 'readyState', { value: 4, writable: true, configurable: true });
+                setState('responseText', responseText);
+                setState('response', responseValue);
+                if (responseType === '' || responseType === 'document') {
+                    defineResponseXML(responseType, responseText, essence, responseValue);
+                }
+                setState('status', status);
+                setState('statusText', statusText);
+                setState('readyState', 4);
+                // PER-39: DONE from here on, so an abort() from a load
+                // handler is the silent after-completion kind.
+                mockDone = true;
 
                 xhr.dispatchEvent(new Event('readystatechange'));
-                xhr.dispatchEvent(new ProgressEvent('load', {
-                    lengthComputable: true,
-                    loaded: responseText.length,
-                    total: responseText.length
-                }));
-                xhr.dispatchEvent(new ProgressEvent('loadend', {
-                    lengthComputable: true,
-                    loaded: responseText.length,
-                    total: responseText.length
-                }));
+                fireProgress(xhr, 'load', responseText.length, responseText.length, true);
+                fireProgress(xhr, 'loadend', responseText.length, responseText.length, true);
             } catch (error) {
                 console.error('Error processing mock response:', error);
-
-                Object.defineProperty(xhr, 'readyState', { value: 4, writable: true, configurable: true });
-                xhr.dispatchEvent(new ProgressEvent('error'));
-                xhr.dispatchEvent(new ProgressEvent('loadend'));
-            } finally {
-                if (mockTimeout) {
-                    clearTimeout(mockTimeout);
-                    mockTimeout = null;
-                }
-                if (progressInterval) {
-                    clearInterval(progressInterval);
-                    progressInterval = null;
-                }
+                if (!mockDone) failRequest('error');
             }
         }
 
-        // Static-mock flow: progress events + timeout handling, then hands
-        // off to finishMock(). Q-33/P-15: total is now derived from the
-        // real body length (was a fictitious hard-coded 1000), and the
-        // 50ms progress interval is skipped entirely for near-zero delay
-        // (it used to be set up and torn down before its first tick could
-        // ever fire) — a single 100%-loaded progress event is emitted
-        // right before delivery instead.
+        // Static-mock flow: upload, headers and progress events, then hands
+        // off to finishMock(). Q-33/P-15: total is derived from the real
+        // body length, and the 50ms progress interval is skipped entirely
+        // for near-zero delay — a single 100%-loaded progress event is
+        // emitted right before delivery instead.
         function runStaticMockFlow(rule) {
             const cfg = getResponseConfig(rule);
-            const bodyContent = processDynamicResponse(cfg.body, { url: requestAbsUrl, method: requestMethod });
-            const responseText = typeof bodyContent === 'string' ? bodyContent : jsonStringify(bodyContent);
             const status = cfg.statusCode;
             const statusText = cfg.statusText;
+            let responseText = '';
+            if (!hasNoBody(status, requestMethod)) {
+                const bodyContent = processDynamicResponse(cfg.body, { url: requestAbsUrl, method: requestMethod });
+                responseText = typeof bodyContent === 'string' ? bodyContent : jsonStringify(bodyContent);
+            }
             const totalBytes = responseText.length;
             const delay = cfg.delay;
             const headers = buildMockHeaders(cfg.headers, rule);
 
-            // HEADERS_RECEIVED then LOADING, status and headers visible.
-            advanceTo(3, status, statusText, headers);
+            // The upload finishes, then HEADERS_RECEIVED and LOADING, on a
+            // later task — as a real response's do, never inside send().
+            headersTimer = later(() => {
+                headersTimer = null;
+                completeUpload();
+                advanceTo(3, status, statusText, headers);
 
-            if (delay > 50) {
-                // Genuinely delayed mocks: emit a few incremental progress
-                // ticks sized to the real body so percentage-based UIs see
-                // real, non-fictitious movement.
-                let bytesLoaded = 0;
-                const progressSteps = 5;
-                const stepSize = (totalBytes / progressSteps) || 1;
+                if (delay > 50) {
+                    // Genuinely delayed mocks: emit a few incremental progress
+                    // ticks sized to the real body so percentage-based UIs see
+                    // real, non-fictitious movement.
+                    let bytesLoaded = 0;
+                    const stepSize = (totalBytes / 5) || 1;
+                    progressInterval = setInterval(() => {
+                        bytesLoaded = Math.min(bytesLoaded + stepSize, totalBytes);
+                        fireProgress(xhr, 'progress', bytesLoaded, totalBytes, true);
+                    }, 50);
+                }
+            }, 0);
 
-                progressInterval = setInterval(() => {
-                    if (isAborted) {
-                        clearInterval(progressInterval);
-                        return;
-                    }
-                    bytesLoaded = Math.min(bytesLoaded + stepSize, totalBytes);
-                    xhr.dispatchEvent(new ProgressEvent('progress', {
-                        lengthComputable: true,
-                        loaded: bytesLoaded,
-                        total: totalBytes
-                    }));
-                }, 50);
-            }
-
-            // Check for timeout
-            if (xhr.timeout > 0 && delay > xhr.timeout) {
-                mockTimeout = setTimeout(() => {
-                    if (isAborted) return;
-
-                    if (progressInterval) {
-                        clearInterval(progressInterval);
-                        progressInterval = null;
-                    }
-
-                    Object.defineProperty(xhr, 'readyState', { value: 4, writable: true, configurable: true });
-                    xhr.dispatchEvent(new Event('readystatechange')); // Q-8
-                    xhr.dispatchEvent(new ProgressEvent('timeout'));
-                    xhr.dispatchEvent(new ProgressEvent('loadend'));
-                }, xhr.timeout);
-                return;
-            }
-
-            // Schedule response
-            mockTimeout = setTimeout(() => {
+            mockTimeout = later(() => {
+                mockTimeout = null;
                 if (progressInterval) {
                     clearInterval(progressInterval);
                     progressInterval = null;
                 }
-                if (!isAborted) {
-                    // Always land on a 100%-loaded progress event right
-                    // before delivery, whether or not the interval above
-                    // ran (and however far it got).
-                    xhr.dispatchEvent(new ProgressEvent('progress', {
-                        lengthComputable: true, loaded: totalBytes, total: totalBytes
-                    }));
-                }
+                // Always land on a 100%-loaded progress event right before
+                // delivery, whether or not the interval above ran.
+                fireProgress(xhr, 'progress', totalBytes, totalBytes, true);
                 finishMock(responseText, status, statusText, headers);
             }, delay > 10 ? delay : 10);
+
+            // After the delivery timer, so a timeout equal to the delay loses.
+            armTimeout();
+        }
+
+        // Patch mode: one real request through fetch, merged and delivered.
+        function runPatchFlow(rule, body) {
+            const cfg = getResponseConfig(rule);
+            const gen = generation;
+            armTimeout();
+
+            (async () => {
+                // PER-13: the request has been sent once, below, and is never
+                // sent again. Every failure used to fall back to
+                // originalSend(), so a non-JSON or empty response (text, a
+                // 204) reached the server twice.
+                let real;
+                let rawBody;
+                try {
+                    // S-7/Q-18: map withCredentials instead of hard-coding
+                    // 'include'. QA-6: with a signal, so xhr.abort() cancels
+                    // the request itself, not just its delivery.
+                    patchAbort = new AbortController();
+                    real = await originalFetch(requestUrl, {
+                        method: requestMethod,
+                        headers: requestHeaders,
+                        body: body ?? undefined,
+                        credentials: xhr.withCredentials ? 'include' : 'same-origin',
+                        signal: patchAbort.signal
+                    });
+                    rawBody = await real.arrayBuffer();
+                } catch (error) {
+                    // A network failure, as the native XHR would have seen it.
+                    if (gen !== generation || mockDone) return;
+                    log('XHR patch mode: the request failed:', error);
+                    failRequest('error');
+                    return;
+                }
+                if (gen !== generation || mockDone) return;
+                patchAbort = null;
+
+                const realText = new TextDecoder().decode(rawBody);
+                const realHeaders = {};
+                real.headers.forEach((value, key) => { realHeaders[key] = value; });
+
+                let mergedText;
+                try {
+                    const data = jsonParse(realText);
+                    const patchPayload = processDynamicResponse(cfg.patch, { url: requestAbsUrl, method: requestMethod });
+                    mergedText = jsonStringify(jsonMergePatch(data, patchPayload));
+                } catch (error) {
+                    // Not JSON (or nothing to merge into): deliver the real
+                    // response unchanged, as fetch does.
+                    log('XHR patch mode: real response is not valid JSON, delivering it unmodified', error);
+                    finishMock(realText, real.status, real.statusText, realHeaders, rawBody, real.url);
+                    return;
+                }
+
+                const mergedHeaders = realHeaders;
+                mergedHeaders['x-splicetap'] = 'true';
+                mergedHeaders['x-splicetap-rule'] = ruleMarker(rule.name);
+
+                log(`Patched XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
+                logInterception(rule, requestAbsUrl, requestMethod, real.status);
+
+                finishMock(mergedText, real.status, real.statusText || 'OK', mergedHeaders, undefined, real.url);
+            })();
         }
 
         // Override open
         defineOwn(xhr, 'open', function open(method, url, ...args) {
+            // PER-15: open() starts over, as natively. A mocked response's
+            // state was left in place, so a reused object reported DONE and
+            // the old status straight after open(), and a later real response
+            // still read back as the mock; a mock still pending fired its
+            // load into the next request.
+            generation++;
+            clearTimers();
+            cancelPatchFetch();
+            clearOverrides();
+            isMocked = false;
+            mockDone = false;
+            isAborted = false;
+            uploadPending = false;
+
             requestMethod = String(method).toUpperCase();
             requestUrl = url instanceof NativeURL ? url.href : String(url);
             requestAbsUrl = resolveUrl(requestUrl);
@@ -1124,7 +1451,6 @@
             openMethod = method;
             openRest = args;
             requestHeaderList = [];
-            isMocked = false;
             redirectHandled = false;
             mockResponseHeaders = null;
             // Q-12: 3rd arg is `async`, defaulting to true only when omitted.
@@ -1169,41 +1495,35 @@
                 }
             }
 
-            return originalOpen.apply(this, [method, finalUrl, ...args]);
+            return reflectApply(originalOpen, this, [method, finalUrl, ...args]);
         });
 
         // Override abort
         defineOwn(xhr, 'abort', function abort() {
+            if (!isMocked) return reflectApply(originalAbort, this, arguments);
+
+            generation++;
+            clearTimers();
+            cancelPatchFetch();
             isAborted = true;
 
-            // QA-6: cancel the real request patch mode has in flight, not
-            // just its delivery. Without this the backend still completed
-            // the call the page asked to abort.
-            if (patchAbort) {
-                try { patchAbort.abort(); } catch (e) { /* already settled */ }
-                patchAbort = null;
+            if (mockDone) {
+                // PER-39: abort() after the response completed fires no
+                // event, natively — it only returns the object to UNSENT
+                // with an empty, network-error response. Mocks fired abort
+                // and a second loadend.
+                clearOverrides();
+                mockResponseHeaders = objectCreate(null);
+                setState('readyState', 0);
+                return undefined;
             }
 
-            // Clear any pending timeouts
-            if (mockTimeout) {
-                clearTimeout(mockTimeout);
-                mockTimeout = null;
-            }
-
-            if (progressInterval) {
-                clearInterval(progressInterval);
-                progressInterval = null;
-            }
-
-            if (isMocked) {
-                // Trigger abort event for mocked requests
-                Object.defineProperty(xhr, 'readyState', { value: 0, writable: true, configurable: true });
-                xhr.dispatchEvent(new ProgressEvent('abort', { bubbles: false }));
-                xhr.dispatchEvent(new ProgressEvent('loadend', { bubbles: false }));
-                return;
-            }
-
-            return originalAbort.apply(this);
+            // PER-39: in flight, the request error steps run with readyState
+            // DONE (readystatechange first, which mocks skipped), then the
+            // object is UNSENT.
+            failRequest('abort');
+            setState('readyState', 0);
+            return undefined;
         });
 
         // Override getResponseHeader/getAllResponseHeaders so mocked
@@ -1212,53 +1532,47 @@
         // pass through to the real network response headers untouched).
         defineOwn(xhr, 'getResponseHeader', function getResponseHeader(name) {
             if (isMocked && mockResponseHeaders) {
-                const key = String(name).toLowerCase();
-                const foundKey = Object.keys(mockResponseHeaders).find((k) => k.toLowerCase() === key);
-                return foundKey !== undefined ? String(mockResponseHeaders[foundKey]) : null;
+                const value = headerValue(mockResponseHeaders, String(name).toLowerCase());
+                return value !== undefined ? String(value) : null;
             }
-            return originalGetResponseHeader.apply(this, arguments);
+            return reflectApply(originalGetResponseHeader, this, arguments);
         });
 
         defineOwn(xhr, 'getAllResponseHeaders', function getAllResponseHeaders() {
             if (isMocked && mockResponseHeaders) {
-                const keys = Object.keys(mockResponseHeaders);
-                if (keys.length === 0) return '';
-                return keys.map((k) => `${k.toLowerCase()}: ${mockResponseHeaders[k]}`).join('\r\n') + '\r\n';
+                const keys = objectKeys(mockResponseHeaders);
+                let text = '';
+                for (let i = 0; i < keys.length; i++) {
+                    text += `${keys[i].toLowerCase()}: ${mockResponseHeaders[keys[i]]}\r\n`;
+                }
+                return text;
             }
-            return originalGetAllResponseHeaders.apply(this, arguments);
+            return reflectApply(originalGetAllResponseHeaders, this, arguments);
         });
 
         // Override send — this is where matching now happens (headers + body are only known here)
         defineOwn(xhr, 'send', function send(body) {
-            if (isAborted) return;
+            if (isAborted) return undefined;
 
             if (!tmState.active) {
-                return originalSend.apply(this, arguments);
+                return reflectApply(originalSend, this, arguments);
             }
+            sendStart = Date.now();
 
             // Chaos Mode check (moved from open())
             if (tmState.settings?.chaosMode?.enabled &&
                 getSecureRandom() < (tmState.settings.chaosMode.failureRate || 0.1) &&
                 relayAlive()) {
                 log(`Chaos Mode: Blocked XHR ${requestUrl}`);
-                takeOver();
-
-                setTimeout(() => {
-                    if (isAborted) return;
-
-                    Object.defineProperty(xhr, 'status', { value: 0, writable: true, configurable: true });
-                    Object.defineProperty(xhr, 'readyState', { value: 4, writable: true, configurable: true });
-                    xhr.dispatchEvent(new Event('readystatechange')); // Q-8
-                    xhr.dispatchEvent(new ProgressEvent('error', { bubbles: false }));
-                    xhr.dispatchEvent(new ProgressEvent('loadend', { bubbles: false }));
-                }, 100);
-                return;
+                takeOver(body);
+                mockTimeout = later(() => { mockTimeout = null; failRequest('error'); }, 100);
+                return undefined;
             }
 
             // A redirect rule was already applied (URL rewritten) in open() —
             // the real network call now goes to the redirected URL, nothing more to do here.
             if (redirectHandled) {
-                return originalSend.apply(this, arguments);
+                return reflectApply(originalSend, this, arguments);
             }
 
             // Q-17: handle non-string bodies (URLSearchParams, the
@@ -1316,7 +1630,7 @@
                         }
                     });
                 }
-                return originalSend.apply(this, arguments);
+                return reflectApply(originalSend, this, arguments);
             }
 
             const effectiveType = rule.type || 'mock';
@@ -1330,14 +1644,14 @@
                 const newUrl = computeRedirectUrl(requestAbsUrl, rule, requestUrl);
                 log(`Redirecting XHR ${requestMethod} ${requestUrl} -> ${newUrl} (Rule: ${rule.name})`);
                 logInterception(rule, requestAbsUrl, requestMethod, 302);
-                originalOpen.apply(xhr, [openMethod, newUrl, ...openRest]);
+                reflectApply(originalOpen, xhr, [openMethod, newUrl, ...openRest]);
                 for (let i = 0; i < requestHeaderList.length; i++) {
-                    originalSetRequestHeader.apply(xhr, requestHeaderList[i]);
+                    reflectApply(originalSetRequestHeader, xhr, requestHeaderList[i]);
                 }
                 requestUrl = newUrl;
                 requestAbsUrl = resolveUrl(newUrl);
                 redirectHandled = true;
-                return originalSend.apply(this, arguments);
+                return reflectApply(originalSend, this, arguments);
             }
 
             // Q-12: synchronous XHR (open(..., false)) blocks the calling
@@ -1350,155 +1664,88 @@
             // synchronous network call rather than silently doing nothing.
             if (!requestIsAsync) {
                 if (effectiveType === 'block') {
-                    takeOver();
+                    takeOver(body);
                     logInterception(rule, requestUrl, requestMethod, 0);
-                    Object.defineProperty(xhr, 'status', { value: 0, writable: true, configurable: true });
-                    Object.defineProperty(xhr, 'readyState', { value: 4, writable: true, configurable: true });
-                    xhr.dispatchEvent(new Event('readystatechange'));
-                    xhr.dispatchEvent(new ProgressEvent('error', { bubbles: false }));
-                    xhr.dispatchEvent(new ProgressEvent('loadend', { bubbles: false }));
-                    return;
+                    failRequest('error');
+                    return undefined;
                 }
 
                 if (effectiveType === 'mock' && ((rule.response && rule.response.mode) || 'static') === 'static') {
                     const cfg = getResponseConfig(rule);
-                    const bodyContent = processDynamicResponse(cfg.body, { url: requestAbsUrl, method: requestMethod });
-                    const responseText = typeof bodyContent === 'string' ? bodyContent : jsonStringify(bodyContent);
-                    takeOver();
+                    let responseText = '';
+                    if (!hasNoBody(cfg.statusCode, requestMethod)) {
+                        const bodyContent = processDynamicResponse(cfg.body, { url: requestAbsUrl, method: requestMethod });
+                        responseText = typeof bodyContent === 'string' ? bodyContent : jsonStringify(bodyContent);
+                    }
+                    takeOver(body);
                     logInterception(rule, requestUrl, requestMethod, cfg.statusCode);
                     finishMock(responseText, cfg.statusCode, cfg.statusText, buildMockHeaders(cfg.headers, rule));
-                    return;
+                    return undefined;
                 }
 
                 // delay / patch / anything else can't be honored without
                 // blocking the thread — pass through to a real synchronous request.
                 log(`Rule "${rule.name}" (type ${effectiveType}) cannot be mocked on a synchronous XHR; passing through`);
-                return originalSend.apply(this, arguments);
+                return reflectApply(originalSend, this, arguments);
             }
 
             if (effectiveType === 'block') {
                 log(`Blocked XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
-                takeOver();
+                takeOver(body);
                 logInterception(rule, requestUrl, requestMethod, 0);
-
-                setTimeout(() => {
-                    if (isAborted) return;
-
-                    Object.defineProperty(xhr, 'status', { value: 0, writable: true, configurable: true });
-                    Object.defineProperty(xhr, 'readyState', { value: 4, writable: true, configurable: true });
-                    xhr.dispatchEvent(new Event('readystatechange')); // Q-8
-                    xhr.dispatchEvent(new ProgressEvent('error', { bubbles: false }));
-                    xhr.dispatchEvent(new ProgressEvent('loadend', { bubbles: false }));
-                }, 10);
-                return;
+                mockTimeout = later(() => { mockTimeout = null; failRequest('error'); }, 10);
+                return undefined;
             }
 
             if (effectiveType === 'delay') {
                 log(`Delaying XHR ${requestMethod} ${requestUrl} by ${rule.delayMs}ms (Rule: ${rule.name})`);
                 // Not takeOver(): see its comment — the native send() below
-                // fires this request's loadstart, once, when it leaves.
+                // fires this request's loadstart (and upload events), once,
+                // when it leaves.
                 isMocked = true;
                 logInterception(rule, requestUrl, requestMethod, null);
 
-                mockTimeout = setTimeout(() => {
+                // PER-17: the hold counts toward xhr.timeout. A delay of at
+                // least the timeout times out at the timeout, as the real
+                // request would have; a shorter one hands the native request
+                // only the time left. The hold used to be free, so axios
+                // `timeout: 1000` against a 3 s delay rule succeeded.
+                let limit = 0;
+                try { limit = xhr.timeout; } catch (e) { /* no timeout */ }
+                if (limit > 0 && rule.delayMs >= limit) {
+                    timeoutTimer = later(() => { timeoutTimer = null; failRequest('timeout'); }, limit);
+                    return undefined;
+                }
+                mockTimeout = later(() => {
                     mockTimeout = null;
                     isMocked = false; // hand off to the real network request
-                    if (isAborted) return;
-                    originalSend.call(xhr, body);
+                    let current = 0;
+                    try { current = xhr.timeout; } catch (e) { /* no timeout */ }
+                    passTimeoutBudget(current, Date.now() - sendStart);
+                    reflectApply(originalSend, xhr, [body]);
                 }, rule.delayMs);
-                return;
+                return undefined;
             }
 
             if (effectiveType === 'mock') {
                 const cfg = getResponseConfig(rule);
 
                 if (cfg.mode === 'patch') {
-                    takeOver();
-
-                    (async () => {
-                        // PER-13: the request has been sent once, below,
-                        // and is never sent again. Every failure used to
-                        // fall back to originalSend(), so a non-JSON or
-                        // empty response (text, a 204) reached the server
-                        // twice: a duplicate write against a real backend.
-                        let real;
-                        let rawBody;
-                        try {
-                            // S-7/Q-18: map withCredentials instead of
-                            // hard-coding 'include' (which silently
-                            // attached cookies to cross-origin requests
-                            // the page deliberately made anonymous, and
-                            // could fail CORS for servers that don't also
-                            // send Access-Control-Allow-Credentials).
-                            // QA-6: this call had no signal, so xhr.abort()
-                            // could only stop the patched response being
-                            // DELIVERED — the underlying request still ran
-                            // to completion against the real backend. For a
-                            // POST with side effects that means the write
-                            // the page explicitly cancelled still happened.
-                            patchAbort = new AbortController();
-                            real = await originalFetch(requestUrl, {
-                                method: requestMethod,
-                                headers: requestHeaders,
-                                body: body ?? undefined,
-                                credentials: xhr.withCredentials ? 'include' : 'same-origin',
-                                signal: patchAbort.signal
-                            });
-                            rawBody = await real.arrayBuffer();
-                        } catch (error) {
-                            // A network failure, as the native XHR would
-                            // have seen it.
-                            if (isAborted) return;
-                            log('XHR patch mode: the request failed:', error);
-                            Object.defineProperty(xhr, 'status', { value: 0, writable: true, configurable: true });
-                            Object.defineProperty(xhr, 'readyState', { value: 4, writable: true, configurable: true });
-                            xhr.dispatchEvent(new Event('readystatechange'));
-                            xhr.dispatchEvent(new ProgressEvent('error', { bubbles: false }));
-                            xhr.dispatchEvent(new ProgressEvent('loadend', { bubbles: false }));
-                            return;
-                        }
-
-                        if (isAborted) return;
-
-                        const realText = new TextDecoder().decode(rawBody);
-                        const realHeaders = {};
-                        real.headers.forEach((value, key) => { realHeaders[key] = value; });
-
-                        let mergedText;
-                        try {
-                            const data = jsonParse(realText);
-                            const patchPayload = processDynamicResponse(cfg.patch, { url: requestAbsUrl, method: requestMethod });
-                            mergedText = jsonStringify(jsonMergePatch(data, patchPayload));
-                        } catch (error) {
-                            // Not JSON (or nothing to merge into): deliver
-                            // the real response unchanged, as fetch does.
-                            log('XHR patch mode: real response is not valid JSON, delivering it unmodified', error);
-                            finishMock(realText, real.status, real.statusText, realHeaders, rawBody);
-                            return;
-                        }
-
-                        const mergedHeaders = realHeaders;
-                        mergedHeaders['x-splicetap'] = 'true';
-                        mergedHeaders['x-splicetap-rule'] = ruleMarker(rule.name);
-
-                        log(`Patched XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
-                        logInterception(rule, requestAbsUrl, requestMethod, real.status);
-
-                        finishMock(mergedText, real.status, real.statusText || 'OK', mergedHeaders);
-                    })();
-                    return;
+                    takeOver(body);
+                    runPatchFlow(rule, body);
+                    return undefined;
                 }
 
                 // mode === 'static'
                 log(`Intercepted XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
-                takeOver();
+                takeOver(body);
                 logInterception(rule, requestUrl, requestMethod, cfg.statusCode);
                 runStaticMockFlow(rule);
-                return;
+                return undefined;
             }
 
             // Anything else — passthrough.
-            return originalSend.apply(this, arguments);
+            return reflectApply(originalSend, this, arguments);
         });
 
         // Override setRequestHeader — record it AND always call through so

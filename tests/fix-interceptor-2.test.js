@@ -148,3 +148,256 @@ describe('PER-46: open(method, url, undefined) is synchronous', () => {
         expect(xhr.readyState).not.toBe(4);
     });
 });
+
+/** Record events (with readyState) on an XHR and, if it has one, its upload. */
+function recordEvents(xhr) {
+    const events = [];
+    for (const type of ['readystatechange', 'loadstart', 'progress', 'load', 'error', 'abort', 'timeout', 'loadend']) {
+        xhr.addEventListener(type, () => events.push(`${type}@${xhr.readyState}`));
+        if (xhr.upload) xhr.upload.addEventListener(type, () => events.push(`up.${type}`));
+    }
+    return events;
+}
+
+/** Give the harness XHR an upload object, as a browser's has. */
+function withUpload(h) {
+    Object.defineProperty(h.window.XMLHttpRequest.prototype, 'upload', {
+        configurable: true,
+        get() { return this._upload || (this._upload = new EventTarget()); }
+    });
+    return h;
+}
+
+const delayedMock = (delay) => mockRule({
+    response: { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: { mocked: true }, delay, mode: 'static' }
+});
+
+describe('PER-15: open() resets a reused or in-flight mocked XHR', () => {
+    test('a reused object reads the real response after a mocked one', async () => {
+        const h = withRules([mockRule()]);
+        const xhr = h.newXHR();
+        let done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.send();
+        expect((await done).marker).toBe('true');
+
+        done = settle(xhr);
+        xhr.open('GET', '/api/real');
+        expect(xhr.readyState).toBe(1);
+        xhr.send();
+        const second = await done;
+        expect(second.marker).toBeNull();
+        expect(second.responseText).toBe('{"origin":true}');
+    });
+
+    test('a mock still pending when open() is called again never fires', async () => {
+        const h = withRules([delayedMock(80)]);
+        const xhr = h.newXHR();
+        const loads = [];
+        xhr.addEventListener('load', () => loads.push(xhr.responseText));
+        xhr.open('GET', '/api/users');
+        xhr.send();
+        await sleep(10);
+        xhr.open('GET', '/api/real');
+        xhr.send();
+        await sleep(250);
+        expect(loads).toEqual(['{"origin":true}']);
+        expect(xhr.responseText).toBe('{"origin":true}');
+    });
+
+    test('a request after abort() is not swallowed', async () => {
+        const h = withRules([delayedMock(80)]);
+        const xhr = h.newXHR();
+        xhr.open('GET', '/api/users');
+        xhr.send();
+        xhr.abort();
+        const done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.send();
+        expect((await done).marker).toBe('true');
+    });
+});
+
+describe('PER-16: upload events for mocked requests with a body', () => {
+    test('a mock fires loadstart, progress, load and loadend on xhr.upload before the headers', async () => {
+        const h = withUpload(withRules([mockRule()]));
+        const xhr = h.newXHR();
+        const events = recordEvents(xhr);
+        const done = settle(xhr);
+        xhr.open('POST', '/api/users');
+        xhr.send('x'.repeat(5000));
+        await done;
+        const upload = events.filter((e) => e.startsWith('up.'));
+        expect(upload).toEqual(['up.loadstart', 'up.progress', 'up.load', 'up.loadend']);
+        expect(events.indexOf('up.loadend')).toBeLessThan(events.indexOf('readystatechange@2'));
+        expect(events.indexOf('loadstart@1')).toBeLessThan(events.indexOf('up.loadstart'));
+    });
+
+    test('a GET sends no body, so no upload events', async () => {
+        const h = withUpload(withRules([mockRule()]));
+        const xhr = h.newXHR();
+        const events = recordEvents(xhr);
+        const done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.send();
+        await done;
+        expect(events.filter((e) => e.startsWith('up.'))).toEqual([]);
+    });
+
+    test('a block fires error and loadend on xhr.upload', async () => {
+        const h = withUpload(withRules([mockRule({ type: 'block' })]));
+        const xhr = h.newXHR();
+        const events = recordEvents(xhr);
+        const done = settle(xhr);
+        xhr.open('POST', '/api/users');
+        xhr.send('payload');
+        await done;
+        expect(events.filter((e) => e.startsWith('up.'))).toEqual(['up.loadstart', 'up.error', 'up.loadend']);
+        expect(events.slice(-5)).toEqual(['readystatechange@4', 'up.error', 'up.loadend', 'error@4', 'loadend@4']);
+    });
+});
+
+describe('PER-17: a delay rule honours xhr.timeout', () => {
+    const delayRule = (delayMs) => ({ id: 'd', name: 'Slow', enabled: true, type: 'delay', match: { url: '*/api/users*', method: '*' }, delayMs });
+
+    test('a hold at least as long as the timeout times out, at the timeout', async () => {
+        const h = withRules([delayRule(400)]);
+        const xhr = h.newXHR();
+        const events = recordEvents(xhr);
+        const start = Date.now();
+        const done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.timeout = 60;
+        xhr.send();
+        await done;
+        expect(Date.now() - start).toBeLessThan(300);
+        expect(events).toEqual(['readystatechange@1', 'readystatechange@4', 'timeout@4', 'loadend@4']);
+        expect(h.xhrCalls).toHaveLength(0);
+    });
+
+    test('a shorter hold still reaches the network', async () => {
+        const h = withRules([delayRule(30)]);
+        const xhr = h.newXHR();
+        const done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.timeout = 1000;
+        xhr.send();
+        expect((await done).responseText).toBe('{"origin":true}');
+        expect(h.xhrCalls).toHaveLength(1);
+    });
+
+    test('a static mock longer than the timeout times out', async () => {
+        const h = withRules([delayedMock(300)]);
+        const xhr = h.newXHR();
+        const events = recordEvents(xhr);
+        const done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.timeout = 50;
+        xhr.send();
+        await done;
+        expect(events.slice(-3)).toEqual(['readystatechange@4', 'timeout@4', 'loadend@4']);
+        expect(events).not.toContain('load@4');
+    });
+});
+
+describe('PER-39: abort() on a mocked XHR', () => {
+    test('after completion it is silent and leaves the object UNSENT', async () => {
+        const h = withRules([mockRule()]);
+        const xhr = h.newXHR();
+        const done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.send();
+        await done;
+        const events = recordEvents(xhr);
+        xhr.abort();
+        await sleep(20);
+        expect(events).toEqual([]);
+        expect(xhr.readyState).toBe(0);
+        expect(xhr.getResponseHeader('x-splicetap')).toBeNull();
+        expect(xhr.getAllResponseHeaders()).toBe('');
+    });
+
+    test('in flight it reports DONE before abort, then is UNSENT', async () => {
+        const h = withRules([delayedMock(200)]);
+        const xhr = h.newXHR();
+        xhr.open('GET', '/api/users');
+        xhr.send();
+        await sleep(20);
+        const events = recordEvents(xhr);
+        xhr.abort();
+        expect(events).toEqual(['readystatechange@4', 'abort@4', 'loadend@4']);
+        expect(xhr.readyState).toBe(0);
+        expect(xhr.status).toBe(0);
+        await sleep(250);
+        expect(events).toHaveLength(3);
+    });
+});
+
+describe('PER-40 / PER-47: responseXML and document responses', () => {
+    const xmlRule = (contentType, body) => mockRule({
+        response: { statusCode: 200, headers: { 'Content-Type': contentType }, body, delay: 0, mode: 'static' }
+    });
+
+    test("an XML response with responseType '' has a responseXML", async () => {
+        const h = withRules([xmlRule('application/xml', '<a><b>1</b></a>')]);
+        const xhr = h.newXHR();
+        const done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.send();
+        await done;
+        expect(xhr.responseText).toBe('<a><b>1</b></a>');
+        expect(typeof xhr.responseXML).toBe('object');
+        expect(xhr.responseXML).not.toBeNull();
+    });
+
+    test("HTML is parsed for 'document' only; JSON never", async () => {
+        const read = async (contentType, body, responseType) => {
+            const h = withRules([xmlRule(contentType, body)]);
+            const xhr = h.newXHR();
+            xhr.responseType = responseType;
+            const done = settle(xhr);
+            xhr.open('GET', '/api/users');
+            xhr.send();
+            await done;
+            return { response: xhr.response, responseXML: xhr.responseXML };
+        };
+
+        const htmlDefault = await read('text/html', '<p>hi</p>', '');
+        expect(htmlDefault.responseXML).toBeNull();
+
+        const htmlDocument = await read('text/html', '<p>hi</p>', 'document');
+        expect(typeof htmlDocument.response).toBe('object');
+        expect(htmlDocument.response).not.toBeNull();
+        expect(htmlDocument.responseXML).toBe(htmlDocument.response);
+
+        const jsonDocument = await read('application/json', '{"a":1}', 'document');
+        expect(jsonDocument.response).toBeNull();
+        expect(jsonDocument.responseXML).toBeNull();
+    });
+});
+
+describe('PER-52: no XHR body for 204/205/304 or HEAD, matching fetch', () => {
+    for (const status of [204, 205, 304]) {
+        test(`a ${status} mock delivers an empty body`, async () => {
+            const h = withRules([mockRule({
+                response: { statusCode: status, headers: {}, body: { ignored: true }, delay: 0, mode: 'static' }
+            })]);
+            const xhr = h.newXHR();
+            const done = settle(xhr);
+            xhr.open('GET', '/api/users');
+            xhr.send();
+            const result = await done;
+            expect(result.status).toBe(status);
+            expect(result.responseText).toBe('');
+        });
+    }
+
+    test('a HEAD mock delivers an empty body', async () => {
+        const h = withRules([mockRule()]);
+        const xhr = h.newXHR();
+        const done = settle(xhr);
+        xhr.open('HEAD', '/api/users');
+        xhr.send();
+        expect((await done).responseText).toBe('');
+    });
+});

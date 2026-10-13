@@ -200,4 +200,164 @@ describe('fix-interceptor-2: XHR and fetch fidelity in a real browser', () => {
             '/api/users': { readyState: 4, status: 200 }
         });
     });
+
+    // ---- PER-15 / 16 / 17 / 39 / 40 / 47 / 52 ----------------------------
+
+    test('PER-15: open() resets a reused XHR, and an abandoned mock never fires', async () => {
+        await setRules(mock('m', '*/api/mock*', { mocked: 1 }), mock('slow', '*/api/slow*', { first: true }, { delay: 300 }));
+        await open();
+        const r = await page.evaluate(async () => {
+            const done = (x) => new Promise((res) => x.addEventListener('loadend', () => setTimeout(res, 0), { once: true }));
+            const out = {};
+            const x = new XMLHttpRequest();
+            x.open('GET', '/api/mock'); x.send(); await done(x);
+            x.open('GET', '/api/real-second');
+            out.afterOpen = { rs: x.readyState, st: x.status, txt: x.responseText };
+            x.send(); await done(x);
+            out.second = { st: x.status, real: JSON.parse(x.responseText).real, marker: x.getResponseHeader('x-splicetap'), url: x.responseURL.endsWith('/api/real-second') };
+
+            const y = new XMLHttpRequest();
+            const events = [];
+            ['load', 'abort', 'loadend'].forEach((t) => y.addEventListener(t, () => events.push(t + ':' + (y.responseText.includes('first') ? 'mock' : 'real'))));
+            y.open('GET', '/api/slow'); y.send();
+            await new Promise((res) => setTimeout(res, 50));
+            y.open('GET', '/api/real-reopen'); y.send();
+            await new Promise((res) => setTimeout(res, 700));
+            out.reopen = events;
+            return out;
+        });
+        expect(r).toEqual({
+            afterOpen: { rs: 1, st: 0, txt: '' },
+            second: { st: 200, real: true, marker: null, url: true },
+            reopen: ['load:real', 'loadend:real']
+        });
+    });
+
+    test('PER-16: a mocked request with a body fires the upload events a real one does', async () => {
+        await setRules(mock('m', '*/api/mock*'), { id: 'b', name: 'b', enabled: true, type: 'block', match: { url: '*/api/blocked*', method: '*' } });
+        await open();
+        const r = await page.evaluate(async () => {
+            const out = {};
+            for (const path of ['/api/mock-up', '/api/real-up', '/api/blocked-up']) {
+                const x = new XMLHttpRequest();
+                const ev = [];
+                ['loadstart', 'progress', 'load', 'error', 'loadend'].forEach((t) => x.upload.addEventListener(t, () => ev.push(t)));
+                const done = new Promise((res) => x.addEventListener('loadend', () => setTimeout(res, 0)));
+                x.open('POST', path); x.send('x'.repeat(5000));
+                await done;
+                out[path] = ev;
+            }
+            return out;
+        });
+        expect(r['/api/real-up']).toEqual(['loadstart', 'progress', 'load', 'loadend']);
+        expect(r['/api/mock-up']).toEqual(['loadstart', 'progress', 'load', 'loadend']);
+        expect(r['/api/blocked-up']).toEqual(['loadstart', 'error', 'loadend']);
+    });
+
+    test('PER-17: a delay rule counts toward xhr.timeout', async () => {
+        const delay = (id, url, delayMs) => ({ id, name: id, enabled: true, type: 'delay', match: { url, method: '*' }, delayMs });
+        await setRules(delay('long', '*/api/long*', 800), delay('short', '*/slow*', 300), delay('fine', '*/api/fine*', 100));
+        await open(aux.base + '/plain');
+        const r = await page.evaluate(async () => {
+            const run = (url, timeout) => new Promise((res) => {
+                const x = new XMLHttpRequest();
+                const ev = [];
+                const t0 = performance.now();
+                ['readystatechange', 'load', 'timeout', 'loadend'].forEach((t) => x.addEventListener(t, () => ev.push(t + '@' + x.readyState)));
+                x.addEventListener('loadend', () => setTimeout(() => res({ ev: ev.filter((e) => e !== 'readystatechange@1'), ms: Math.round(performance.now() - t0), timeoutProp: x.timeout }), 0));
+                x.open('GET', url);
+                x.timeout = timeout;
+                x.send();
+            });
+            return {
+                holdLonger: await run('/api/long', 200),
+                budget: await run('/slow?ms=400', 500),
+                fits: await run('/api/fine', 2000)
+            };
+        });
+        expect(r.holdLonger.ev).toEqual(['readystatechange@4', 'timeout@4', 'loadend@4']);
+        expect(r.holdLonger.ms).toBeLessThan(600);
+        // 300 ms held + 400 ms server > 500 ms: only 200 ms were left.
+        expect(r.budget.ev.slice(-3)).toEqual(['readystatechange@4', 'timeout@4', 'loadend@4']);
+        expect(r.budget.timeoutProp).toBe(500);
+        expect(r.fits.ev.slice(-2)).toEqual(['load@4', 'loadend@4']);
+    });
+
+    test('PER-39: abort() after a mocked response is silent; in flight it reports DONE first', async () => {
+        await setRules(mock('m', '*/api/mock*'), mock('slow', '*/api/slow*', { slow: true }, { delay: 400 }));
+        await open();
+        const r = await page.evaluate(async () => {
+            const out = {};
+            for (const path of ['/api/mock', '/api/real-abort']) {
+                const x = new XMLHttpRequest();
+                await new Promise((res) => { x.addEventListener('loadend', () => setTimeout(res, 0), { once: true }); x.open('GET', path); x.send(); });
+                const ev = [];
+                ['readystatechange', 'abort', 'loadend'].forEach((t) => x.addEventListener(t, () => ev.push(t + '@' + x.readyState)));
+                x.abort();
+                await new Promise((res) => setTimeout(res, 30));
+                out[path] = { ev, rs: x.readyState, st: x.status, txt: x.responseText };
+            }
+            const y = new XMLHttpRequest();
+            const ev = [];
+            ['readystatechange', 'abort', 'loadend'].forEach((t) => y.addEventListener(t, () => ev.push(t + '@' + y.readyState)));
+            y.open('GET', '/api/slow'); y.send();
+            await new Promise((res) => setTimeout(res, 50));
+            ev.length = 0; // headers have arrived (readyState 2, 3); what does abort() fire?
+            y.abort();
+            out.inFlight = { ev, rs: y.readyState };
+            return out;
+        });
+        expect(r['/api/real-abort']).toEqual({ ev: [], rs: 0, st: 0, txt: '' });
+        expect(r['/api/mock']).toEqual(r['/api/real-abort']);
+        expect(r.inFlight).toEqual({ ev: ['readystatechange@4', 'abort@4', 'loadend@4'], rs: 0 });
+    });
+
+    test('PER-40 / PER-52: responseXML for XML and documents; no body for a 204', async () => {
+        const xml = '<a><b>1</b></a>';
+        await setRules(
+            mock('xml', '*/api/xml*', xml, { headers: { 'Content-Type': 'application/xml' } }),
+            mock('html', '*/api/html*', '<p id="x">hi</p>', { headers: { 'Content-Type': 'text/html' } }),
+            mock('empty', '*/api/empty*', { ignored: true }, { statusCode: 204 })
+        );
+        await open();
+        const r = await page.evaluate(async () => {
+            const get = (path, responseType) => new Promise((res) => {
+                const x = new XMLHttpRequest();
+                if (responseType) x.responseType = responseType;
+                x.onloadend = () => res(x);
+                x.open('GET', path); x.send();
+            });
+            const a = await get('/api/xml');
+            const b = await get('/api/xml', 'document');
+            const c = await get('/api/html', 'document');
+            const d = await get('/api/html');
+            const e = await get('/api/empty');
+            return {
+                xmlDefault: a.responseXML && a.responseXML.documentElement.nodeName,
+                xmlDocument: b.response && b.response.documentElement.nodeName,
+                sameObject: b.response === b.responseXML,
+                htmlDocument: c.response && c.response.getElementById('x').textContent,
+                htmlDefault: d.responseXML,
+                empty: { status: e.status, text: e.responseText }
+            };
+        });
+        expect(r).toEqual({ xmlDefault: 'a', xmlDocument: 'a', sameObject: true, htmlDocument: 'hi', htmlDefault: null, empty: { status: 204, text: '' } });
+    });
+
+    test('PER-47: on a Trusted Types page a mocked document is a Document, without a violation', async () => {
+        await setRules(mock('doc', '*/api/doc*', '<p id="x">hi</p>', { headers: { 'Content-Type': 'text/html' } }));
+        await open(aux.base + '/tt');
+        const messages = [];
+        page.on('console', (m) => messages.push(m.text()));
+        const r = await page.evaluate(() => new Promise((res) => {
+            const x = new XMLHttpRequest();
+            x.responseType = 'document';
+            x.open('GET', '/api/doc');
+            x.onloadend = () => res({ isDoc: x.response instanceof window.Document, text: x.response && x.response.getElementById('x').textContent });
+            x.send();
+        }));
+        await sleep(200);
+        expect(r).toEqual({ isDoc: true, text: 'hi' });
+        expect(messages.filter((m) => /Trusted/i.test(m))).toEqual([]);
+    });
 });
