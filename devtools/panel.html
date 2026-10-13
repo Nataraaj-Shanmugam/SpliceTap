@@ -370,12 +370,18 @@
         }
 
         /* Dense hairline rows, mirroring the popup's rule list. */
+        /* A grid of fixed columns (it was a flex line with fixed-width cells,
+           which is the same thing until a cell is wider than its pill: a long
+           outcome pushed the rule column out of line with the rows around it).
+           method | url | rule | status | time | dismiss */
         .request-item {
             padding: 8px 14px;
             border-bottom: 1px solid var(--hairline);
-            display: flex;
+            display: grid;
+            grid-template-columns: 60px minmax(0, 1fr) 140px 64px 56px 24px;
             align-items: center;
-            gap: 10px;
+            column-gap: 10px;
+            row-gap: 4px;
             transition: background-color 0.15s var(--ease);
         }
 
@@ -475,6 +481,45 @@
         .status-success { background: rgba(34, 197, 94, 0.14); color: #6ee7a0; }
         .status-error { background: rgba(239, 68, 68, 0.16); color: #fca5a5; }
         .status-pending { background: rgba(148, 163, 184, 0.14); color: #a8b6c9; }
+        /* PER-56: a redirect that worked is not an error. Same quiet hue as
+           "pending", but its own class so the two can drift apart. */
+        .status-neutral { background: rgba(148, 163, 184, 0.14); color: #a8b6c9; }
+
+        /* PER-54 / PER-56: the longer outcomes ("→ 200 via https://dest/",
+           "200 after 1500 ms", "failed (chaos)") do not fit the status column.
+           They wrap, keep their case (a URL is not upper-case), sit left-aligned
+           and take a second line under the URL and rule columns, so every
+           column on the first line stays in line with the rows around it. */
+        .request-status.status-detail {
+            justify-self: start;
+            max-width: 100%;
+            text-align: left;
+            text-transform: none;
+            letter-spacing: 0.02em;
+            line-height: 1.4;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        @media not all and (max-width: 560px) {
+            .request-item-detail .request-method { grid-column: 1; grid-row: 1; }
+            .request-item-detail .request-url { grid-column: 2; grid-row: 1; }
+            .request-item-detail .rule-info { grid-column: 3; grid-row: 1; }
+            .request-item-detail .request-status { grid-column: 2 / 4; grid-row: 2; }
+            .request-item-detail .timestamp { grid-column: 5; grid-row: 1; }
+            .request-item-detail .request-actions { grid-column: 6; grid-row: 1; }
+        }
+
+        /* PER-54: the note under a request's URL: what the interceptor did
+           instead of what the rule says. */
+        .request-note {
+            margin-top: 3px;
+            font-family: var(--font-main);
+            font-size: 11px;
+            line-height: 1.4;
+            color: var(--text-muted);
+            overflow-wrap: anywhere;
+        }
 
         /* Hidden until panel.js's first render decides between the table and
            the empty state, so there is no flash of a bare header row. Gated
@@ -528,6 +573,7 @@
         .rule-type-badge[data-type="redirect"] { background: rgba(2, 132, 199, 0.18); color: #7dd3fc; }
         .rule-type-badge[data-type="headers"] { background: rgba(34, 197, 94, 0.16); color: #6ee7a0; }
         .rule-type-badge[data-type="queryparams"] { background: rgba(167, 139, 250, 0.16); color: #c9a2fb; }
+        .rule-type-badge[data-type="chaos"] { background: rgba(217, 70, 239, 0.16); color: #f0abfc; }
 
         .timestamp {
             font-family: var(--font-mono);
@@ -593,6 +639,16 @@
             .timestamp { grid-area: time; }
             .request-actions { grid-area: actions; }
             .request-url { grid-area: url; }
+
+            /* A wrapping outcome gets a line of its own, full width. */
+            .request-item-detail {
+                grid-template-columns: auto 1fr auto;
+                grid-template-areas:
+                    "method time actions"
+                    "status status status"
+                    "url url url"
+                    "rule rule rule";
+            }
 
             .rule-info {
                 grid-area: rule;
@@ -693,6 +749,7 @@
         body.theme-light .status-success { background: rgba(21, 128, 61, 0.12); color: #166534; }
         body.theme-light .status-error { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
         body.theme-light .status-pending { background: rgba(15, 23, 42, 0.08); color: #5b6b7f; }
+        body.theme-light .status-neutral { background: rgba(15, 23, 42, 0.08); color: #5b6b7f; }
 
         body.theme-light .rule-type-badge { background: rgba(15, 23, 42, 0.08); color: #5b6b7f; }
         body.theme-light .rule-type-badge[data-type="mock"] { background: rgba(30, 99, 245, 0.12); color: #1d4fd7; }
@@ -701,6 +758,7 @@
         body.theme-light .rule-type-badge[data-type="redirect"] { background: rgba(2, 132, 199, 0.12); color: #0369a1; }
         body.theme-light .rule-type-badge[data-type="headers"] { background: rgba(21, 128, 61, 0.12); color: #166534; }
         body.theme-light .rule-type-badge[data-type="queryparams"] { background: rgba(124, 58, 237, 0.12); color: #6d28d9; }
+        body.theme-light .rule-type-badge[data-type="chaos"] { background: rgba(192, 38, 211, 0.12); color: #86198f; }
 
         body.theme-light .pause-btn { background: rgba(15, 23, 42, 0.05); color: var(--text-main); }
         body.theme-light .pause-btn:hover { background: rgba(15, 23, 42, 0.09); }
@@ -833,6 +891,7 @@
                     <option value="redirect">Redirect</option>
                     <option value="headers">Headers</option>
                     <option value="queryparams">Query params</option>
+                    <option value="chaos">Chaos</option>
                 </select>
             </div>
 

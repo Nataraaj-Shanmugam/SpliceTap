@@ -66,6 +66,9 @@
 
     let filterState = { text: '', type: 'all' };
 
+    // Gives each row's note a unique id for the URL button's aria-describedby.
+    let noteSeq = 0;
+
     function byId(id) {
         return document.getElementById(id);
     }
@@ -110,12 +113,22 @@
         return METHOD_CLASSES[key] || '';
     }
 
-    // Maps an interception log entry's `status` to a CSS class + label.
-    // status is: 0 for block, null for delay (unresolved at log time),
-    // 302 for redirect, or a real/mock HTTP status code otherwise.
+    // PER-54: chaos failures belong to no rule; they are told apart by `kind`
+    // (their ruleType may be anything), and filtered and badged as "chaos".
+    function entryType(entry) {
+        return entry.kind === 'chaos' ? 'chaos' : (entry.ruleType || 'mock');
+    }
+
+    // Maps a status to a CSS class + label. A status is: 0 for block, null for
+    // a delay that had not settled when it was logged, 302 for a redirect
+    // (synthetic: no response was ever a 302), 'failed' for a request that
+    // errored, or a real/mock HTTP status code otherwise.
     function statusInfo(status) {
         if (status === null || status === undefined) {
             return { cls: 'status-pending', text: 'pending' };
+        }
+        if (status === 'failed') {
+            return { cls: 'status-error', text: 'failed' };
         }
         if (status === 0) {
             return { cls: 'status-error', text: 'blocked' };
@@ -124,6 +137,44 @@
             return { cls: 'status-success', text: String(status) };
         }
         return { cls: 'status-error', text: String(status) };
+    }
+
+    function isCount(value) {
+        return typeof value === 'number' && isFinite(value) && value >= 0;
+    }
+
+    // PER-56: the status the page finally received. `finalStatus` arrives once
+    // a delay or redirect settles; before that (and for rules that answer at
+    // once) it is the status logged with the entry. A redirect's logged 302 is
+    // a marker for "redirected", not a response, so without a finalStatus a
+    // redirect has no final status yet. Returns a number, 'failed' or null.
+    function finalStatusOf(entry) {
+        if (entry.finalStatus !== undefined) return entry.finalStatus;
+        if (entryType(entry) === 'redirect') return null;
+        return entry.status === undefined ? null : entry.status;
+    }
+
+    // PER-54 / PER-56: what the Status cell says about an entry, and in which
+    // class. `detail` marks the longer wordings, which wrap instead of sitting
+    // in a fixed-width pill.
+    //   redirect  neutral, "→ 200 via https://dest/" (a redirect is not an error)
+    //   delay     "200 after 1500 ms", and never "pending" once finalStatus exists
+    //   chaos     "failed (chaos)"
+    function outcomeInfo(entry) {
+        const type = entryType(entry);
+        if (type === 'chaos') {
+            return { cls: 'status-error', text: 'failed (chaos)', detail: true };
+        }
+        if (type === 'redirect') {
+            const via = entry.redirectedTo ? ' via ' + truncateUrl(entry.redirectedTo, 160) : '';
+            const shown = entry.finalStatus === undefined ? 'redirected' : String(entry.finalStatus);
+            return { cls: 'status-neutral', text: '→ ' + shown + via, detail: true };
+        }
+        const shown = statusInfo(entry.finalStatus !== undefined ? entry.finalStatus : entry.status);
+        if (type === 'delay' && entry.finalStatus !== undefined && isCount(entry.elapsedMs)) {
+            return { cls: shown.cls, text: shown.text + ' after ' + entry.elapsedMs + ' ms', detail: true };
+        }
+        return { cls: shown.cls, text: shown.text, detail: false };
     }
 
     function formatRelativeTime(ts) {
@@ -254,10 +305,15 @@
         const totalEl = byId('totalRequests');
         if (totalEl) totalEl.textContent = String(entries.length);
 
-        const successCount = entries.filter((e) => e.status >= 200 && e.status < 300).length;
+        // PER-56: only entries with a numeric final status are in the rate. A
+        // delay that settled with 200 counts as a 2xx; a chaos failure, a
+        // 'failed' outcome and a delay not yet settled have no status to
+        // count, and used to drag the rate to 0% when everything succeeded.
+        const finals = entries.map(finalStatusOf).filter((status) => typeof status === 'number');
+        const successCount = finals.filter((status) => status >= 200 && status < 300).length;
         const rateEl = byId('successRate');
         if (rateEl) {
-            const rate = entries.length > 0 ? Math.round((successCount / entries.length) * 100) : 0;
+            const rate = finals.length > 0 ? Math.round((successCount / finals.length) * 100) : 0;
             rateEl.textContent = rate + '%';
         }
     }
@@ -276,7 +332,7 @@
         return entries.filter((entry) => {
             const key = entryKey(entry);
             if (dismissedKeys.has(key)) return false;
-            if (type && type !== 'all' && (entry.ruleType || 'mock') !== type) return false;
+            if (type && type !== 'all' && entryType(entry) !== type) return false;
             if (q) {
                 const haystack = ((entry.url || '') + ' ' + (entry.ruleName || '')).toLowerCase();
                 if (haystack.indexOf(q) === -1) return false;
@@ -347,11 +403,11 @@
     // string-interpolation sink).
     function buildRowElement(entry, key) {
         const method = entry.method || 'GET';
-        const status = statusInfo(entry.status);
-        const ruleType = entry.ruleType || 'mock';
+        const status = outcomeInfo(entry);
+        const ruleType = entryType(entry);
 
         const row = document.createElement('div');
-        row.className = 'request-item';
+        row.className = 'request-item' + (status.detail ? ' request-item-detail' : '');
         row.setAttribute('role', 'row');
         row.dataset.key = key;
 
@@ -369,6 +425,18 @@
         urlBtn.className = 'url-toggle';
         urlBtn.dataset.key = key;
         urlCell.appendChild(urlBtn);
+        // PER-54: what the interceptor did instead of what the rule says (a
+        // skipped patch and why). It is text in the row, and the URL button
+        // carries it as its description, so it is read with the request
+        // whether a screen reader walks the cells or tabs to the button.
+        if (entry.note) {
+            const noteEl = document.createElement('div');
+            noteEl.className = 'request-note';
+            noteEl.id = 'requestNote' + (++noteSeq);
+            noteEl.textContent = entry.note;
+            urlBtn.setAttribute('aria-describedby', noteEl.id);
+            urlCell.appendChild(noteEl);
+        }
         row.appendChild(urlCell);
 
         const ruleCell = document.createElement('div');
@@ -376,7 +444,7 @@
         ruleCell.setAttribute('role', 'cell');
         const ruleNameSpan = document.createElement('span');
         ruleNameSpan.className = 'rule-name';
-        ruleNameSpan.textContent = entry.ruleName || '(unnamed rule)';
+        ruleNameSpan.textContent = entry.ruleName || (ruleType === 'chaos' ? 'Chaos mode' : '(unnamed rule)');
         if (entry.ruleId) ruleNameSpan.title = 'Rule ID: ' + entry.ruleId;
         const ruleTypeSpan = document.createElement('span');
         ruleTypeSpan.className = 'rule-type-badge';
@@ -387,7 +455,7 @@
         row.appendChild(ruleCell);
 
         const statusCell = document.createElement('div');
-        statusCell.className = 'request-status ' + status.cls;
+        statusCell.className = 'request-status ' + status.cls + (status.detail ? ' status-detail' : '');
         statusCell.setAttribute('role', 'cell');
         statusCell.textContent = status.text;
         row.appendChild(statusCell);
@@ -501,7 +569,7 @@
         if (!el) return;
         if (newlyLogged.length === 1) {
             const entry = newlyLogged[0];
-            const status = statusInfo(entry.status);
+            const status = outcomeInfo(entry);
             el.textContent = 'New request logged: ' + (entry.method || 'GET') + ' ' +
                 truncateUrl(stripQueryAndHash(entry.url), 60) + ' — ' + status.text +
                 (entry.ruleName ? ' (' + entry.ruleName + ')' : '');
