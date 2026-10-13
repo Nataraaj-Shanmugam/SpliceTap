@@ -656,7 +656,8 @@
         if (!request) {
             request = readGraphQLRequest(bodyText, url);
             if (memo) {
-                objectDefineProperty(memo, 'graphql', { value: request, writable: true, enumerable: true, configurable: true });
+                // A prototype-less descriptor: see setOwn in src/patch.js.
+                objectDefineProperty(memo, 'graphql', { __proto__: null, value: request, writable: true, enumerable: true, configurable: true });
             }
         }
 

@@ -166,20 +166,6 @@ function installHostileHooks() {
     }
     for (let i = 0; i < plan.length; i++) wrap(plan[i][0], plan[i][1], plan[i][2]);
 
-    // Properties a rule or its match may lack: the read falls through to a
-    // getter on Object.prototype with `this` = the object read.
-    const absent = ['patch', 'headers', 'graphql', 'body', 'mode', 'type', 'match', 'enabled', 'url', 'method',
-        'delay', 'operationName', 'response', 'redirect', 'toJSON', 'then', 'kind', 'regex', 'lower'];
-    for (const name of absent) {
-        if (Object.prototype.hasOwnProperty.call(Object.prototype, name)) continue;
-        Object.defineProperty(Object.prototype, name, {
-            configurable: true,
-            get() { 'use strict'; note('Object.prototype.' + name + ' (get)', this, []); return undefined; },
-            set(v) { 'use strict'; note('Object.prototype.' + name + ' (set)', this, [v]); Object.defineProperty(this, name, { value: v, writable: true, enumerable: true, configurable: true }); }
-        });
-        rawPush.call(undo, () => { delete Object.prototype[name]; });
-    }
-
     // Globals a page can replace outright.
     const replaceFn = (holder, name, label) => {
         const original = holder[name];
@@ -213,6 +199,26 @@ function installHostileHooks() {
     replaceFn(globalThis, 'Set', 'Set');
     replaceFn(console, 'error', 'console.error');
     replaceFn(console, 'warn', 'console.warn');
+
+    // Properties a rule or its match may lack: the read falls through to a
+    // getter on Object.prototype with `this` = the object read. `get` and `set`
+    // are there because a property descriptor handed to Object.defineProperty
+    // is read through its prototype too: an ordinary { value, writable, ... }
+    // literal asks Object.prototype for `get` and `set`, and a getter there
+    // receives the descriptor, value included. These go in last (and come out
+    // first), because once they exist, every ordinary descriptor in this file
+    // would throw.
+    const absent = ['patch', 'headers', 'graphql', 'body', 'mode', 'type', 'match', 'enabled', 'url', 'method',
+        'delay', 'operationName', 'response', 'redirect', 'toJSON', 'then', 'kind', 'regex', 'lower', 'get', 'set'];
+    for (const name of absent) {
+        if (Object.prototype.hasOwnProperty.call(Object.prototype, name)) continue;
+        Object.defineProperty(Object.prototype, name, {
+            configurable: true,
+            get() { 'use strict'; note('Object.prototype.' + name + ' (get)', this, []); return undefined; },
+            set(v) { 'use strict'; note('Object.prototype.' + name + ' (set)', this, [v]); Object.defineProperty(this, name, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); }
+        });
+        rawPush.call(undo, () => { delete Object.prototype[name]; });
+    }
 
     return {
         seen,

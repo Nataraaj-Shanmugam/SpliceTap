@@ -31,8 +31,12 @@
     // property lost it in the merge (Object.assign did the same when copying
     // the original). Define the property instead. This also keeps the merge
     // from ever writing through to Object.prototype.
+    // The descriptor has no prototype: defineProperty reads `get`, `set` and the
+    // rest from it through the prototype chain, so an ordinary object literal
+    // would ask Object.prototype for `get` (a page getter there receives the
+    // descriptor, patch value included, or makes the call throw).
     function setOwn(target, key, value) {
-        objectDefineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
+        objectDefineProperty(target, key, { __proto__: null, value, writable: true, enumerable: true, configurable: true });
     }
 
     function copyOwn(source) {
