@@ -360,4 +360,90 @@ describe('fix-interceptor-2: XHR and fetch fidelity in a real browser', () => {
         expect(r).toEqual({ isDoc: true, text: 'hi' });
         expect(messages.filter((m) => /Trusted/i.test(m))).toEqual([]);
     });
+
+    // ---- contract A: PER-19, PER-54, PER-56 --------------------------------
+
+    /**
+     * Record, inside the service worker, every log entry the relay forwards.
+     * The background's own acceptance of the new fields belongs to group A2b;
+     * this checks what the interceptor emits and the relay passes on.
+     */
+    async function recordForwarded() {
+        await h.worker.evaluate(() => {
+            if (!globalThis.__forwarded) {
+                globalThis.__forwarded = [];
+                chrome.runtime.onMessage.addListener((message) => {
+                    if (message && message.type === 'logInterceptionBatch') globalThis.__forwarded.push(...message.entries);
+                    return false;
+                });
+            }
+            globalThis.__forwarded.length = 0;
+        });
+        return () => h.worker.evaluate(() => globalThis.__forwarded.slice());
+    }
+
+    test('PER-56 / PER-19: delay, redirect and skipped-patch entries carry their outcome', async () => {
+        await setRules(
+            { id: 'd', name: 'd', enabled: true, type: 'delay', match: { url: '*/api/slowpath*', method: '*' }, delayMs: 150 },
+            { id: 'rd', name: 'rd', enabled: true, type: 'redirect', match: { url: '*/api/moved*', method: '*' }, redirect: { destination: h.baseUrl + '/redirect-target' } },
+            mock('p', '*/api/list*', {}, { mode: 'patch', patch: { added: true } })
+        );
+        await open();
+        const forwarded = await recordForwarded();
+
+        await pageFetch(page, '/api/slowpath');
+        await pageXHR(page, '/api/slowpath');
+        await pageFetch(page, '/api/moved');
+        await pageXHR(page, '/api/moved');
+        const list = await pageFetch(page, '/api/list');
+        expect(list.body).toEqual([1, 2, 3]);
+
+        const entries = await waitFor(async () => {
+            const all = await forwarded();
+            return all.length >= 5 ? all : null;
+        }, { label: 'five forwarded entries' });
+
+        const delays = entries.filter((e) => e.ruleId === 'd');
+        expect(delays).toHaveLength(2);
+        for (const e of delays) {
+            expect(e).toMatchObject({ ruleType: 'delay', status: 200, finalStatus: 200 });
+            expect(e.elapsedMs).toBeGreaterThanOrEqual(140);
+        }
+        const redirects = entries.filter((e) => e.ruleId === 'rd');
+        expect(redirects).toHaveLength(2);
+        for (const e of redirects) {
+            expect(e).toMatchObject({ ruleType: 'redirect', status: 200, finalStatus: 200, redirectedTo: h.baseUrl + '/redirect-target' });
+            expect(e.url).toMatch(/\/api\/moved$/);
+        }
+        expect(entries.find((e) => e.ruleId === 'p')).toMatchObject({
+            status: 200, note: 'Patch skipped — response is not a JSON object (array)'
+        });
+    });
+
+    test('PER-54: chaos failures are forwarded as kind "chaos"', async () => {
+        await setRules();
+        const { settings } = await h.bg({ type: 'getRules' });
+        await h.bg({ type: 'settingsUpdated', settings: { ...settings, chaosMode: { enabled: true, failureRate: 1 } } });
+        try {
+            page = await h.openPage();
+            await sleep(400);
+            const forwarded = await recordForwarded();
+            const f = await pageFetch(page, '/api/chaos-fetch');
+            const x = await pageXHR(page, '/api/chaos-xhr');
+            expect(f.ok).toBe(false);
+            expect(x.outcome).toBe('error');
+
+            const entries = await waitFor(async () => {
+                const all = await forwarded();
+                return all.length >= 2 ? all : null;
+            }, { label: 'two chaos entries' });
+            for (const path of ['/api/chaos-fetch', '/api/chaos-xhr']) {
+                const entry = entries.find((e) => e.url.endsWith(path));
+                expect(entry).toMatchObject({ kind: 'chaos', ruleId: null, ruleName: 'Chaos mode', status: 'failed' });
+                expect(entry.elapsedMs).toBeGreaterThanOrEqual(0);
+            }
+        } finally {
+            await h.bg({ type: 'settingsUpdated', settings: { ...settings, chaosMode: { enabled: false, failureRate: 0.1 } } });
+        }
+    });
 });

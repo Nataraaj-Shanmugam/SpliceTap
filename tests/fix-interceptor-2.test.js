@@ -401,3 +401,165 @@ describe('PER-52: no XHR body for 204/205/304 or HEAD, matching fetch', () => {
         expect((await done).responseText).toBe('');
     });
 });
+
+// ---- contract A: PER-19, PER-54, PER-56 -------------------------------------
+
+const chaosOn = { settings: { chaosMode: { enabled: true, failureRate: 1 } } };
+const delayRule = (delayMs, url = '*/api/users*') => ({ id: 'd', name: 'Slow', enabled: true, type: 'delay', match: { url, method: '*' }, delayMs });
+const redirectRule = (destination) => ({ id: 'rd', name: 'Move', enabled: true, type: 'redirect', match: { url: '*/api/old*', method: '*' }, redirect: { destination } });
+const patchRule = (patch) => mockRule({
+    response: { statusCode: 200, headers: {}, body: {}, patch, delay: 0, mode: 'patch' }
+});
+const jsonResponder = (text, status = 200, contentType = 'application/json') =>
+    async () => new Response(text, { status, headers: { 'Content-Type': contentType } });
+
+describe('PER-54: chaos failures are logged as kind "chaos"', () => {
+    test('fetch', async () => {
+        const h = withRules([], { state: chaosOn });
+        const logged = h.collect(h.channels.log);
+        await expect(h.fetch('https://example.test/api/any?token=abc')).rejects.toThrow(TypeError);
+        expect(logged).toHaveLength(1);
+        expect(logged[0]).toMatchObject({ kind: 'chaos', ruleId: null, ruleName: 'Chaos mode', status: 'failed', method: 'GET' });
+        expect(logged[0].elapsedMs).toBeGreaterThanOrEqual(0);
+        expect(logged[0].url).not.toMatch(/abc/);
+    });
+
+    test('XHR', async () => {
+        const h = withRules([], { state: chaosOn });
+        const logged = h.collect(h.channels.log);
+        const xhr = h.newXHR();
+        const done = settle(xhr);
+        xhr.open('POST', '/api/any');
+        xhr.send('x');
+        expect((await done).status).toBe(0);
+        expect(logged).toHaveLength(1);
+        expect(logged[0]).toMatchObject({ kind: 'chaos', ruleId: null, ruleName: 'Chaos mode', status: 'failed', method: 'POST' });
+    });
+});
+
+describe('PER-56: delay and redirect rules are logged once the real response settles', () => {
+    test('a fetch delay reports the final status and the time taken', async () => {
+        const h = withRules([delayRule(60)]);
+        const logged = h.collect(h.channels.log);
+        const pending = h.fetch('https://example.test/api/users');
+        await sleep(20);
+        expect(logged).toHaveLength(0);
+        await pending;
+        expect(logged).toHaveLength(1);
+        expect(logged[0]).toMatchObject({ ruleId: 'd', ruleType: 'delay', status: 200, finalStatus: 200 });
+        expect(logged[0].elapsedMs).toBeGreaterThanOrEqual(55);
+    });
+
+    test('a fetch delay whose request fails reports "failed"', async () => {
+        const h = withRules([delayRule(5)], { originalFetch: async () => { throw new TypeError('Failed to fetch'); } });
+        const logged = h.collect(h.channels.log);
+        await expect(h.fetch('https://example.test/api/users')).rejects.toThrow(TypeError);
+        expect(logged[0]).toMatchObject({ ruleType: 'delay', status: null, finalStatus: 'failed' });
+    });
+
+    test('a fetch redirect reports where it went and what came back', async () => {
+        const h = withRules([redirectRule('https://other.test/v2?secret=s3cr3t')], { originalFetch: jsonResponder('{"moved":true}', 201) });
+        const logged = h.collect(h.channels.log);
+        await h.fetch('https://example.test/api/old');
+        expect(logged).toHaveLength(1);
+        expect(logged[0]).toMatchObject({ ruleType: 'redirect', status: 201, finalStatus: 201 });
+        expect(logged[0].redirectedTo).toMatch(/^https:\/\/other\.test\/v2\?secret=/);
+        expect(logged[0].redirectedTo).not.toMatch(/s3cr3t/);
+        expect(logged[0].elapsedMs).toBeGreaterThanOrEqual(0);
+    });
+
+    test('an XHR delay is logged at loadend', async () => {
+        const h = withRules([delayRule(40)]);
+        const logged = h.collect(h.channels.log);
+        const xhr = h.newXHR();
+        const done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.send();
+        await sleep(10);
+        expect(logged).toHaveLength(0);
+        await done;
+        expect(logged).toHaveLength(1);
+        expect(logged[0]).toMatchObject({ ruleType: 'delay', status: 200, finalStatus: 200 });
+        expect(logged[0].elapsedMs).toBeGreaterThanOrEqual(35);
+    });
+
+    test('an XHR delay that times out reports "failed"', async () => {
+        const h = withRules([delayRule(200)]);
+        const logged = h.collect(h.channels.log);
+        const xhr = h.newXHR();
+        const done = settle(xhr);
+        xhr.open('GET', '/api/users');
+        xhr.timeout = 20;
+        xhr.send();
+        await done;
+        expect(logged).toHaveLength(1);
+        expect(logged[0]).toMatchObject({ ruleType: 'delay', status: null, finalStatus: 'failed' });
+    });
+
+    test('an XHR redirect is logged once, after the response, with its destination', async () => {
+        const h = withRules([redirectRule('https://other.test/v2')]);
+        const logged = h.collect(h.channels.log);
+        const xhr = h.newXHR();
+        const done = settle(xhr);
+        xhr.open('GET', '/api/old');
+        expect(logged).toHaveLength(0);
+        xhr.send();
+        await done;
+        expect(logged).toHaveLength(1);
+        expect(logged[0]).toMatchObject({ ruleType: 'redirect', status: 200, finalStatus: 200, redirectedTo: 'https://other.test/v2' });
+        expect(h.xhrCalls[0].url).toBe('https://other.test/v2');
+    });
+
+    test('an XHR opened for a redirect but never sent logs nothing', async () => {
+        const h = withRules([redirectRule('https://other.test/v2')]);
+        const logged = h.collect(h.channels.log);
+        const xhr = h.newXHR();
+        xhr.open('GET', '/api/old');
+        xhr.open('GET', '/api/elsewhere');
+        await sleep(10);
+        expect(logged).toHaveLength(0);
+    });
+});
+
+describe('PER-19: a patch that does not apply leaves the response alone and says why', () => {
+    const cases = [
+        ['an array root', '[1,2,3]', { added: 1 }, 'Patch skipped — response is not a JSON object (array)'],
+        ['a scalar root', '42', { added: 1 }, 'Patch skipped — response is not a JSON object (number)'],
+        ['an empty patch', '{"a":1}', {}, 'Patch skipped — the patch is empty'],
+        ['invalid JSON', '{not json', { added: 1 }, 'Patch skipped — response body is not valid JSON']
+    ];
+
+    for (const [label, real, patch, note] of cases) {
+        test(`fetch: ${label}`, async () => {
+            const h = withRules([patchRule(patch)], { originalFetch: jsonResponder(real) });
+            const logged = h.collect(h.channels.log);
+            const response = await h.fetch('https://example.test/api/users');
+            expect(await response.text()).toBe(real);
+            expect(response.headers.get('x-splicetap')).toBeNull();
+            expect(logged).toHaveLength(1);
+            expect(logged[0]).toMatchObject({ ruleId: 'r1', status: 200, note });
+        });
+
+        test(`XHR: ${label}`, async () => {
+            const h = withRules([patchRule(patch)], { originalFetch: jsonResponder(real) });
+            const logged = h.collect(h.channels.log);
+            const xhr = h.newXHR();
+            const done = settle(xhr);
+            xhr.open('GET', '/api/users');
+            xhr.send();
+            const result = await done;
+            expect(result.responseText).toBe(real);
+            expect(result.marker).toBeNull();
+            expect(logged).toHaveLength(1);
+            expect(logged[0]).toMatchObject({ ruleId: 'r1', status: 200, note });
+        });
+    }
+
+    test('an object patch on an object still applies, with no note', async () => {
+        const h = withRules([patchRule({ added: 1 })], { originalFetch: jsonResponder('{"a":1}') });
+        const logged = h.collect(h.channels.log);
+        const response = await h.fetch('https://example.test/api/users');
+        expect(await response.json()).toEqual({ a: 1, added: 1 });
+        expect(logged[0].note).toBeUndefined();
+    });
+});

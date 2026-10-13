@@ -38,6 +38,7 @@
     const isCatastrophicRegex = sharedMatcher && sharedMatcher.isCatastrophicRegex;
     const processDynamicResponse = sharedPlaceholders && sharedPlaceholders.processDynamicResponse;
     const jsonMergePatch = sharedPatch && sharedPatch.jsonMergePatch;
+    const isPatchApplicable = sharedPatch && sharedPatch.isPatchApplicable;
 
     // PER-2: the built-ins this file applies to rule data, captured for the
     // same reason. A page that later replaced JSON.stringify or Array.isArray
@@ -217,22 +218,87 @@
     }
 
     // Helper: report an applied rule to content.js -> background (1.5 step 1)
-    function logInterception(rule, url, method, status) {
+    // `outcome` (optional, contract A — PER-54 / PER-56): what happened to
+    // the request in the end. `elapsedMs` from the page's call, `finalStatus`
+    // (a number, or 'failed') the page finally received, `redirectedTo`
+    // (redacted like the URL) and a short human-readable `note`.
+    function logInterception(rule, url, method, status, outcome) {
         // Null until the bootstrap handshake completes. Dispatching on a null
         // name would throw inside the interception path and break the request.
         if (!LOG_INTERCEPTION_EVENT) return;
-        document.dispatchEvent(new CustomEvent(LOG_INTERCEPTION_EVENT, {
-            detail: {
-                ts: Date.now(),
-                url: sanitizeUrlForLog(url),
-                method,
-                ruleId: rule.id,
-                ruleName: rule.name,
-                ruleType: rule.type || 'mock',
-                status
-            }
-        }));
+        const detail = {
+            ts: Date.now(),
+            url: sanitizeUrlForLog(url),
+            method,
+            ruleId: rule.id,
+            ruleName: rule.name,
+            ruleType: rule.type || 'mock',
+            status
+        };
+        if (outcome) addOutcome(detail, outcome);
+        document.dispatchEvent(new CustomEvent(LOG_INTERCEPTION_EVENT, { detail }));
     }
+
+    const LOG_NOTE_MAX = 200;
+    const MAX_REDIRECTED_TO_LENGTH = 2048;
+
+    function addOutcome(detail, outcome) {
+        if (typeof outcome.startedAt === 'number') {
+            detail.elapsedMs = Math.max(0, Math.round(Date.now() - outcome.startedAt));
+        }
+        if (outcome.finalStatus !== undefined) detail.finalStatus = outcome.finalStatus;
+        if (typeof outcome.redirectedTo === 'string') {
+            detail.redirectedTo = sanitizeUrlForLog(outcome.redirectedTo).slice(0, MAX_REDIRECTED_TO_LENGTH);
+        }
+        if (typeof outcome.note === 'string') detail.note = outcome.note.slice(0, LOG_NOTE_MAX);
+    }
+
+    // PER-54: a chaos-mode failure left no trace in the log.
+    function logChaos(url, method, startedAt) {
+        if (!LOG_INTERCEPTION_EVENT) return;
+        const detail = {
+            ts: Date.now(),
+            url: sanitizeUrlForLog(url),
+            method,
+            kind: 'chaos',
+            ruleId: null,
+            ruleName: 'Chaos mode',
+            status: 'failed'
+        };
+        addOutcome(detail, { startedAt });
+        document.dispatchEvent(new CustomEvent(LOG_INTERCEPTION_EVENT, { detail }));
+    }
+
+    /**
+     * PER-56: delay and redirect rules are logged when the real response
+     * settles, with the status the page received, instead of at decision
+     * time as "pending" (delay) or a red "302" (a redirect that worked).
+     */
+    function logWhenSettled(promise, rule, url, method, outcome) {
+        return promise.then((response) => {
+            logInterception(rule, url, method, response.status, objectAssign({ finalStatus: response.status }, outcome));
+            return response;
+        }, (error) => {
+            logInterception(rule, url, method, null, objectAssign({ finalStatus: 'failed' }, outcome));
+            throw error;
+        });
+    }
+
+    /**
+     * PER-19: why jsonMergePatch would leave `target` as it is, or null when
+     * the patch applies. Patching an array-root response with {} used to
+     * serve {} instead of the real data.
+     */
+    function patchSkipReason(target, patch) {
+        if (!isPatchApplicable || isPatchApplicable(target, patch)) return null;
+        if (patch !== null && typeof patch === 'object' && !isArray(patch) && objectKeys(patch).length === 0) {
+            return 'Patch skipped — the patch is empty';
+        }
+        const kind = isArray(target) ? 'array' : (target === null ? 'null' : typeof target);
+        return `Patch skipped — response is not a JSON object (${kind})`;
+    }
+
+    const PATCH_NOT_JSON_NOTE = 'Patch skipped — response body is not valid JSON';
 
     // Helper: redact obviously-sensitive query parameter values and cap length
     // before a URL is persisted into the interception log (S-8). Best-effort:
@@ -745,6 +811,7 @@
         };
 
         async function handleInterceptedFetch(...args) {
+            const startedAt = Date.now();
             const [resource, config] = args;
             const isRequestObj = resource instanceof NativeRequest;
             const isURLObj = resource instanceof NativeURL;
@@ -768,6 +835,7 @@
             if (tmState.settings?.chaosMode?.enabled) {
                 if (getSecureRandom() < (tmState.settings.chaosMode.failureRate || 0.1) && relayAlive()) {
                     log(`Chaos Mode: Blocked ${url}`);
+                    logChaos(url, method, startedAt);
                     return Promise.reject(new TypeError('Failed to fetch (SpliceTap Chaos Mode)'));
                 }
             }
@@ -812,22 +880,31 @@
 
             if (effectiveType === 'delay') {
                 log(`Delaying ${method} ${url} by ${rule.delayMs}ms (Rule: ${rule.name})`);
-                logInterception(rule, url, method, null);
-                await sleepAbortable(rule.delayMs, signal);
-                return originalFetch.apply(this, args);
+                try {
+                    await sleepAbortable(rule.delayMs, signal);
+                } catch (error) {
+                    logInterception(rule, url, method, null, { finalStatus: 'failed', startedAt, note: 'Aborted during the delay' });
+                    throw error;
+                }
+                return logWhenSettled(reflectApply(originalFetch, this, args), rule, url, method, { startedAt });
             }
 
             if (effectiveType === 'redirect') {
                 const newUrl = computeRedirectUrl(url, rule, rawUrl);
                 log(`Redirecting ${method} ${url} -> ${newUrl} (Rule: ${rule.name})`);
-                logInterception(rule, url, method, 302);
-                if (!isRequestObj) return originalFetch.call(this, newUrl, config);
+                const outcome = { startedAt, redirectedTo: newUrl };
+                if (!isRequestObj) {
+                    return logWhenSettled(reflectApply(originalFetch, this, [newUrl, config]), rule, url, method, outcome);
+                }
                 // PER-11: `new Request(newUrl, resource)` carried the body over
                 // as a stream, and Chrome refuses a streaming upload on
                 // HTTP/1.1 — every redirected fetch(Request) with a body failed
                 // with "Failed to fetch". Rebuild the init with a buffered body.
                 const init = await requestInit(resource);
-                return originalFetch.call(this, newUrl, config ? objectAssign(init, config) : init);
+                return logWhenSettled(
+                    reflectApply(originalFetch, this, [newUrl, config ? objectAssign(init, config) : init]),
+                    rule, url, method, outcome
+                );
             }
 
             // effectiveType === 'mock'
@@ -841,10 +918,18 @@
                     data = await real.clone().json();
                 } catch (e) {
                     log('Patch mode: real response is not valid JSON, returning it unmodified', e);
+                    logInterception(rule, url, method, real.status, { note: PATCH_NOT_JSON_NOTE });
                     return real;
                 }
 
                 const patchPayload = processDynamicResponse(cfg.patch, { url, method });
+                // PER-19: a patch that would not change the response leaves
+                // the real one untouched (no markers) and says why in the log.
+                const skipped = patchSkipReason(data, patchPayload);
+                if (skipped) {
+                    logInterception(rule, url, method, real.status, { note: skipped });
+                    return real;
+                }
                 const merged = jsonMergePatch(data, patchPayload);
 
                 if (cfg.delay > 0) {
@@ -998,6 +1083,9 @@
         // PER-16: the request body's upload, emulated for a mocked request.
         let uploadPending = false;
         let uploadTotal = 0;
+        // PER-56: a redirect open() applied, logged once the response settles.
+        let pendingRedirect = null;
+        let logToken = null;
 
         // Store original methods
         const originalOpen = xhr.open;
@@ -1047,6 +1135,25 @@
                 try { patchAbort.abort(); } catch (e) { /* already settled */ }
                 patchAbort = null;
             }
+        }
+
+        /**
+         * PER-56: log `rule` when this request's response settles, with the
+         * status the page received ('failed' for an error, abort or
+         * timeout). A later open() cancels it.
+         */
+        function logAtLoadend(rule, url, method, outcome) {
+            const token = {};
+            logToken = token;
+            const onLoadend = () => {
+                xhr.removeEventListener('loadend', onLoadend);
+                if (logToken !== token) return;
+                logToken = null;
+                const status = xhr.status;
+                logInterception(rule, url, method, status > 0 ? status : null,
+                    objectAssign({ finalStatus: status > 0 ? status : 'failed' }, outcome));
+            };
+            xhr.addEventListener('loadend', onLoadend);
         }
 
         /** setTimeout for the current request only (PER-15). */
@@ -1408,11 +1515,20 @@
                 try {
                     const data = jsonParse(realText);
                     const patchPayload = processDynamicResponse(cfg.patch, { url: requestAbsUrl, method: requestMethod });
+                    // PER-19: a patch that would not change the response
+                    // delivers the real one, and the log says why.
+                    const skipped = patchSkipReason(data, patchPayload);
+                    if (skipped) {
+                        logInterception(rule, requestAbsUrl, requestMethod, real.status, { note: skipped });
+                        finishMock(realText, real.status, real.statusText, realHeaders, rawBody, real.url);
+                        return;
+                    }
                     mergedText = jsonStringify(jsonMergePatch(data, patchPayload));
                 } catch (error) {
                     // Not JSON (or nothing to merge into): deliver the real
                     // response unchanged, as fetch does.
                     log('XHR patch mode: real response is not valid JSON, delivering it unmodified', error);
+                    logInterception(rule, requestAbsUrl, requestMethod, real.status, { note: PATCH_NOT_JSON_NOTE });
                     finishMock(realText, real.status, real.statusText, realHeaders, rawBody, real.url);
                     return;
                 }
@@ -1443,6 +1559,8 @@
             mockDone = false;
             isAborted = false;
             uploadPending = false;
+            pendingRedirect = null;
+            logToken = null;
 
             requestMethod = String(method).toUpperCase();
             requestUrl = url instanceof NativeURL ? url.href : String(url);
@@ -1487,7 +1605,7 @@
                     relayAlive()) {
                     const newUrl = computeRedirectUrl(requestAbsUrl, first, requestUrl);
                     log(`Redirecting XHR ${requestMethod} ${requestUrl} -> ${newUrl} (Rule: ${first.name})`);
-                    logInterception(first, requestAbsUrl, requestMethod, 302);
+                    pendingRedirect = { rule: first, url: requestAbsUrl, redirectedTo: newUrl };
                     finalUrl = newUrl;
                     requestUrl = newUrl;
                     requestAbsUrl = resolveUrl(newUrl);
@@ -1565,13 +1683,23 @@
                 relayAlive()) {
                 log(`Chaos Mode: Blocked XHR ${requestUrl}`);
                 takeOver(body);
-                mockTimeout = later(() => { mockTimeout = null; failRequest('error'); }, 100);
+                mockTimeout = later(() => {
+                    mockTimeout = null;
+                    logChaos(requestAbsUrl, requestMethod, sendStart);
+                    failRequest('error');
+                }, 100);
                 return undefined;
             }
 
             // A redirect rule was already applied (URL rewritten) in open() —
-            // the real network call now goes to the redirected URL, nothing more to do here.
+            // the real network call now goes to the redirected URL; it is
+            // logged when that response settles (PER-56).
             if (redirectHandled) {
+                if (pendingRedirect) {
+                    logAtLoadend(pendingRedirect.rule, pendingRedirect.url, requestMethod,
+                        { startedAt: sendStart, redirectedTo: pendingRedirect.redirectedTo });
+                    pendingRedirect = null;
+                }
                 return reflectApply(originalSend, this, arguments);
             }
 
@@ -1643,7 +1771,7 @@
             if (effectiveType === 'redirect') {
                 const newUrl = computeRedirectUrl(requestAbsUrl, rule, requestUrl);
                 log(`Redirecting XHR ${requestMethod} ${requestUrl} -> ${newUrl} (Rule: ${rule.name})`);
-                logInterception(rule, requestAbsUrl, requestMethod, 302);
+                logAtLoadend(rule, requestAbsUrl, requestMethod, { startedAt: sendStart, redirectedTo: newUrl });
                 reflectApply(originalOpen, xhr, [openMethod, newUrl, ...openRest]);
                 for (let i = 0; i < requestHeaderList.length; i++) {
                     reflectApply(originalSetRequestHeader, xhr, requestHeaderList[i]);
@@ -1703,7 +1831,7 @@
                 // fires this request's loadstart (and upload events), once,
                 // when it leaves.
                 isMocked = true;
-                logInterception(rule, requestUrl, requestMethod, null);
+                logAtLoadend(rule, requestAbsUrl, requestMethod, { startedAt: sendStart });
 
                 // PER-17: the hold counts toward xhr.timeout. A delay of at
                 // least the timeout times out at the timeout, as the real
