@@ -283,6 +283,94 @@ describe('F3 — the requestBody rule type', () => {
     });
 });
 
+describe('F4 — mock response mode "code"', () => {
+    const codeMock = (response, overrides = {}) => mock({ response, ...overrides });
+
+    test('LIMITS.CODE_MAX is 20000, shared and re-exported by the schema', () => {
+        expect(common.LIMITS.CODE_MAX).toBe(20000);
+        expect(S.LIMITS.CODE_MAX).toBe(20000);
+    });
+
+    test('accepts a code response with only mode and code', () => {
+        expect(S.validateRule(codeMock({ mode: 'code', code: 'return { ok: true };' }))).toEqual({ valid: true, errors: [] });
+    });
+
+    test('code mode does not need a body, a patch or even a status code', () => {
+        expect(isValid(codeMock({ mode: 'code', code: 'return 1' }))).toBe(true);
+        expect(isValid(codeMock({ mode: 'code', code: 'return 1', statusCode: 201, headers: { 'X-A': '1' }, delay: 250 }))).toBe(true);
+    });
+
+    test('a status code that is given in code mode is still checked', () => {
+        expect(joined(codeMock({ mode: 'code', code: 'return 1', statusCode: 99 }))).toMatch(/Invalid status code/);
+        expect(joined(codeMock({ mode: 'code', code: 'return 1', statusCode: '200' }))).toMatch(/Invalid status code/);
+    });
+
+    test('static mode still requires a status code (code mode did not loosen it)', () => {
+        expect(joined(codeMock({ mode: 'static', body: {} }))).toMatch(/Invalid status code/);
+        expect(joined(codeMock({ body: {} }))).toMatch(/Invalid status code/);
+    });
+
+    test('code is required and must be non-empty text', () => {
+        const message = 'Code response needs code: 1 to 20000 characters of JavaScript, written as the body of an async function.';
+        for (const code of [undefined, null, '', 5, true, {}, ['return 1']]) {
+            expect(errorsOf(codeMock({ mode: 'code', code }))).toEqual([message]);
+        }
+    });
+
+    test('code is limited to 20000 characters, counted exactly', () => {
+        expect(isValid(codeMock({ mode: 'code', code: 'x'.repeat(20000) }))).toBe(true);
+        expect(errorsOf(codeMock({ mode: 'code', code: 'x'.repeat(20001) }))).toEqual(['Code response is too long (max 20000 characters).']);
+        expect(isValid(codeMock({ mode: 'code', code: 'x' }))).toBe(true);
+    });
+
+    test('the schema does not compile the code: it only checks presence and size', () => {
+        expect(isValid(codeMock({ mode: 'code', code: 'this is ( not javascript' }))).toBe(true);
+    });
+
+    test('the other response checks still apply in code mode', () => {
+        expect(joined(codeMock({ mode: 'code', code: 'return 1', delay: 99999 }))).toMatch(/^Delay must be between/);
+        expect(joined(codeMock({ mode: 'code', code: 'return 1', headers: { 'X-A': { n: 1 } } }))).toMatch(/^Response headers/);
+    });
+
+    test('the mode message names all three modes', () => {
+        expect(joined(codeMock({ statusCode: 200, mode: 'stream' }))).toBe('Response mode must be "static", "patch" or "code", not "stream"');
+        expect(joined(codeMock({ statusCode: 200, mode: 'Code' }))).toMatch(/^Response mode must be/);
+    });
+
+    test('a stray code field is ignored in static and patch modes', () => {
+        expect(isValid(codeMock({ statusCode: 200, mode: 'static', body: {}, code: 5 }))).toBe(true);
+        expect(isValid(codeMock({ mode: 'patch', patch: {}, code: 'x'.repeat(30000) }))).toBe(true);
+    });
+
+    test('mode "code" is refused on every non-mock type, named by type', () => {
+        const withCode = { mode: 'code', code: 'return 1' };
+        const others = [
+            block({ response: withCode }),
+            redirect({ response: withCode }),
+            { name: 'R', type: 'delay', match: { url: '*/x*', method: '*' }, delayMs: 100, response: withCode },
+            { name: 'R', type: 'headers', match: { url: '*/x*', method: '*' }, headersMod: { request: [{ op: 'remove', name: 'X-A' }] }, response: withCode },
+            { name: 'R', type: 'queryparams', match: { url: '*/x*', method: '*' }, queryParams: { add: [{ key: 'k', value: 'v' }] }, response: withCode },
+            reqBody({ mode: 'patch', patch: { a: 1 } }, { response: withCode })
+        ];
+        for (const rule of others) {
+            expect(errorsOf(rule)).toEqual([`Code response is only available on mock rules, not ${rule.type} rules`]);
+        }
+    });
+
+    test('a stray response with another mode on a non-mock rule is still ignored', () => {
+        expect(isValid(block({ response: { mode: 'static', body: {} } }))).toBe(true);
+        expect(isValid(block({ response: { mode: 'patch' } }))).toBe(true);
+        expect(isValid(block({ response: 'junk' }))).toBe(true);
+    });
+
+    test('every code error opens with the words the editor maps to the code field', () => {
+        for (const response of [{ mode: 'code' }, { mode: 'code', code: 'x'.repeat(20001) }, { mode: 'code', code: 'x' }]) {
+            for (const message of errorsOf(codeMock(response))) expect(message).toMatch(/^Code response/);
+        }
+        expect(joined(block({ response: { mode: 'code', code: 'x' } }))).toMatch(/^Code response/);
+    });
+});
+
 describe('every rule type has a valid minimal rule (guards a new type being added half-way)', () => {
     const minimal = {
         mock: () => mock(),
