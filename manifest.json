@@ -8,6 +8,9 @@
     "contextMenus",
     "declarativeNetRequestWithHostAccess"
   ],
+  "optional_permissions": [
+    "webRequest"
+  ],
   "host_permissions": [
     "<all_urls>"
   ],

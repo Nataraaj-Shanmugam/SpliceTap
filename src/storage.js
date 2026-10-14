@@ -28,7 +28,13 @@ export class SpliceTapStorage {
             chaosMode: {
                 enabled: false,
                 failureRate: 0.1
-            }
+            },
+            // F2: log header, query-param and all-request rules seen on the
+            // network. Needs the optional webRequest permission as well.
+            observeNetworkRules: false,
+            // F4: run mock rules' code responses in the page. Off until the
+            // user turns it on in Settings.
+            allowCodeResponses: false
         };
 
         this.defaultStats = {
