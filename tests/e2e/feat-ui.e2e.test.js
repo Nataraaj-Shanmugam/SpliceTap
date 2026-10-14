@@ -286,6 +286,10 @@ describe('popup + panel (G4b)', () => {
             await waitFor(async () => (await sentSettings()).length === 1, { label: 'settingsUpdated' });
             const [sent] = await sentSettings();
             expect(sent.settings.allowCodeResponses).toBe(true);
+            // settingsUpdated replaces the stored object, so the whole of it is sent,
+            // with the booleans as booleans.
+            expect(sent.settings).toMatchObject({ theme: 'dark', observeNetworkRules: false, allowCodeResponses: true });
+            expect(sent.settings.chaosMode).toBeDefined();
             expect((await settingsNow()).allowCodeResponses).toBe(true);
             expect(await noteText('codeWarn')).toMatch(/JavaScript/);
             expect(await popup.$eval('#allowCodeResponses', (el) => el.getAttribute('aria-describedby'))).toBe('codeWarn');
@@ -759,6 +763,28 @@ describe('popup + panel (G4b)', () => {
             expect((await row('Swap script')).status).toMatch(/redirected via https:\/\/example\.com\/a\.js/);
             // Interceptor entries are unchanged.
             expect(await row('Plain mock')).toMatchObject({ badge: 'mock', status: '200', note: null });
+        });
+
+        test('observer and request-body entries with no numeric status stay out of the 2xx rate', async () => {
+            await h.reset();
+            for (const id of ['a', 'b', 'c', 'd']) await h.saveRule(mock(id));
+            const t0 = Date.now();
+            const entry = (n, over) => ({ ts: t0 + n, url: `${h.baseUrl}/api/${over.ruleId}`, method: 'GET', kind: 'rule', ...over });
+            await h.bg({
+                type: 'logInterceptionBatch',
+                entries: [
+                    entry(0, { ruleId: 'a', ruleName: 'Seen, no status', ruleType: 'headers', note: OBSERVED }),
+                    entry(1, { ruleId: 'b', ruleName: 'Seen, 500', ruleType: 'headers', finalStatus: 500, note: OBSERVED }),
+                    entry(2, { ruleId: 'c', ruleName: 'Body, no status', ruleType: 'requestBody', note: 'Request body replaced' }),
+                    entry(3, { ruleId: 'd', ruleName: 'Mock 200', ruleType: 'mock', status: 200 })
+                ]
+            });
+            panel = await h.browser.newPage();
+            await panel.setViewport({ width: 900, height: 600 });
+            await panel.goto(h.extUrl('devtools/panel.html'), { waitUntil: 'load' });
+            await waitFor(async () => (await panel.$$('#requestItems [role="row"]')).length === 4, { label: 'four rows' });
+            // One 200 and one 500 count; the two without a status do not.
+            expect(await panel.$eval('#successRate', (el) => el.textContent)).toBe('50%');
         });
 
         test('the type filter has a "Request body" option that shows only those entries', async () => {
