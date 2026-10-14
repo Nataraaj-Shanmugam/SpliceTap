@@ -747,6 +747,12 @@ describe('templates — PER-9 and PER-24', () => {
         if (t.type === 'delay') rule.delayMs = t.delayMs;
         if (t.type === 'redirect') rule.redirect = { destination: t.redirectDestination };
         if (t.type === 'headers') rule.headersMod = { request: t.headersModRequest || [], response: t.headersModResponse || [] };
+        // F3: the requestBody template carries its object in flat fields.
+        if (t.type === 'requestBody') {
+            rule.requestBody = { mode: t.requestBodyMode };
+            if (t.requestBodyMode === 'patch') rule.requestBody.patch = JSON.parse(t.requestBodyPatch);
+            else rule.requestBody.body = t.requestBodyBody;
+        }
         return rule;
     };
 

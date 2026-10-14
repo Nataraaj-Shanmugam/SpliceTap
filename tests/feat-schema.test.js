@@ -371,6 +371,60 @@ describe('F4 — mock response mode "code"', () => {
     });
 });
 
+describe('template — "Modify request body (JSON patch)"', () => {
+    const meta = templates.listTemplates().find((t) => t.id === 'modifyRequestBody');
+
+    // The rule the editor saves from the template's flat fields.
+    const ruleFrom = (t) => ({
+        name: meta.label, enabled: true, type: t.type,
+        match: { url: t.url, method: t.method },
+        requestBody: { mode: t.requestBodyMode, patch: JSON.parse(t.requestBodyPatch) }
+    });
+
+    test('is listed with the label the editor shows', () => {
+        expect(meta).toEqual({
+            id: 'modifyRequestBody',
+            label: 'Modify request body (JSON patch)',
+            description: expect.any(String)
+        });
+        expect(meta.description.length).toBeGreaterThan(0);
+    });
+
+    test('is a requestBody patch rule on */api/*, any method, patching { debug: true }', () => {
+        const t = templates.getTemplate('modifyRequestBody');
+        expect(t.type).toBe('requestBody');
+        expect(t.url).toBe('*/api/*');
+        expect(t.method).toBe('*');
+        expect(t.requestBodyMode).toBe('patch');
+        expect(JSON.parse(t.requestBodyPatch)).toEqual({ debug: true });
+    });
+
+    test('passes the schema as the editor would save it', () => {
+        const t = templates.getTemplate('modifyRequestBody');
+        expect(S.validateRule(ruleFrom(t))).toEqual({ valid: true, errors: [] });
+        expect(S.validateUrlPattern(t.url).isValid).toBe(true);
+    });
+
+    test('it is the schema that makes the template valid: the same rule with GET is refused', () => {
+        const rule = ruleFrom(templates.getTemplate('modifyRequestBody'));
+        rule.match.method = 'GET';
+        expect(isValid(rule)).toBe(false);
+    });
+
+    test('is last, so the first template an editor offers is unchanged', () => {
+        const ids = templates.listTemplates().map((t) => t.id);
+        expect(ids[0]).toBe('graphqlMock');
+        expect(ids[ids.length - 1]).toBe('modifyRequestBody');
+        expect(new Set(ids).size).toBe(ids.length);
+    });
+
+    test('getTemplate returns a copy, so an editor cannot corrupt the shared patch', () => {
+        const first = templates.getTemplate('modifyRequestBody');
+        first.requestBodyPatch = 'MUTATED';
+        expect(templates.getTemplate('modifyRequestBody').requestBodyPatch).toContain('debug');
+    });
+});
+
 describe('every rule type has a valid minimal rule (guards a new type being added half-way)', () => {
     const minimal = {
         mock: () => mock(),
