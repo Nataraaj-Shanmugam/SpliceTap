@@ -46,7 +46,8 @@
     // back empty after a reload. Refuse well short of that.
     const JSON_DEPTH_MAX = 64;
 
-    const RULE_TYPES = ['mock', 'block', 'delay', 'redirect', 'headers', 'queryparams'];
+    // F3: 'requestBody' rewrites the outgoing body of fetch/XHR in the page.
+    const RULE_TYPES = ['mock', 'block', 'delay', 'redirect', 'headers', 'queryparams', 'requestBody'];
 
     // What the editors offer. Also the set declarativeNetRequest accepts as a
     // requestMethods value (lowercased), so a headers/queryparams rule with
@@ -54,6 +55,10 @@
     const METHODS = ['*', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
     const RESPONSE_MODES = ['static', 'patch'];
+
+    // F3: how a requestBody rule changes the body. Unlike a mock response,
+    // there is no default mode — the rule has to say what it does.
+    const REQUEST_BODY_MODES = ['static', 'patch'];
 
     // F1: where a redirect or block rule applies. 'page' (the default when the
     // field is absent) is fetch/XHR only, handled in the page; 'all' adds every
@@ -400,6 +405,46 @@
         }
     }
 
+    /**
+     * F3: the `requestBody` object of a requestBody rule. Every message opens
+     * with "Request body" so the editors can tell them from the rest; the
+     * second word group says which field ("mode", "(static)", "(patch)").
+     */
+    function validateRequestBody(config, errors) {
+        if (!isPlainObject(config)) {
+            errors.push('Request body settings are required');
+            return;
+        }
+        const mode = config.mode;
+        if (mode === undefined) {
+            errors.push('Request body mode is required: "static" or "patch"');
+        } else if (!REQUEST_BODY_MODES.includes(mode)) {
+            const shown = typeof mode === 'string' ? `, not "${mode.slice(0, 30)}"` : '';
+            errors.push(`Request body mode must be "static" or "patch"${shown}`);
+        }
+
+        if (mode === 'static') {
+            const body = config.body;
+            // An empty string is a real body (it empties the request), so only
+            // an absent body is "missing".
+            if (body === undefined) {
+                errors.push('Request body (static) needs a "body" — an empty string is allowed');
+            } else if (typeof body !== 'string' && !Array.isArray(body) && !isPlainObject(body)) {
+                errors.push('Request body (static) must be text, a JSON object or a JSON array');
+            }
+        } else if (mode === 'patch' && !isPlainObject(config.patch)) {
+            errors.push('Request body (patch) must be a JSON object, like {"debug": true}');
+        }
+
+        // PER-30 applies to whatever is stored, whichever mode is chosen.
+        if (config.body !== undefined && exceedsDepth(config.body, JSON_DEPTH_MAX)) {
+            errors.push(`Request body (static) is nested more than ${JSON_DEPTH_MAX} levels deep, which cannot be stored reliably. Flatten it.`);
+        }
+        if (config.patch !== undefined && exceedsDepth(config.patch, JSON_DEPTH_MAX)) {
+            errors.push(`Request body (patch) is nested more than ${JSON_DEPTH_MAX} levels deep, which cannot be stored reliably. Flatten it.`);
+        }
+    }
+
     function validateDelay(value, min, max, errors) {
         // PER-25: a number, and a whole one. parseInt used to accept "300ms"
         // (and read "2e3" as 2), which then waited about 0 ms at runtime.
@@ -468,6 +513,10 @@
             errors.push('HTTP method is required');
         } else if (!METHODS.includes(String(match.method).toUpperCase())) {
             errors.push(`HTTP method must be one of ${METHODS.join(', ')}`);
+        } else if (type === 'requestBody' && ['GET', 'HEAD'].includes(String(match.method).toUpperCase())) {
+            // F3: a GET or HEAD request has no body to change. Opens with
+            // "HTTP method" so it lands on the method field, not the body.
+            errors.push('HTTP method for a request body rule cannot be GET or HEAD, because those requests carry no body. Use POST, PUT, PATCH, DELETE or Any (*).');
         }
 
         if (isPlainObject(match)) {
@@ -543,6 +592,8 @@
             }
         } else if (type === 'queryparams') {
             errors.push(...validateQueryParams(rule.queryParams || {}).errors);
+        } else if (type === 'requestBody') {
+            validateRequestBody(rule.requestBody, errors);
         }
 
         // headers/queryparams are applied by declarativeNetRequest, which

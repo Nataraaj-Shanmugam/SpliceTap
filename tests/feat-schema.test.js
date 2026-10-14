@@ -124,3 +124,178 @@ describe('F1 — appliesTo on redirect and block rules', () => {
         expect(S.APPLIES_TO).toEqual(['page', 'all']);
     });
 });
+
+describe('F3 — the requestBody rule type', () => {
+    test('requestBody is a known rule type', () => {
+        expect(S.RULE_TYPES).toContain('requestBody');
+        expect(joined(reqBody({ mode: 'patch', patch: { a: 1 } }))).not.toMatch(/Unknown rule type/);
+    });
+
+    test('accepts a static rule with an object, an array, text or an empty string', () => {
+        for (const body of [{ user: 'a' }, [1, 2], 'plain text', '', '{"already":"json"}']) {
+            expect(S.validateRule(reqBody({ mode: 'static', body }))).toEqual({ valid: true, errors: [] });
+        }
+    });
+
+    test('accepts a patch rule with an object patch', () => {
+        expect(S.validateRule(reqBody({ mode: 'patch', patch: { debug: true } }))).toEqual({ valid: true, errors: [] });
+        expect(isValid(reqBody({ mode: 'patch', patch: {} }))).toBe(true);
+    });
+
+    test('match is validated like a mock rule: url, headers and graphql', () => {
+        const rb = { mode: 'patch', patch: { a: 1 } };
+        expect(joined(reqBody(rb, { match: { url: '', method: 'POST' } }))).toMatch(/URL pattern is required/);
+        expect(joined(reqBody(rb, { match: { url: '/(a|a)+$/', method: 'POST' } }))).toMatch(/Invalid URL pattern/);
+        expect(joined(reqBody(rb, { match: { url: '*/x*', method: 'FOO' } }))).toMatch(/^HTTP method must be one of/);
+        expect(joined(reqBody(rb, { match: { url: '*/x*', method: 'POST', headers: { 'bad name': '1' } } }))).toMatch(/^Match request headers/);
+        expect(joined(reqBody(rb, { match: { url: '*/x*', method: 'POST', graphql: {} } }))).toMatch(/^A GraphQL condition needs an operationName/);
+        // Header and GraphQL conditions ARE allowed here, unlike redirect.
+        expect(isValid(reqBody(rb, { match: { url: '*/graphql*', method: 'POST', headers: { 'X-A': '1' }, graphql: { operationName: 'getUsers' } } }))).toBe(true);
+    });
+
+    test('method GET and HEAD are refused in any letter case; the other methods and * are allowed', () => {
+        const rb = { mode: 'patch', patch: { a: 1 } };
+        for (const method of ['GET', 'HEAD', 'get', 'Head']) {
+            const errors = errorsOf(reqBody(rb, { match: { url: '*/x*', method } }));
+            expect(errors).toHaveLength(1);
+            expect(errors[0]).toMatch(/^HTTP method for a request body rule cannot be GET or HEAD/);
+        }
+        for (const method of ['*', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'post']) {
+            expect(isValid(reqBody(rb, { match: { url: '*/x*', method } }))).toBe(true);
+        }
+    });
+
+    test('GET is still fine for every other type (the refusal is requestBody-only)', () => {
+        expect(isValid(mock({ match: { url: '*/x*', method: 'GET' } }))).toBe(true);
+        expect(isValid(block({ match: { url: '*/x*', method: 'HEAD' } }))).toBe(true);
+    });
+
+    test('a missing method is reported once, as "required"', () => {
+        expect(errorsOf(reqBody({ mode: 'patch', patch: { a: 1 } }, { match: { url: '*/x*' } })))
+            .toEqual(['HTTP method is required']);
+    });
+
+    test('the requestBody object is required', () => {
+        expect(errorsOf(reqBody(undefined))).toEqual(['Request body settings are required']);
+        for (const bad of [null, 'static', [], 5]) {
+            expect(errorsOf(reqBody(bad))).toEqual(['Request body settings are required']);
+        }
+    });
+
+    test('mode is required — there is no default', () => {
+        expect(errorsOf(reqBody({ body: 'x' }))).toEqual(['Request body mode is required: "static" or "patch"']);
+        expect(errorsOf(reqBody({ patch: {} }))).toEqual(['Request body mode is required: "static" or "patch"']);
+    });
+
+    test('an unknown mode is refused by name; "code" is for mock responses only', () => {
+        expect(errorsOf(reqBody({ mode: 'append', body: 'x' }))).toEqual(['Request body mode must be "static" or "patch", not "append"']);
+        expect(errorsOf(reqBody({ mode: 'code', code: 'return 1' }))).toEqual(['Request body mode must be "static" or "patch", not "code"']);
+        expect(errorsOf(reqBody({ mode: 7, body: 'x' }))).toEqual(['Request body mode must be "static" or "patch"']);
+        expect(errorsOf(reqBody({ mode: 'x'.repeat(500) }))[0].length).toBeLessThan(100);
+    });
+
+    test('static mode requires a body, but an empty string counts as one', () => {
+        expect(errorsOf(reqBody({ mode: 'static' }))).toEqual(['Request body (static) needs a "body" — an empty string is allowed']);
+        expect(isValid(reqBody({ mode: 'static', body: '' }))).toBe(true);
+    });
+
+    test('a static body must be text, an object or an array — not null, a number or a boolean', () => {
+        for (const body of [null, 5, true, false]) {
+            expect(errorsOf(reqBody({ mode: 'static', body }))).toEqual(['Request body (static) must be text, a JSON object or a JSON array']);
+        }
+    });
+
+    test('patch mode requires a non-array object patch', () => {
+        const message = 'Request body (patch) must be a JSON object, like {"debug": true}';
+        expect(errorsOf(reqBody({ mode: 'patch' }))).toEqual([message]);
+        for (const patch of [null, [1, 2], 'text', 5, true]) {
+            expect(errorsOf(reqBody({ mode: 'patch', patch }))).toEqual([message]);
+        }
+    });
+
+    test('a patch field does not matter in static mode, nor a body in patch mode', () => {
+        expect(isValid(reqBody({ mode: 'static', body: 'x', patch: [1] }))).toBe(true);
+        expect(isValid(reqBody({ mode: 'patch', patch: { a: 1 }, body: null }))).toBe(true);
+    });
+
+    test('the depth limit of 64 applies to the body and to the patch', () => {
+        const nest = (levels) => {
+            let value = 'leaf';
+            for (let i = 0; i < levels; i++) value = { n: value };
+            return value;
+        };
+        // nest(64) is a 64-level container chain; nest(65) is 65.
+        expect(isValid(reqBody({ mode: 'static', body: nest(64) }))).toBe(true);
+        expect(errorsOf(reqBody({ mode: 'static', body: nest(65) })))
+            .toEqual(['Request body (static) is nested more than 64 levels deep, which cannot be stored reliably. Flatten it.']);
+        expect(isValid(reqBody({ mode: 'patch', patch: nest(64) }))).toBe(true);
+        expect(errorsOf(reqBody({ mode: 'patch', patch: nest(65) })))
+            .toEqual(['Request body (patch) is nested more than 64 levels deep, which cannot be stored reliably. Flatten it.']);
+        // An array counts as a level too.
+        let arrays = 'leaf';
+        for (let i = 0; i < 65; i++) arrays = [arrays];
+        expect(joined(reqBody({ mode: 'static', body: arrays }))).toMatch(/nested more than 64 levels/);
+    });
+
+    test('a cyclic body is refused rather than hanging the validator', () => {
+        const body = {};
+        body.self = body;
+        expect(joined(reqBody({ mode: 'static', body }))).toMatch(/nested more than 64 levels/);
+    });
+
+    test('a stray requestBody on any other type is ignored, even a malformed one', () => {
+        const stray = [{ mode: 'nonsense' }, null, 'junk', { mode: 'static' }, { mode: 'patch', patch: [1] }];
+        const others = [
+            (rb) => mock({ requestBody: rb }),
+            (rb) => block({ requestBody: rb }),
+            (rb) => redirect({ requestBody: rb }),
+            (rb) => ({ name: 'R', type: 'delay', match: { url: '*/x*', method: '*' }, delayMs: 100, requestBody: rb }),
+            (rb) => ({ name: 'R', type: 'headers', match: { url: '*/x*', method: '*' }, headersMod: { request: [{ op: 'remove', name: 'X-A' }] }, requestBody: rb }),
+            (rb) => ({ name: 'R', type: 'queryparams', match: { url: '*/x*', method: '*' }, queryParams: { add: [{ key: 'k', value: 'v' }] }, requestBody: rb })
+        ];
+        for (const make of others) {
+            for (const rb of stray) expect(S.validateRule(make(rb))).toEqual({ valid: true, errors: [] });
+        }
+    });
+
+    test('a stray mock response on a requestBody rule is ignored too', () => {
+        const rule = reqBody({ mode: 'patch', patch: { a: 1 } }, { response: { mode: 'stream' } });
+        expect(S.validateRule(rule)).toEqual({ valid: true, errors: [] });
+    });
+
+    test('every error carries the opening words the editor maps to a field', () => {
+        const rb = (requestBody, match) => reqBody(requestBody, match ? { match } : {});
+        const cases = [
+            [rb(undefined), /^Request body settings/],
+            [rb({}), /^Request body mode/],
+            [rb({ mode: 'x' }), /^Request body mode/],
+            [rb({ mode: 'static' }), /^Request body \(static\)/],
+            [rb({ mode: 'static', body: 1 }), /^Request body \(static\)/],
+            [rb({ mode: 'patch' }), /^Request body \(patch\)/],
+            [rb({ mode: 'patch', patch: [] }), /^Request body \(patch\)/],
+            [rb({ mode: 'patch', patch: {} }, { url: '*/x*', method: 'GET' }), /^HTTP method/]
+        ];
+        for (const [rule, opening] of cases) {
+            const errors = errorsOf(rule);
+            expect(errors.length).toBeGreaterThan(0);
+            for (const message of errors) expect(message).toMatch(opening);
+        }
+    });
+});
+
+describe('every rule type has a valid minimal rule (guards a new type being added half-way)', () => {
+    const minimal = {
+        mock: () => mock(),
+        block: () => block(),
+        delay: () => ({ name: 'R', type: 'delay', match: { url: '*/x*', method: '*' }, delayMs: 100 }),
+        redirect: () => redirect(),
+        headers: () => ({ name: 'R', type: 'headers', match: { url: '*/x*', method: '*' }, headersMod: { request: [{ op: 'remove', name: 'X-A' }] } }),
+        queryparams: () => ({ name: 'R', type: 'queryparams', match: { url: '*/x*', method: '*' }, queryParams: { add: [{ key: 'k', value: 'v' }] } }),
+        requestBody: () => reqBody({ mode: 'patch', patch: { debug: true } })
+    };
+
+    test.each(S.RULE_TYPES)('%s', (type) => {
+        expect(minimal[type]).toBeDefined();
+        expect(S.validateRule(minimal[type]())).toEqual({ valid: true, errors: [] });
+    });
+});
