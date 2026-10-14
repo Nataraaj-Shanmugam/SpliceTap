@@ -9,7 +9,7 @@
          Selector contract with panel.js is unchanged: #totalRequests,
          #mockedRequests, #activeRules, #successRate, #errorContainer,
          #logAnnouncer, #requestsList, #requestTable, #requestItems,
-         #emptyState, #pauseBtn, #clearRequestsBtn, #filterText, #filterType,
+         #emptyState, #pauseBtn, #exportHarBtn, #clearRequestsBtn, #filterText, #filterType,
          .request-item(.request-item-header), .col-header, .request-method +
          .method-*, .request-url/.url-toggle, .rule-info/.rule-name,
          .rule-type-badge[data-type], .request-status + .status-*, .timestamp,
@@ -219,7 +219,10 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 12px;
+            /* F5: three actions no longer fit beside the heading in a narrow
+               DevTools dock, so the row wraps instead of squeezing a label. */
+            flex-wrap: wrap;
+            gap: 8px 12px;
         }
 
         .section-header h2 {
@@ -234,8 +237,9 @@
             gap: 6px;
         }
 
-        /* ── Pause / Clear ────────────────────────────────────────────── */
+        /* ── Pause / Export / Clear ───────────────────────────────────── */
         .pause-btn,
+        .export-btn,
         .clear-btn {
             display: inline-flex;
             align-items: center;
@@ -246,6 +250,7 @@
             font-family: var(--font-main);
             font-size: 11px;
             font-weight: 600;
+            white-space: nowrap;
             cursor: pointer;
             transition: background-color 0.15s var(--ease), border-color 0.15s var(--ease), color 0.15s var(--ease);
         }
@@ -295,6 +300,17 @@
         .pause-btn[aria-pressed="true"] {
             background: rgba(148, 163, 184, 0.28);
             border-color: var(--text-muted);
+        }
+
+        /* F5: a plain action — neutral like Pause, but without its live dot. */
+        .export-btn {
+            background: rgba(148, 163, 184, 0.10);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+        }
+
+        .export-btn:hover {
+            background: rgba(148, 163, 184, 0.18);
         }
 
         .clear-btn {
@@ -726,6 +742,7 @@
 
         /* ── Focus ────────────────────────────────────────────────────── */
         .pause-btn:focus-visible,
+        .export-btn:focus-visible,
         .clear-btn:focus-visible,
         .dismiss-btn:focus-visible,
         .url-toggle:focus-visible,
@@ -760,8 +777,10 @@
         body.theme-light .rule-type-badge[data-type="queryparams"] { background: rgba(124, 58, 237, 0.12); color: #6d28d9; }
         body.theme-light .rule-type-badge[data-type="chaos"] { background: rgba(192, 38, 211, 0.12); color: #86198f; }
 
-        body.theme-light .pause-btn { background: rgba(15, 23, 42, 0.05); color: var(--text-main); }
-        body.theme-light .pause-btn:hover { background: rgba(15, 23, 42, 0.09); }
+        body.theme-light .pause-btn,
+        body.theme-light .export-btn { background: rgba(15, 23, 42, 0.05); color: var(--text-main); }
+        body.theme-light .pause-btn:hover,
+        body.theme-light .export-btn:hover { background: rgba(15, 23, 42, 0.09); }
         body.theme-light .pause-btn[aria-pressed="true"] { background: rgba(15, 23, 42, 0.16); border-color: var(--text-muted); }
         body.theme-light .pause-btn[aria-pressed="false"] {
             color: var(--signal-text);
@@ -797,6 +816,7 @@
             .filter-input,
             .filter-select,
             .pause-btn,
+            .export-btn,
             .clear-btn,
             .error-state {
                 border-color: CanvasText;
@@ -877,6 +897,8 @@
                 <h2 id="logHeading">Intercepted Requests</h2>
                 <div class="section-header-actions">
                     <button type="button" class="pause-btn" id="pauseBtn" aria-pressed="false">Pause</button>
+                    <!-- F5: downloads the whole log, plus any captured response bodies, as a HAR file -->
+                    <button type="button" class="export-btn" id="exportHarBtn" title="Download the log as a HAR file, with captured response bodies">Export HAR</button>
                     <button type="button" class="clear-btn" id="clearRequestsBtn">Clear</button>
                 </div>
             </div>
@@ -934,6 +956,7 @@
     </main>
 
     <script src="../src/common.js"></script>
+    <script src="har.js"></script>
     <script src="panel.js"></script>
 </body>
 </html>

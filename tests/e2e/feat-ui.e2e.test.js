@@ -9,6 +9,9 @@
  * background is asked afterwards what it actually stored.
  */
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { launch, waitFor, sleep, auditA11y } = require('./harness');
 
 const POPUP_SIZE = { width: 400, height: 600 };
@@ -467,6 +470,212 @@ describe('popup + panel (G4b)', () => {
             await openPopup({ forcedColors: true, fakeRules: [redirect('ra', { appliesTo: 'all' })] });
             const border = await popup.$eval('.rule-scope-chip', (c) => window.getComputedStyle(c).borderTopWidth);
             expect(border).toBe('1px');
+        });
+    });
+
+    // ---- F5: HAR export from the DevTools panel -------------------------------
+
+    describe('F5: Export HAR', () => {
+        let panel;
+        let downloadDir;
+        let browserCdp;
+
+        afterEach(async () => {
+            if (panel && !panel.isClosed()) await panel.close();
+            panel = null;
+            if (downloadDir) fs.rmSync(downloadDir, { recursive: true, force: true });
+            downloadDir = null;
+        });
+
+        const users = () => `${h.baseUrl}/api/users?page=2&sort=name`;
+
+        async function logEntries(entries) {
+            const response = await h.bg({ type: 'logInterceptionBatch', entries });
+            expect(response).toMatchObject({ success: true, accepted: entries.length });
+        }
+
+        async function captureBody(fields) {
+            await h.bg({ type: 'setCaptureArmed', armed: true });
+            await h.bg({ type: 'logCapture', entry: { ts: Date.now(), status: 200, statusText: 'OK', contentType: 'application/json', headers: {}, ...fields } });
+        }
+
+        /** Open the panel with the browser told to save downloads into a temp dir. */
+        async function openPanel() {
+            downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'splicetap-har-'));
+            // Browser.setDownloadBehavior is a browser-level command; a page's
+            // own session does not accept it.
+            browserCdp = browserCdp || await h.browser.target().createCDPSession();
+            const suggested = [];
+            browserCdp.removeAllListeners('Browser.downloadWillBegin');
+            browserCdp.on('Browser.downloadWillBegin', (event) => suggested.push(event.suggestedFilename));
+            await browserCdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDir, eventsEnabled: true });
+
+            panel = await h.browser.newPage();
+            panel.on('pageerror', (e) => h.record({ where: 'panel', text: 'pageerror: ' + e.message }));
+            panel.on('console', (m) => { if (m.type() === 'error') h.record({ where: 'panel', text: m.text() }); });
+            await panel.setViewport({ width: 900, height: 600 });
+            await panel.goto(h.extUrl('devtools/panel.html'), { waitUntil: 'load' });
+            return { suggested };
+        }
+
+        /** Click Export HAR and return the saved file's name and parsed JSON. */
+        async function exportAndRead(suggested) {
+            await panel.click('#exportHarBtn');
+            const file = await waitFor(() => {
+                const done = fs.readdirSync(downloadDir).filter((f) => !f.endsWith('.crdownload'));
+                return done.length ? done[0] : null;
+            }, { timeout: 8000, label: 'the downloaded file' });
+            const text = fs.readFileSync(path.join(downloadDir, file), 'utf8');
+            return { file, text, har: JSON.parse(text), suggested: suggested.slice() };
+        }
+
+        const seed = async () => {
+            await h.reset();
+            await h.saveRule(mock('users'));
+            await h.saveRule(mock('orders', { type: 'block', response: undefined }));
+            await h.saveRule(mock('moved', { type: 'redirect', response: undefined, redirect: { destination: 'https://example.com/new' } }));
+        };
+
+        test('downloads splicetap-YYYYMMDD-HHMMSS.har holding a HAR 1.2 entry per log entry, with a captured body', async () => {
+            await seed();
+            const t0 = Date.now();
+            // Two captures of the same call: the later one is the one exported.
+            await captureBody({ ts: t0 - 2000, url: users(), method: 'GET', headers: { 'x-version': '1' }, body: '{"old":true}' });
+            await captureBody({ ts: t0 - 1000, url: users(), method: 'GET', headers: { 'x-version': '2' }, body: '{"users":["Ada","Zoë"]}' });
+            await captureBody({ ts: t0 - 500, url: users(), method: 'POST', body: '{"posted":true}' });
+            await logEntries([
+                { ts: t0, url: users(), method: 'GET', ruleId: 'users', ruleName: 'Mock users', ruleType: 'mock', status: 200, kind: 'rule', elapsedMs: 42, finalStatus: 200 },
+                { ts: t0 + 1, url: `${h.baseUrl}/api/orders`, method: 'DELETE', ruleId: 'orders', ruleName: 'Mock orders', ruleType: 'block', status: 0, kind: 'rule' },
+                { ts: t0 + 2, url: `${h.baseUrl}/api/moved`, method: 'GET', ruleId: 'moved', ruleName: 'Mock moved', ruleType: 'redirect', status: 302, finalStatus: 200, redirectedTo: 'https://example.com/new', elapsedMs: 80, kind: 'rule' },
+                { ts: t0 + 3, url: `${h.baseUrl}/api/users`, method: 'POST', ruleId: 'users', ruleName: 'Mock users', ruleType: 'requestBody', status: 200, kind: 'rule', note: 'Request body patched' }
+            ]);
+
+            const { suggested } = await openPanel();
+            await sleep(300);
+            const out = await exportAndRead(suggested);
+
+            // The file, named by the clock and the extension.
+            expect(out.file).toMatch(/^splicetap-\d{8}-\d{6}\.har$/);
+            expect(suggested).toEqual([out.file]);
+            const { log } = out.har;
+            expect(log.version).toBe('1.2');
+            expect(log.creator.name).toBe('SpliceTap');
+            expect(log.creator.version).toBe(require('../../manifest.json').version);
+            expect(log.entries).toHaveLength(4);
+
+            // Every entry has what HAR 1.2 requires of it.
+            for (const e of log.entries) {
+                expect(new Date(e.startedDateTime).toISOString()).toBe(e.startedDateTime);
+                expect(typeof e.time).toBe('number');
+                expect(e.request).toMatchObject({ httpVersion: '', headers: [], cookies: [], headersSize: -1, bodySize: -1 });
+                expect(Array.isArray(e.request.queryString)).toBe(true);
+                expect(e.response).toMatchObject({ statusText: '', cookies: [], headersSize: -1, bodySize: -1 });
+                expect(typeof e.response.content.size).toBe('number');
+                expect(typeof e.response.content.mimeType).toBe('string');
+                expect(e.cache).toEqual({});
+                expect(e.timings).toEqual({ send: 0, wait: e.time, receive: 0 });
+            }
+
+            const byUrlMethod = (method, url) => log.entries.find((e) => e.request.method === method && e.request.url === url);
+            const getUsers = byUrlMethod('GET', users());
+            expect(getUsers.time).toBe(42);
+            expect(getUsers.response.status).toBe(200);
+            expect(getUsers.request.queryString).toEqual([{ name: 'page', value: '2' }, { name: 'sort', value: 'name' }]);
+            // The body, headers and size come from the later GET capture.
+            expect(getUsers.response.content).toEqual({
+                size: Buffer.byteLength('{"users":["Ada","Zoë"]}', 'utf8'),
+                mimeType: 'application/json',
+                text: '{"users":["Ada","Zoë"]}'
+            });
+            expect(getUsers.response.headers).toEqual([{ name: 'x-version', value: '2' }]);
+            expect(getUsers._splicetap).toEqual({ ruleName: 'Mock users', type: 'mock', kind: 'rule', note: '' });
+            expect(getUsers.startedDateTime).toBe(new Date(t0).toISOString());
+
+            const block = byUrlMethod('DELETE', `${h.baseUrl}/api/orders`);
+            expect(block.response.status).toBe(0);
+            expect(block.response.content.text).toBeUndefined();
+            expect(block._splicetap.type).toBe('block');
+
+            const redirect = byUrlMethod('GET', `${h.baseUrl}/api/moved`);
+            expect(redirect.response.redirectURL).toBe('https://example.com/new');
+            expect(redirect.response.status).toBe(200);
+            expect(redirect.time).toBe(80);
+
+            // Same URL, other method: it gets the POST capture, never the GET one.
+            const body = log.entries.find((e) => e._splicetap.type === 'requestBody');
+            expect(body._splicetap.note).toBe('Request body patched');
+            expect(body.response.content.text).toBeUndefined();
+            expect(body.request.url).toBe(`${h.baseUrl}/api/users`);
+        });
+
+        test('a POST entry gets the POST capture for its URL', async () => {
+            await seed();
+            const t0 = Date.now();
+            await captureBody({ ts: t0 - 500, url: users(), method: 'POST', body: '{"posted":true}' });
+            await captureBody({ ts: t0 - 400, url: users(), method: 'GET', body: '{"got":true}' });
+            await logEntries([{ ts: t0, url: users(), method: 'POST', ruleId: 'users', ruleName: 'Mock users', ruleType: 'mock', status: 201, kind: 'rule' }]);
+            const { suggested } = await openPanel();
+            const { har } = await exportAndRead(suggested);
+            expect(har.log.entries[0].response.content.text).toBe('{"posted":true}');
+        });
+
+        test('with no captures it still exports, with empty bodies', async () => {
+            await seed();
+            await logEntries([{ ts: Date.now(), url: users(), method: 'GET', ruleId: 'users', ruleName: 'Mock users', ruleType: 'mock', status: 200, kind: 'rule' }]);
+            const { suggested } = await openPanel();
+            const { har } = await exportAndRead(suggested);
+            expect(har.log.entries).toHaveLength(1);
+            expect(har.log.entries[0].response.content).toEqual({ size: 0, mimeType: '' });
+        });
+
+        test('exports the whole log, not only the rows the filter or Dismiss leaves on screen', async () => {
+            await seed();
+            const t0 = Date.now();
+            await logEntries([
+                { ts: t0, url: `${h.baseUrl}/api/users`, method: 'GET', ruleId: 'users', ruleName: 'Mock users', ruleType: 'mock', status: 200 },
+                { ts: t0 + 1, url: `${h.baseUrl}/api/orders`, method: 'GET', ruleId: 'orders', ruleName: 'Mock orders', ruleType: 'block', status: 0 }
+            ]);
+            const { suggested } = await openPanel();
+            await waitFor(async () => (await panel.$$('#requestItems [role="row"]')).length === 2, { label: 'two rows' });
+            await panel.type('#filterText', 'orders');
+            await waitFor(async () => (await panel.$$('#requestItems [role="row"]')).length === 1, { label: 'filtered to one' });
+            const { har } = await exportAndRead(suggested);
+            expect(har.log.entries.map((e) => e.request.url)).toEqual([`${h.baseUrl}/api/users`, `${h.baseUrl}/api/orders`]);
+        });
+
+        test('an empty log downloads nothing and says so', async () => {
+            await h.reset();
+            const { suggested } = await openPanel();
+            await panel.click('#exportHarBtn');
+            await waitFor(async () => /Nothing to export/.test(await panel.$eval('#logAnnouncer', (el) => el.textContent)), { label: 'announcement' });
+            await sleep(500);
+            expect(fs.readdirSync(downloadDir)).toEqual([]);
+            expect(suggested).toEqual([]);
+        });
+
+        test('the button is reachable by keyboard and announces the export', async () => {
+            await seed();
+            await logEntries([{ ts: Date.now(), url: users(), method: 'GET', ruleId: 'users', ruleName: 'Mock users', ruleType: 'mock', status: 200 }]);
+            const { suggested } = await openPanel();
+            await panel.focus('#exportHarBtn');
+            expect(await panel.evaluate(() => document.activeElement.id)).toBe('exportHarBtn');
+            await panel.keyboard.press('Enter');
+            await waitFor(() => fs.readdirSync(downloadDir).some((f) => /^splicetap-.*\.har$/.test(f)), { label: 'download' });
+            expect(await panel.$eval('#logAnnouncer', (el) => el.textContent)).toMatch(/Exported 1 request to splicetap-\d{8}-\d{6}\.har/);
+            expect(suggested).toHaveLength(1);
+            // Focus stays on the button.
+            expect(await panel.evaluate(() => document.activeElement.id)).toBe('exportHarBtn');
+        });
+
+        test.each(['dark', 'light'])('the panel with the Export button has no WCAG A/AA violations (%s theme)', async (theme) => {
+            await seed();
+            await setSettings({ theme });
+            await logEntries([{ ts: Date.now(), url: users(), method: 'GET', ruleId: 'users', ruleName: 'Mock users', ruleType: 'mock', status: 200 }]);
+            await openPanel();
+            await waitFor(async () => (await panel.$$('#requestItems [role="row"]')).length === 1, { label: 'a row' });
+            await waitFor(() => panel.evaluate((t) => document.body.classList.contains('theme-' + t), theme), { label: 'the theme applied' });
+            await sleep(500); // the buttons ease between theme colours
+            expect(await auditA11y(panel)).toEqual([]);
         });
     });
 

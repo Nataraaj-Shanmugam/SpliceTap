@@ -220,12 +220,7 @@
     async function fetchInterceptionLog() {
         // QA-3: scope the log to the tab this panel is inspecting. Without
         // this the panel showed traffic intercepted in every other tab too.
-        const inspectedTabId = (typeof chrome !== 'undefined'
-            && chrome.devtools
-            && chrome.devtools.inspectedWindow)
-            ? chrome.devtools.inspectedWindow.tabId
-            : undefined;
-        const response = await sendMessage({ type: 'getInterceptionLog', tabId: inspectedTabId });
+        const response = await sendMessage({ type: 'getInterceptionLog', tabId: inspectedTabId() });
         if (response && response.success) {
             clearError();
             // Background stores entries oldest-first (ring buffer push order);
@@ -611,6 +606,75 @@
         });
     }
 
+    function inspectedTabId() {
+        return (typeof chrome !== 'undefined' && chrome.devtools && chrome.devtools.inspectedWindow)
+            ? chrome.devtools.inspectedWindow.tabId
+            : undefined;
+    }
+
+    // F5: hand a string to the browser as a file, through a Blob and a link
+    // with a download name (extension pages have no downloads permission here
+    // and need none for this).
+    function downloadText(fileName, text, mimeType) {
+        const blob = new Blob([text], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        link.hidden = true;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        // The click has queued the download; release the blob afterwards.
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }
+
+    // F5: every entry in the log (not only the rows the filter or Dismiss
+    // leaves on screen), with response bodies from captures where the same
+    // method and URL was captured. The log is fetched fresh rather than taken
+    // from the last poll, so the file is what the background holds right now.
+    async function exportHar() {
+        const announcer = byId('logAnnouncer');
+        const say = (text) => { if (announcer) announcer.textContent = text; };
+
+        const [logResponse, captureResponse] = await Promise.all([
+            sendMessage({ type: 'getInterceptionLog', tabId: inspectedTabId() }),
+            sendMessage({ type: 'getCaptures' })
+        ]);
+        if (!logResponse || !logResponse.success) {
+            showError('Could not read the log to export it.');
+            say('Export failed.');
+            return;
+        }
+        clearError();
+
+        const logged = logResponse.entries || [];
+        if (logged.length === 0) {
+            say('Nothing to export yet. Trigger a request that matches one of your rules.');
+            return;
+        }
+        // A missing captures list only costs the response bodies.
+        const captures = (captureResponse && captureResponse.success && captureResponse.captures) || [];
+
+        let version = '';
+        try { version = chrome.runtime.getManifest().version; } catch (e) { /* shown blank */ }
+        const har = window.SpliceTapHar.buildHar(logged, captures, { version });
+        const fileName = window.SpliceTapHar.harFileName(new Date());
+        downloadText(fileName, JSON.stringify(har, null, 2), 'application/json');
+        say('Exported ' + logged.length + (logged.length === 1 ? ' request' : ' requests') + ' to ' + fileName + '.');
+    }
+
+    function setupExportButton() {
+        const btn = byId('exportHarBtn');
+        if (!btn) return;
+        btn.addEventListener('click', () => {
+            exportHar().catch((error) => {
+                console.error('SpliceTap panel: HAR export failed', error);
+                showError('Export failed: ' + error.message);
+            });
+        });
+    }
+
     // WCAG 2.2.2 Pause, Stop, Hide — a real user-facing control, independent
     // of the visibility-driven pause below (a keyboard/screen-reader user
     // can't rely on "switch to another DevTools tab" to get relief from
@@ -747,6 +811,7 @@
             setupThemeMediaListener();
             setupClearButton();
             setupPauseButton();
+            setupExportButton();
             setupFilterControls();
             setupRowDelegation();
             refresh();
