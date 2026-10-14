@@ -58,6 +58,14 @@
     const defineProperty = Object.defineProperty;
     const getPrototypeOf = Object.getPrototypeOf;
     const setPrototypeOf = Object.setPrototypeOf;
+    // F4: code responses compile with these. A page that replaced the
+    // AsyncFunction constructor or EvalError would otherwise be handed each
+    // rule's code, or decide how its failure is reported.
+    const AsyncFunction = getPrototypeOf(async function () {}).constructor;
+    const NativeEvalError = EvalError;
+    const NativeWeakMap = WeakMap;
+    const weakMapGet = WeakMap.prototype.get;
+    const weakMapSet = WeakMap.prototype.set;
 
     // Contract B (PER-2 residual): a page can also reach rule data through
     // prototypes it hooks before its first request — a getter on
@@ -714,7 +722,8 @@
             // An explicit '' is kept: HTTP/2 responses have no reason phrase,
             // so a rule captured from one is faithful with an empty string.
             statusText: r.statusText !== undefined ? r.statusText : ((r.statusCode || 200) === 200 ? 'OK' : ''),
-            headers: r.headers
+            headers: r.headers,
+            code: typeof r.code === 'string' ? r.code : '' // F4
         };
     }
 
@@ -1091,7 +1100,7 @@
      * by exact key, so a rule with `content-type: text/html` produced two keys
      * that Headers joined into "application/json, text/html".
      */
-    function withDefaultContentType(userHeaders) {
+    function withDefaultContentType(userHeaders, fallback) {
         // Contract B: a null-prototype copy. new Headers() looks up
         // Symbol.iterator on its argument, and the markers are assigned
         // next — on an ordinary object both reach Object.prototype.
@@ -1104,7 +1113,7 @@
                 if (lower(names[i]) === 'content-type') hasContentType = true;
             }
         }
-        if (!hasContentType) headers['Content-Type'] = 'application/json';
+        if (!hasContentType) headers['Content-Type'] = fallback || 'application/json'; // F4: text/plain for a code response's text
         return headers;
     }
 
@@ -1328,6 +1337,10 @@
     const ttCreatePolicy = trustedTypesFactory && trustedTypesFactory.createPolicy;
     const ttCreateHTML = window.TrustedTypePolicy ? window.TrustedTypePolicy.prototype.createHTML : null;
     let ttPolicy; // undefined: not tried yet; null: the page refused it
+    // F4: trustedTypes.defaultPolicy, read through the captured getter.
+    const ttDefaultPolicy = trustedTypesFactory
+        ? (Object.getOwnPropertyDescriptor(getPrototypeOf(trustedTypesFactory), 'defaultPolicy') || EMPTY_RECORD).get
+        : null;
 
     /** The parser input for `text`, or null when this page will not accept one. */
     function parserInput(text) {
@@ -1366,6 +1379,209 @@
             return doc;
         } catch (e) {
             return null;
+        }
+    }
+
+    // --- F4: code responses ---
+    //
+    // A mock with response.mode 'code' runs the rule's code — the body of an
+    // async function of `request` — in this page, and serves what it returns
+    // through the same response builders as a static mock. It runs only
+    // while Settings allow it; otherwise, and whenever it cannot run, the
+    // request goes to the network with a note in the log.
+
+    const CODE_OFF_NOTE = 'Code responses are turned off in Settings';
+    const CODE_CSP_NOTE = "Blocked by this page's Content-Security-Policy";
+    const CODE_THREW_NOTE = 'Code response threw: ';
+    const CODE_MESSAGE_MAX = 150;
+    const ENVELOPE_KEYS = ['status', 'headers', 'body'];
+
+    // rule (a synced copy, replaced on every sync) -> its compiled function,
+    // or a {note} record when it cannot run.
+    const compiledCode = new NativeWeakMap();
+    let evalBlocked = false;
+
+    function noteRecord(note) {
+        const record = objectCreate(null);
+        record.note = note;
+        return record;
+    }
+
+    function codeThrewNote(error) {
+        let message;
+        try {
+            message = error !== null && typeof error === 'object' && 'message' in error ? `${error.message}` : `${error}`;
+        } catch (e) {
+            message = 'an unreadable error';
+        }
+        return CODE_THREW_NOTE + slice(message, 0, CODE_MESSAGE_MAX);
+    }
+
+    /**
+     * Can this page compile code at all? Probed with an empty function, so
+     * a refusal reports nothing of the rule: a CSP violation report and the
+     * page's securitypolicyviolation listeners get the source's first
+     * characters as `sample`. A Trusted Types default policy would be handed
+     * the source to approve, so a page with one is treated as refusing too.
+     * Both only ever tighten over a document's life, so a refusal is final.
+     */
+    function evalAllowed() {
+        if (evalBlocked) return false;
+        try {
+            if (ttDefaultPolicy && reflectApply(ttDefaultPolicy, trustedTypesFactory, []) !== null) {
+                evalBlocked = true;
+                return false;
+            }
+            reflectConstruct(AsyncFunction, []);
+            return true;
+        } catch (e) {
+            evalBlocked = true;
+            return false;
+        }
+    }
+
+    /**
+     * The rule's code as an async function of `request`, compiled once per
+     * synced rule — or a {note} record: code responses are off, the page's
+     * CSP forbids compiling, or the code does not parse.
+     *
+     * Strict mode, so the page cannot reach the function, or its source,
+     * through `caller`, `arguments.callee` or a stack trace's
+     * CallSite.getFunction().
+     */
+    function codeFunction(rule, code) {
+        if (!tmState.settings || tmState.settings.allowCodeResponses !== true) return noteRecord(CODE_OFF_NOTE);
+        const cached = reflectApply(weakMapGet, compiledCode, [rule]);
+        if (cached) return cached;
+        let compiled;
+        if (!evalAllowed()) {
+            compiled = noteRecord(CODE_CSP_NOTE);
+        } else {
+            try {
+                compiled = reflectConstruct(AsyncFunction, ['request', '"use strict";' + code]);
+            } catch (error) {
+                compiled = noteRecord(error instanceof NativeEvalError ? CODE_CSP_NOTE : codeThrewNote(error));
+            }
+        }
+        reflectApply(weakMapSet, compiledCode, [rule, compiled]);
+        return compiled;
+    }
+
+    /** A request body as text for code: text, bytes (UTF-8), URLSearchParams or a Blob; else null. */
+    async function bodyTextForCode(body) {
+        const kind = bodyKind(body);
+        if (kind === 'URLSearchParams') return body.toString();
+        if (kind === 'Blob') {
+            try {
+                return await body.text();
+            } catch (e) {
+                return null;
+            }
+        }
+        return bodyAsText(body);
+    }
+
+    /** The text a fetch would send, for code (null when it has none, or none as text). */
+    async function fetchBodyTextForCode(resource, config, isRequestObj, method) {
+        if (method === 'GET' || method === 'HEAD') return null;
+        if (config && config.body !== undefined) return bodyTextForCode(config.body);
+        if (!isRequestObj || resource.body === null) return null;
+        try {
+            return await resource.clone().text();
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
+     * What the code receives: {url, method, headers, body, json}, built fresh
+     * for every call so nothing persists between requests through it. `url`
+     * is absolute, `headers` a plain object with lowercase names, `body` the
+     * text sent or null, `json` the body parsed (undefined when it is not JSON).
+     */
+    function codeRequest(url, method, headers, bodyText) {
+        const plainHeaders = {};
+        const names = headers ? objectKeys(headers) : [];
+        for (let i = 0; i < names.length; i++) plainHeaders[lower(names[i])] = `${headers[names[i]]}`;
+        let json;
+        if (typeof bodyText === 'string') {
+            try {
+                json = jsonParse(bodyText);
+            } catch (e) {
+                json = undefined;
+            }
+        }
+        return { url, method, headers: plainHeaders, body: typeof bodyText === 'string' ? bodyText : null, json };
+    }
+
+    /** {status?, headers?, body}: an object whose own keys are only those, with `body`. */
+    function isEnvelope(value) {
+        if (value === null || typeof value !== 'object' || isArray(value) || !hasOwn(value, 'body')) return false;
+        const keys = objectKeys(value);
+        for (let i = 0; i < keys.length; i++) if (!contains(ENVELOPE_KEYS, keys[i])) return false;
+        return !hasOwn(value, 'status') || typeof value.status === 'number';
+    }
+
+    /** A returned headers value (a plain object or a Headers) as a null-prototype record. */
+    function codeHeaders(value) {
+        const out = objectCreate(null);
+        if (value === null || typeof value !== 'object') return out;
+        if (value instanceof Headers) {
+            value.forEach((v, k) => { out[k] = v; });
+            return out;
+        }
+        const names = objectKeys(value);
+        for (let i = 0; i < names.length; i++) out[names[i]] = `${value[names[i]]}`;
+        return out;
+    }
+
+    /**
+     * What the code returned, as a response record {status, statusText,
+     * headers, text}: status 200 unless the envelope gives an integer
+     * 100–999; Content-Type JSON for an object or array body, else
+     * text/plain, unless set; the x-splicetap markers as for static mocks.
+     */
+    function codeResponse(value, rule) {
+        let status = 200;
+        let headers = null;
+        let body = value;
+        if (isEnvelope(value)) {
+            const given = value.status;
+            if (typeof given === 'number' && given % 1 === 0 && given >= 100 && given <= 999) status = given;
+            headers = codeHeaders(value.headers);
+            body = value.body;
+        }
+        let text;
+        let json = false;
+        if (typeof body === 'string') {
+            text = body;
+        } else if (body === undefined || body === null) {
+            text = '';
+        } else if (typeof body === 'object') {
+            text = jsonStringify(body);
+            json = true;
+        } else {
+            text = `${body}`;
+        }
+        const out = objectCreate(null);
+        out.status = status;
+        out.statusText = status === 200 ? 'OK' : '';
+        out.headers = withDefaultContentType(headers, json ? 'application/json' : 'text/plain');
+        out.headers['x-splicetap'] = 'true';
+        out.headers['x-splicetap-rule'] = ruleMarker(rule.name);
+        out.text = typeof text === 'string' ? text : '';
+        return out;
+    }
+
+    /**
+     * Run compiled code: a response record, or a {note} record when it threw
+     * (or returned something that cannot be a response).
+     */
+    async function runCode(fn, request, rule) {
+        try {
+            return codeResponse(await fn(request), rule);
+        } catch (error) {
+            return noteRecord(codeThrewNote(error));
         }
     }
 
@@ -1586,7 +1802,29 @@
                     { url: real.url, redirected: real.redirected, type: real.type });
             }
 
-            // mode === 'static' (existing behavior)
+            // mode === 'static' (existing behavior), or F4's 'code': the code
+            // runs first, and what it returns takes the static path from here.
+            let status = cfg.statusCode;
+            let statusText = cfg.statusText;
+            let headerObj;
+            let codeText = null;
+            if (cfg.mode === 'code') {
+                const fn = codeFunction(rule, cfg.code);
+                const produced = typeof fn === 'function'
+                    ? await runCode(fn, codeRequest(url, method, collectRequestHeaders(resource, config, isRequestObj),
+                        await fetchBodyTextForCode(resource, config, isRequestObj, method)), rule)
+                    : fn;
+                if (produced.note !== undefined) {
+                    log(`Code response not served for ${method} ${url} (Rule: ${rule.name}): ${produced.note}`);
+                    return logWhenSettled(reflectApply(originalFetch, this, args), rule, url, method, { startedAt, note: produced.note });
+                }
+                status = produced.status;
+                statusText = produced.statusText;
+                headerObj = produced.headers;
+                codeText = produced.text;
+            } else {
+                headerObj = withDefaultContentType(cfg.headers);
+            }
             log(`Intercepted ${method} ${url} (Rule: ${rule.name})`);
 
             if (cfg.delay > 0) {
@@ -1599,39 +1837,38 @@
             // PER-42: a 3xx mock follows the request's redirect mode, as a
             // real one does. It was handed to the page as a 302 whatever the
             // mode: 'error' resolved, and the default 'follow' stopped there.
-            if (contains(REDIRECT_STATUSES, cfg.statusCode)) {
+            if (contains(REDIRECT_STATUSES, status)) {
                 const mode = (config && config.redirect) || (isRequestObj ? resource.redirect : 'follow');
                 if (mode === 'error') {
-                    logInterception(rule, url, method, cfg.statusCode, { note: "Redirect refused — the request's redirect mode is 'error'" });
+                    logInterception(rule, url, method, status, { note: "Redirect refused — the request's redirect mode is 'error'" });
                     return Promise.reject(new TypeError('Failed to fetch'));
                 }
                 if (mode === 'manual') {
-                    logInterception(rule, url, method, cfg.statusCode);
+                    logInterception(rule, url, method, status);
                     return opaqueRedirect(url);
                 }
-                const location = headerValue(cfg.headers, 'location');
+                const location = headerValue(headerObj, 'location');
                 if (location !== undefined && location !== null && String(location) !== '') {
-                    return followMockedRedirect(this, rule, cfg.statusCode, url, method, String(location), resource, config, isRequestObj, startedAt);
+                    return followMockedRedirect(this, rule, status, url, method, String(location), resource, config, isRequestObj, startedAt);
                 }
             }
 
             // PER-42: no body for HEAD, as for a null-body status (Q-2).
             let responseBody = null;
-            if (!hasNoBody(cfg.statusCode, method)) {
-                responseBody = renderBody(cfg.body, { url, method });
+            if (!hasNoBody(status, method)) {
+                responseBody = codeText !== null ? codeText : renderBody(cfg.body, { url, method });
             }
 
-            const headerObj = withDefaultContentType(cfg.headers);
             headerObj['x-splicetap'] = 'true';
             headerObj['x-splicetap-rule'] = ruleMarker(rule.name);
 
-            logInterception(rule, url, method, cfg.statusCode);
+            logInterception(rule, url, method, status);
 
             // A constructed Response has an empty `url` and type 'default'.
             // Real ones report the URL that was fetched and 'basic' (same
             // origin) or 'cors'; code that logs the URL or resolves relative
             // links against it saw "" from a mock.
-            return buildMockResponse(responseBody, cfg.statusCode, cfg.statusText, headerObj,
+            return buildMockResponse(responseBody, status, statusText, headerObj,
                 { url: absoluteHref(url), type: responseTypeFor(url) });
         }
     }
@@ -2068,15 +2305,19 @@
         // emitted right before delivery instead.
         function runStaticMockFlow(rule) {
             const cfg = getResponseConfig(rule);
-            const status = cfg.statusCode;
-            const statusText = cfg.statusText;
             let responseText = '';
-            if (!hasNoBody(status, requestMethod)) {
+            if (!hasNoBody(cfg.statusCode, requestMethod)) {
                 responseText = renderBody(cfg.body, { url: requestAbsUrl, method: requestMethod });
             }
+            scheduleMockDelivery(responseText, cfg.statusCode, cfg.statusText, buildMockHeaders(cfg.headers, rule), cfg.delay);
+
+            // After the delivery timer, so a timeout equal to the delay loses.
+            armTimeout();
+        }
+
+        // The timers that deliver a built response (static mocks, F4 code).
+        function scheduleMockDelivery(responseText, status, statusText, headers, delay) {
             const totalBytes = responseText.length;
-            const delay = cfg.delay;
-            const headers = buildMockHeaders(cfg.headers, rule);
 
             // The upload finishes, then HEADERS_RECEIVED and LOADING, on a
             // later task — as a real response's do, never inside send().
@@ -2109,9 +2350,47 @@
                 fireProgress(xhr, 'progress', totalBytes, totalBytes, true);
                 finishMock(responseText, status, statusText, headers);
             }, delay > 10 ? delay : 10);
+        }
 
-            // After the delivery timer, so a timeout equal to the delay loses.
-            armTimeout();
+        /**
+         * The real request, made through fetch, for a request this wrapper
+         * has taken over (patch mode; a code response that fell through).
+         * Null once a failure has been delivered.
+         *
+         * PER-13: the request is sent once, here, and never again. Every
+         * patch failure used to fall back to originalSend(), so a non-JSON
+         * or empty response (text, a 204) reached the server twice.
+         */
+        async function fetchForXHR(body, stale) {
+            try {
+                // S-7/Q-18: map withCredentials instead of hard-coding
+                // 'include'. QA-6: with a signal, so xhr.abort() cancels
+                // the request itself, not just its delivery. No prototype:
+                // fetch reads the members an init lacks through it (F3's
+                // body may be rule data).
+                patchAbort = new AbortController();
+                return await originalFetch(requestUrl, {
+                    __proto__: null,
+                    method: requestMethod,
+                    headers: requestHeaders,
+                    body: body ?? undefined,
+                    credentials: xhr.withCredentials ? 'include' : 'same-origin',
+                    signal: patchAbort.signal
+                });
+            } catch (error) {
+                // A network failure, as the native XHR would have seen it.
+                if (stale()) return null;
+                log('XHR: the request failed:', error);
+                failRequest('error');
+                return null;
+            }
+        }
+
+        /** A response's headers as a plain record. */
+        function responseHeaderRecord(response) {
+            const record = {};
+            response.headers.forEach((value, key) => { record[key] = value; });
+            return record;
         }
 
         // Patch mode: one real request through fetch, merged and delivered.
@@ -2122,34 +2401,10 @@
             armTimeout();
 
             (async () => {
-                // PER-13: the request has been sent once, below, and is never
-                // sent again. Every failure used to fall back to
-                // originalSend(), so a non-JSON or empty response (text, a
-                // 204) reached the server twice.
-                let real;
-                try {
-                    // S-7/Q-18: map withCredentials instead of hard-coding
-                    // 'include'. QA-6: with a signal, so xhr.abort() cancels
-                    // the request itself, not just its delivery.
-                    patchAbort = new AbortController();
-                    real = await originalFetch(requestUrl, {
-                        method: requestMethod,
-                        headers: requestHeaders,
-                        body: body ?? undefined,
-                        credentials: xhr.withCredentials ? 'include' : 'same-origin',
-                        signal: patchAbort.signal
-                    });
-                } catch (error) {
-                    // A network failure, as the native XHR would have seen it.
-                    if (stale()) return;
-                    log('XHR patch mode: the request failed:', error);
-                    failRequest('error');
-                    return;
-                }
-                if (stale()) return;
+                const real = await fetchForXHR(body, stale);
+                if (!real || stale()) return;
 
-                const realHeaders = {};
-                real.headers.forEach((value, key) => { realHeaders[key] = value; });
+                const realHeaders = responseHeaderRecord(real);
 
                 // PER-18: only JSON is patched. Anything else (an event
                 // stream, NDJSON) is delivered as it arrives, unchanged.
@@ -2203,6 +2458,39 @@
                 logInterception(rule, requestAbsUrl, requestMethod, real.status);
 
                 finishMock(mergedText, real.status, real.statusText || 'OK', mergedHeaders, undefined, real.url);
+            })();
+        }
+
+        /**
+         * F4: a code response. send() has taken the request over, so the
+         * code's answer is delivered exactly as a static mock's is. Code
+         * that throws hands the request to the network through fetch, as
+         * patch mode does — the native send() would announce it twice.
+         */
+        function runCodeFlow(rule, fn, body) {
+            const cfg = getResponseConfig(rule);
+            const gen = generation;
+            const stale = () => gen !== generation || mockDone;
+            armTimeout();
+
+            (async () => {
+                const request = codeRequest(requestAbsUrl, requestMethod, requestHeaders, await bodyTextForCode(body));
+                const produced = await runCode(fn, request, rule);
+                if (stale()) return;
+
+                if (produced.note !== undefined) {
+                    log(`Code response not served for XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name}): ${produced.note}`);
+                    logAtLoadend(rule, requestAbsUrl, requestMethod, { __proto__: null, startedAt: sendStart, note: produced.note });
+                    const real = await fetchForXHR(body, stale);
+                    if (!real || stale()) return;
+                    await deliverStreaming(real, responseHeaderRecord(real), stale);
+                    return;
+                }
+
+                log(`Intercepted XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
+                logInterception(rule, requestUrl, requestMethod, produced.status);
+                const text = hasNoBody(produced.status, requestMethod) ? '' : produced.text;
+                scheduleMockDelivery(text, produced.status, produced.statusText, produced.headers, cfg.delay);
             })();
         }
 
@@ -2594,6 +2882,20 @@
                 if (cfg.mode === 'patch') {
                     takeOver(body);
                     runPatchFlow(rule, body);
+                    return undefined;
+                }
+
+                // F4: off in Settings, or refused by the page's CSP, is
+                // known now — the native send() takes the request as is.
+                if (cfg.mode === 'code') {
+                    const fn = codeFunction(rule, cfg.code);
+                    if (typeof fn !== 'function') {
+                        log(`Code response not served for XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name}): ${fn.note}`);
+                        logAtLoadend(rule, requestAbsUrl, requestMethod, { __proto__: null, startedAt: sendStart, note: fn.note });
+                        return reflectApply(originalSend, this, sendArgs);
+                    }
+                    takeOver(body);
+                    runCodeFlow(rule, fn, body);
                     return undefined;
                 }
 

@@ -490,4 +490,344 @@ describe('F3: contract B — rule data stays out of page-visible lookups', () =>
         await h.fetch('https://example.test/api/submit', { method: 'POST', body: 'x' });
         expect(Object.getPrototypeOf((await lastSent(h)).init)).toBeNull();
     });
+
+    test('the init XHR patch mode fetches with has no prototype', async () => {
+        const patchMock = mockRule({ response: { mode: 'patch', patch: { p: 1 } } });
+        const h = withRules([bodyRule(), patchMock]);
+        await sendXHR(h, { body: 'x' });
+        const init = h.passthroughCalls[0][1];
+        expect(Object.getPrototypeOf(init)).toBeNull();
+        expect(init.body).toBe('{"replaced":true}');
+    });
+});
+
+// ---------------------------------------------------------------------------
+
+function codeRule(code, overrides = {}) {
+    return mockRule({
+        id: 'c1',
+        name: 'Code rule',
+        match: { url: '*/api/code*', method: '*' },
+        response: { mode: 'code', code, delay: 0, statusCode: 200 },
+        ...overrides
+    });
+}
+
+const CODE_ON = { allowCodeResponses: true };
+const CODE_URL = 'https://example.test/api/code';
+
+describe('F4: code responses on fetch', () => {
+    test('off in Settings: the request passes through, with the note', async () => {
+        for (const settings of [{}, { allowCodeResponses: false }, { allowCodeResponses: 'true' }]) {
+            const h = withRules([codeRule('return {x: 1};')], settings);
+            const logged = h.collect(h.channels.log);
+            const res = await h.fetch(CODE_URL);
+            expect(await res.json()).toEqual({ origin: true });
+            expect(h.passthroughCalls).toHaveLength(1);
+            await settleLogs();
+            expect(logged).toEqual([expect.objectContaining({
+                ruleId: 'c1', ruleType: 'mock', note: 'Code responses are turned off in Settings', finalStatus: 200
+            })]);
+        }
+    });
+
+    test('an object becomes a JSON 200 with the markers', async () => {
+        const h = withRules([codeRule('return { greeting: "hi", list: [1, 2] };')], CODE_ON);
+        const logged = h.collect(h.channels.log);
+        const res = await h.fetch('/api/code');
+        expect(res.status).toBe(200);
+        expect(res.statusText).toBe('OK');
+        expect(res.headers.get('content-type')).toBe('application/json');
+        expect(res.headers.get('x-splicetap')).toBe('true');
+        expect(res.headers.get('x-splicetap-rule')).toBe('Code rule');
+        expect(res.url).toBe(CODE_URL);
+        expect(await res.json()).toEqual({ greeting: 'hi', list: [1, 2] });
+        expect(h.passthroughCalls).toHaveLength(0);
+        await settleLogs();
+        expect(logged).toEqual([expect.objectContaining({ ruleId: 'c1', ruleType: 'mock', status: 200 })]);
+    });
+
+    test('an array is JSON, a string is text/plain, nothing is an empty body', async () => {
+        let h = withRules([codeRule('return [1, "two"];')], CODE_ON);
+        let res = await h.fetch(CODE_URL);
+        expect(res.headers.get('content-type')).toBe('application/json');
+        expect(await res.text()).toBe('[1,"two"]');
+
+        h = withRules([codeRule('return "plain " + request.method;')], CODE_ON);
+        res = await h.fetch(CODE_URL, { method: 'DELETE' });
+        expect(res.headers.get('content-type')).toBe('text/plain');
+        expect(await res.text()).toBe('plain DELETE');
+
+        h = withRules([codeRule('/* nothing */')], CODE_ON);
+        res = await h.fetch(CODE_URL);
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe('');
+    });
+
+    test('{status, headers, body} sets the status and headers', async () => {
+        const h = withRules([codeRule('return { status: 201, headers: { "X-Made": "code", "Content-Type": "application/vnd.x+json" }, body: { id: 7 } };')], CODE_ON);
+        const logged = h.collect(h.channels.log);
+        const res = await h.fetch(CODE_URL, { method: 'POST', body: '{}' });
+        expect(res.status).toBe(201);
+        expect(res.headers.get('x-made')).toBe('code');
+        expect(res.headers.get('content-type')).toBe('application/vnd.x+json');
+        expect(res.headers.get('x-splicetap')).toBe('true');
+        expect(await res.json()).toEqual({ id: 7 });
+        await settleLogs();
+        expect(logged[0]).toEqual(expect.objectContaining({ ruleId: 'c1', status: 201 }));
+    });
+
+    test('an envelope may carry a Headers object', async () => {
+        const h = withRules([codeRule('return { headers: new Headers({ "x-h": "1" }), body: "ok" };')], CODE_ON);
+        const res = await h.fetch(CODE_URL);
+        expect(res.headers.get('x-h')).toBe('1');
+        expect(await res.text()).toBe('ok');
+    });
+
+    test('an object with other keys beside body is a body, not an envelope', async () => {
+        const h = withRules([codeRule('return { body: "b", status: "ok" };')], CODE_ON);
+        const res = await h.fetch(CODE_URL);
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ body: 'b', status: 'ok' });
+    });
+
+    test('an out-of-range status falls back to 200', async () => {
+        const h = withRules([codeRule('return { status: 42, body: "x" };')], CODE_ON);
+        expect((await h.fetch(CODE_URL)).status).toBe(200);
+    });
+
+    test('async code is awaited', async () => {
+        const h = withRules([codeRule('await new Promise((r) => setTimeout(r, 20)); return { late: true };')], CODE_ON);
+        const started = Date.now();
+        const res = await h.fetch(CODE_URL);
+        expect(await res.json()).toEqual({ late: true });
+        expect(Date.now() - started).toBeGreaterThanOrEqual(15);
+    });
+
+    test('the request: absolute url, method, lowercase headers, body text and parsed json', async () => {
+        const h = withRules([codeRule('return request;')], CODE_ON);
+        const res = await h.fetch('/api/code?q=1', {
+            method: 'post', headers: { 'X-Token': 'abc', 'Content-Type': 'application/json' }, body: '{"n":1}'
+        });
+        expect(await res.json()).toEqual({
+            url: 'https://example.test/api/code?q=1',
+            method: 'POST',
+            headers: { 'x-token': 'abc', 'content-type': 'application/json' },
+            body: '{"n":1}',
+            json: { n: 1 }
+        });
+    });
+
+    test('the request from a Request object, and with a non-JSON or absent body', async () => {
+        let h = withRules([codeRule('return { body: request.body, json: request.json === undefined ? "none" : request.json };')], CODE_ON);
+        let res = await h.fetch(new Request(CODE_URL, { method: 'PUT', body: 'not json', headers: { 'X-R': '1' } }));
+        expect(await res.json()).toEqual({ body: 'not json', json: 'none' });
+
+        h = withRules([codeRule('return { b: request.body, h: request.headers["x-r"] };')], CODE_ON);
+        res = await h.fetch(new Request(CODE_URL, { headers: { 'X-R': '1' } }));
+        expect(await res.json()).toEqual({ b: null, h: '1' });
+    });
+
+    test('the request is built fresh for every call', async () => {
+        const h = withRules([codeRule('const seen = request.headers.mark || "none"; request.headers.mark = "set"; return seen;')], CODE_ON);
+        expect(await (await h.fetch(CODE_URL)).text()).toBe('none');
+        expect(await (await h.fetch(CODE_URL)).text()).toBe('none');
+    });
+
+    test('code that throws passes through, with its message', async () => {
+        const h = withRules([codeRule('throw new Error("boom");')], CODE_ON);
+        const logged = h.collect(h.channels.log);
+        const res = await h.fetch(CODE_URL);
+        expect(await res.json()).toEqual({ origin: true });
+        await settleLogs();
+        expect(logged).toEqual([expect.objectContaining({ ruleId: 'c1', note: 'Code response threw: boom', finalStatus: 200 })]);
+    });
+
+    test('a thrown non-Error, a long message and an async rejection are reported too', async () => {
+        const cases = [
+            ['throw "plain";', 'Code response threw: plain'],
+            ['throw new Error("x".repeat(400));', 'Code response threw: ' + 'x'.repeat(150)],
+            ['await Promise.resolve(); return JSON.parse("{");', /^Code response threw: /]
+        ];
+        for (const [code, note] of cases) {
+            const h = withRules([codeRule(code)], CODE_ON);
+            const logged = h.collect(h.channels.log);
+            await h.fetch(CODE_URL);
+            await settleLogs();
+            expect(logged[0].note).toEqual(typeof note === 'string' ? note : expect.stringMatching(note));
+        }
+    });
+
+    test('code that does not parse passes through, with the parser\'s message', async () => {
+        const h = withRules([codeRule('return {;')], CODE_ON);
+        const logged = h.collect(h.channels.log);
+        const res = await h.fetch(CODE_URL);
+        expect(await res.json()).toEqual({ origin: true });
+        await settleLogs();
+        expect(logged[0].note).toMatch(/^Code response threw: .*(Unexpected|token)/i);
+    });
+
+    test('the code runs in strict mode', async () => {
+        const h = withRules([codeRule('return { thisType: typeof this, strict: (function () { return this === undefined; })() };')], CODE_ON);
+        expect(await (await h.fetch(CODE_URL)).json()).toEqual({ thisType: 'undefined', strict: true });
+    });
+
+    test('the response delay applies', async () => {
+        const rule = codeRule('return "slow";');
+        rule.response.delay = 60;
+        const h = withRules([rule], CODE_ON);
+        const started = Date.now();
+        await (await h.fetch(CODE_URL)).text();
+        expect(Date.now() - started).toBeGreaterThanOrEqual(55);
+    });
+
+    test('HEAD and a 204 get no body', async () => {
+        let h = withRules([codeRule('return "body";')], CODE_ON);
+        let res = await h.fetch(CODE_URL, { method: 'HEAD' });
+        expect(await res.text()).toBe('');
+
+        h = withRules([codeRule('return { status: 204, body: "body" };')], CODE_ON);
+        res = await h.fetch(CODE_URL);
+        expect(res.status).toBe(204);
+        expect(await res.text()).toBe('');
+    });
+
+    test('a 3xx with a Location is followed, as a static mock\'s is (PER-42)', async () => {
+        const h = withRules([codeRule('return { status: 302, headers: { Location: "https://example.test/next" }, body: "" };')], CODE_ON);
+        const res = await h.fetch(CODE_URL);
+        expect(res.redirected).toBe(true);
+        expect(h.passthroughCalls[0][0]).toBe('https://example.test/next');
+    });
+
+    test('clone() keeps what the mock set (PER-42 fidelity)', async () => {
+        const h = withRules([codeRule('return { status: 201, body: { a: 1 } };')], CODE_ON);
+        const res = await h.fetch(CODE_URL);
+        const copy = res.clone();
+        expect(copy.status).toBe(201);
+        expect(copy.url).toBe(CODE_URL);
+        expect(await copy.json()).toEqual({ a: 1 });
+    });
+
+    test('an abort during the code rejects with AbortError', async () => {
+        const h = withRules([codeRule('await new Promise((r) => setTimeout(r, 30)); return "late";')], CODE_ON);
+        const controller = new AbortController();
+        const pending = h.fetch(CODE_URL, { signal: controller.signal });
+        controller.abort();
+        await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    });
+
+    test('the code sees the body a requestBody rule wrote', async () => {
+        const h = withRules([
+            codeRule('return { got: request.json };', { match: { url: '*/api/code*', method: 'POST' } }),
+            bodyRule({ match: { url: '*/api/code*', method: '*' } })
+        ], CODE_ON);
+        const res = await h.fetch(CODE_URL, { method: 'POST', body: 'original' });
+        expect(await res.json()).toEqual({ got: { replaced: true } });
+    });
+
+    test('turning the setting off takes effect on the next sync', async () => {
+        const h = withRules([codeRule('return "code";')], CODE_ON);
+        expect(await (await h.fetch(CODE_URL)).text()).toBe('code');
+        h.syncState({ rules: [codeRule('return "code";')], settings: {} });
+        expect(await (await h.fetch(CODE_URL)).json()).toEqual({ origin: true });
+    });
+});
+
+describe('F4: code responses on XHR', () => {
+    test('an object is delivered like a static mock — status, headers, events', async () => {
+        const h = withRules([codeRule('return { status: 201, headers: { "X-Made": "code" }, body: { a: [1] } };')], CODE_ON);
+        const logged = h.collect(h.channels.log);
+        const xhr = h.newXHR();
+        const events = [];
+        for (const type of ['loadstart', 'load', 'loadend']) xhr.addEventListener(type, () => events.push(type));
+        const states = [];
+        xhr.onreadystatechange = () => states.push(xhr.readyState);
+        const done = new Promise((resolve) => xhr.addEventListener('loadend', () => setTimeout(resolve, 0)));
+        xhr.open('POST', '/api/code');
+        xhr.send('{"in":1}');
+        await done;
+        expect(xhr.status).toBe(201);
+        expect(JSON.parse(xhr.responseText)).toEqual({ a: [1] });
+        expect(xhr.getResponseHeader('x-made')).toBe('code');
+        expect(xhr.getResponseHeader('content-type')).toBe('application/json');
+        expect(xhr.getResponseHeader('x-splicetap')).toBe('true');
+        expect(xhr.responseURL).toBe(CODE_URL);
+        expect(events).toEqual(['loadstart', 'load', 'loadend']);
+        expect(states).toEqual([1, 2, 3, 4]);
+        expect(h.xhrCalls).toHaveLength(0);
+        await settleLogs();
+        expect(logged).toEqual([expect.objectContaining({ ruleId: 'c1', status: 201 })]);
+    });
+
+    test('responseType json gets the parsed value', async () => {
+        const h = withRules([codeRule('return [1, 2];')], CODE_ON);
+        const xhr = h.newXHR();
+        xhr.responseType = 'json';
+        const done = new Promise((resolve) => xhr.addEventListener('loadend', () => setTimeout(resolve, 0)));
+        xhr.open('GET', CODE_URL);
+        xhr.send();
+        await done;
+        expect(xhr.response).toEqual([1, 2]);
+    });
+
+    test('the request carries the XHR\'s headers and body', async () => {
+        const h = withRules([codeRule('return request;')], CODE_ON);
+        const result = await sendXHR(h, { url: CODE_URL, method: 'PUT', headers: { 'X-A': 'b' }, body: '{"k":true}' });
+        expect(JSON.parse(result.responseText)).toEqual({
+            url: CODE_URL, method: 'PUT', headers: { 'x-a': 'b' }, body: '{"k":true}', json: { k: true }
+        });
+    });
+
+    test('a Blob body is read for the code', async () => {
+        const h = withRules([codeRule('return request.body;')], CODE_ON);
+        const result = await sendXHR(h, { url: CODE_URL, body: new Blob(['from a blob']) });
+        expect(result.responseText).toBe('from a blob');
+    });
+
+    test('off in Settings: the native send() takes it, with the note', async () => {
+        const h = withRules([codeRule('return 1;')]);
+        const logged = h.collect(h.channels.log);
+        const result = await sendXHR(h, { url: CODE_URL });
+        expect(h.xhrCalls).toHaveLength(1);
+        expect(JSON.parse(result.responseText)).toEqual({ origin: true });
+        await settleLogs();
+        expect(logged).toEqual([expect.objectContaining({ note: 'Code responses are turned off in Settings', finalStatus: 200 })]);
+    });
+
+    test('code that throws: the real response, fetched once, with the note', async () => {
+        const h = withRules([codeRule('throw new TypeError("nope");')], CODE_ON);
+        const logged = h.collect(h.channels.log);
+        const result = await sendXHR(h, { url: CODE_URL, body: 'b' });
+        expect(JSON.parse(result.responseText)).toEqual({ origin: true });
+        expect(result.status).toBe(200);
+        expect(h.passthroughCalls).toHaveLength(1);
+        expect(h.passthroughCalls[0][1].body).toBe('b');
+        expect(h.xhrCalls).toHaveLength(0);
+        await settleLogs();
+        expect(logged).toEqual([expect.objectContaining({ note: 'Code response threw: nope', finalStatus: 200 })]);
+    });
+
+    test('abort() while the code runs fires abort, never load', async () => {
+        const h = withRules([codeRule('await new Promise((r) => setTimeout(r, 30)); return "late";')], CODE_ON);
+        const xhr = h.newXHR();
+        const events = [];
+        for (const type of ['load', 'abort', 'loadend']) xhr.addEventListener(type, () => events.push(type));
+        xhr.open('GET', CODE_URL);
+        xhr.send();
+        xhr.abort();
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        expect(events).toEqual(['abort', 'loadend']);
+    });
+
+    test('xhr.timeout counts the code\'s time', async () => {
+        const h = withRules([codeRule('await new Promise((r) => setTimeout(r, 200)); return "late";')], CODE_ON);
+        const xhr = h.newXHR();
+        const events = [];
+        for (const type of ['load', 'timeout']) xhr.addEventListener(type, () => events.push(type));
+        xhr.timeout = 30;
+        xhr.open('GET', CODE_URL);
+        xhr.send();
+        await new Promise((resolve) => setTimeout(resolve, 260));
+        expect(events).toEqual(['timeout']);
+    });
 });
