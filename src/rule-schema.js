@@ -55,6 +55,11 @@
 
     const RESPONSE_MODES = ['static', 'patch'];
 
+    // F1: where a redirect or block rule applies. 'page' (the default when the
+    // field is absent) is fetch/XHR only, handled in the page; 'all' adds every
+    // other resource type through declarativeNetRequest.
+    const APPLIES_TO = ['page', 'all'];
+
     // RFC 9110 field-name: a token. Anything else is rejected by `new
     // Headers()` in the page and by declarativeNetRequest in the browser.
     const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
@@ -439,6 +444,18 @@
             errors.push(`Unknown rule type: ${type}`);
         }
 
+        // F1: `appliesTo` belongs to redirect and block rules only. Any other
+        // type with the field is refused rather than ignored, so a rule that
+        // claims to reach every resource type never silently reaches none.
+        if (rule.appliesTo !== undefined) {
+            if (type !== 'redirect' && type !== 'block') {
+                errors.push(`"appliesTo" is only for redirect and block rules, not ${type} rules`);
+            } else if (!APPLIES_TO.includes(rule.appliesTo)) {
+                errors.push('"appliesTo" must be "page" or "all"');
+            }
+        }
+        const allRequests = (type === 'redirect' || type === 'block') && rule.appliesTo === 'all';
+
         const match = rule.match;
         if (!isPlainObject(match) || !match.url) {
             errors.push('URL pattern is required');
@@ -503,6 +520,12 @@
             const destination = rule.redirect && rule.redirect.destination;
             const destinationError = validateRedirectDestination(destination);
             if (destinationError) errors.push(destinationError);
+            // F1: a root-relative destination means "this page's origin",
+            // which declarativeNetRequest cannot express for a script, image
+            // or navigation. (An invalid destination already has its error.)
+            if (allRequests && !destinationError && !/^https?:\/\//i.test(destination)) {
+                errors.push('Use a full URL (https://…) to redirect scripts, images and pages, or untick "all requests".');
+            }
             // PER-22: $1-$9 only mean something when the URL pattern is a
             // /regex/ with capture groups. A wildcard has none, so the page
             // was sent to the literal text "$1" (or every path collapsed to
@@ -528,22 +551,32 @@
         // before request headers exist — so the same rule would redirect a
         // fetch and skip the identical XHR (CQ-4). Enforced here, where every
         // write passes, rather than only in the options form.
+        // F1: a redirect/block that applies to all requests is DNR-backed too
+        // (for the non-fetch/XHR types), so it has the same two limits.
         const dnrBacked = type === 'headers' || type === 'queryparams';
-        if ((dnrBacked || type === 'redirect') && isPlainObject(match)) {
+        if ((dnrBacked || type === 'redirect' || allRequests) && isPlainObject(match)) {
             const hasHeaders = isPlainObject(match.headers) && Object.keys(match.headers).length > 0;
             const hasGraphql = isPlainObject(match.graphql) && match.graphql.operationName;
             if (hasHeaders || hasGraphql) {
-                errors.push(dnrBacked
-                    ? 'Header/GraphQL match conditions are not supported for this rule type'
-                    : 'Redirect rules cannot use header or GraphQL match conditions, because the redirect target must be chosen before request headers exist');
+                if (dnrBacked) {
+                    errors.push('Header/GraphQL match conditions are not supported for this rule type');
+                } else if (type === 'redirect') {
+                    errors.push('Redirect rules cannot use header or GraphQL match conditions, because the redirect target must be chosen before request headers exist');
+                } else {
+                    // Compiled without the condition, the rule would block every
+                    // request to the URL, not only the ones the condition names.
+                    errors.push('Rules that apply to all requests cannot use header or GraphQL match conditions, because only fetch and XHR requests can be checked against them. Untick "all requests", or remove the condition.');
+                }
             }
         }
 
         // declarativeNetRequest's urlFilter is ASCII-only; a non-ASCII filter
         // is rejected, with the same whole-batch consequence as above.
-        if (dnrBacked && isPlainObject(match) && typeof match.url === 'string'
+        if ((dnrBacked || allRequests) && isPlainObject(match) && typeof match.url === 'string'
             && !isRegexPattern(match.url) && /[^\x20-\x7e]/.test(match.url)) {
-            errors.push('URL patterns for header and query-parameter rules can only contain plain ASCII characters');
+            errors.push(dnrBacked
+                ? 'URL patterns for header and query-parameter rules can only contain plain ASCII characters'
+                : 'URL patterns for rules that apply to all requests can only contain plain ASCII characters');
         }
 
         return { valid: errors.length === 0, errors };
@@ -559,6 +592,7 @@
         isRegexPattern,
         patternNamesHost,
         RULE_TYPES,
+        APPLIES_TO,
         METHODS,
         FORBIDDEN_HEADER_NAMES,
         // The limits this validator enforces: the shared ones, with the
