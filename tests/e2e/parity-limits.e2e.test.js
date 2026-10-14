@@ -23,47 +23,9 @@ describe('documented limitations vs Requestly', () => {
         await sleep(300);
     }
 
-    test('block/redirect act on fetch and XHR only — not on scripts or images', async () => {
-        // Requestly's Cancel and Redirect also reach page resources (via
-        // declarativeNetRequest), which is how "point the production bundle at
-        // my local build" works there. SpliceTap's interceptor patches fetch
-        // and XHR, so a <script> or <img> is untouched.
-        await withRule({
-            id: 'redir', name: 'Redirect bundle', enabled: true, type: 'redirect',
-            match: { url: '*/assets/app.js*', method: '*' }, redirect: { destination: '/assets/app-local.js' }
-        });
-        const from = await page.evaluate(() => new Promise((resolve) => {
-            const s = document.createElement('script');
-            s.src = '/assets/app.js';
-            s.onload = () => resolve(window.__assetFrom);
-            document.head.appendChild(s);
-        }));
-        expect(from).toBe('/assets/app.js'); // not redirected
-
-        await withRule({
-            id: 'blk', name: 'Block image', enabled: true, type: 'block',
-            match: { url: '*/assets/pixel.png*', method: '*' }
-        });
-        const loaded = await page.evaluate(() => new Promise((resolve) => {
-            const img = document.createElement('img');
-            img.onload = () => resolve(true);
-            img.onerror = () => resolve(false);
-            img.src = '/assets/pixel.png';
-        }));
-        expect(loaded).toBe(true); // not blocked
-    });
-
-    test('there is no way to modify a request body', async () => {
-        // Requestly: "Modify Request Body". SpliceTap has no such rule type,
-        // and the schema refuses one.
-        await h.reset();
-        const r = await h.bg({
-            type: 'saveRule',
-            rule: { id: 'rb', name: 'Body', enabled: true, type: 'requestbody', match: { url: '*', method: 'POST' } }
-        });
-        expect(r.success).toBe(false);
-        expect(r.error).toMatch(/Unknown rule type/);
-    });
+    // Lifted on 15 October 2026, so no longer pinned here: block/redirect now
+    // reach scripts, images and pages (appliesTo 'all', tests/e2e/feat-network),
+    // and request bodies can be modified (tests/e2e/feat-interceptor).
 
     test('patch mode cannot change the status code of a real response', async () => {
         // Requestly's Modify Response can override the status and keep the

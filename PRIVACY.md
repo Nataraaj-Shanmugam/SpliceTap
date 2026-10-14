@@ -10,12 +10,15 @@ Chrome's built-in extension storage, plus one cached theme setting. Never a
 remote server:
 
 - **Rules** (`chrome.storage.local`) — the mock/block/delay/redirect/headers/
-  query-param rules you create: names, URL patterns, methods, response
-  bodies/headers, how many times each rule has matched, and the internal DNR
+  query-param/request-body rules you create: names, URL patterns, methods,
+  response and request bodies/headers, the JavaScript of any code response,
+  how many times each rule has matched, and the internal DNR
   rule id used to register `headers`/`queryparams` rules with
   `chrome.declarativeNetRequest`.
 - **Settings** (`chrome.storage.local`) — theme, debug mode, chaos mode
-  configuration, keyboard shortcut preferences.
+  configuration, keyboard shortcut preferences, and the two opt-in switches:
+  "Allow code responses" and "Show header, query-param and all-request rules
+  in the log".
 - **Stats** (`chrome.storage.local`) — a running count of intercepted
   requests and the last-reset timestamp, for the popup's stats display.
 - **Interception log** (`chrome.storage.session`) — the last 200 intercepted
@@ -56,6 +59,18 @@ traffic on those pages in order to match it against your rules. This access
 is used only to apply your rules and log the metadata described above — it
 is never transmitted anywhere.
 
+If you switch on **"Show header, query-param and all-request rules in the
+log"**, Chrome asks you to grant the optional `webRequest` permission. While
+it is granted, SpliceTap's service worker sees the URL, method and type of
+the requests your browser makes, compares them with your network-layer rules,
+and logs only the ones that match — with the same URL redaction as the rest of
+the log. It never sees request or response bodies through this permission,
+and switching the setting off gives the permission back.
+
+If you switch on **"Allow code responses"**, the JavaScript you write into a
+mock rule runs inside the page you are testing, with that page's access. It
+runs only where your rule matches, and only on your device.
+
 ## Rule import and export
 
 Export (popup → Data → Export) writes a JSON file of your rules to your own
@@ -67,6 +82,11 @@ takes focus, which would discard the import mid-flow.
 
 Both operations are entirely local. Pasted JSON is validated and applied on
 your own device, and neither export nor import uploads anything anywhere.
+
+**Export HAR** (DevTools → SpliceTap panel) writes the interception log to a
+`.har` file in your downloads folder, adding the response body from Capture
+where one matches. URLs in it are redacted as in the log; **captured bodies
+are not** — treat the file like the responses it contains before sharing it.
 
 ## Deleting your data
 

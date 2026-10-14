@@ -13,8 +13,9 @@ Every claim below is verifiable against the source in this repository.
 | Permission | Why it is needed | Where it is used |
 |---|---|---|
 | `storage` | Saves your rules, settings and statistics on your own device. | [`src/storage.js`](src/storage.js) — every read and write goes through `chrome.storage.local`, plus `chrome.storage.session` for the DevTools interception log. |
-| `contextMenus` | Adds the right-click "Mock this request" entry that opens the rule editor with the current site pre-filled. | [`service_worker/background.js`](service_worker/background.js), `setupContextMenus()`. |
-| `declarativeNetRequestWithHostAccess` | Applies the `headers` and `queryparams` rule types. These edit requests at the network layer, which the page-level interceptor cannot reach. The `WithHostAccess` variant only acts on sites your own rules match. | [`service_worker/dnr.js`](service_worker/dnr.js). |
+| `contextMenus` | Adds the right-click "New SpliceTap rule for this site…" entry that opens the rule editor with the current site pre-filled. | [`service_worker/background.js`](service_worker/background.js), `setupContextMenus()`. |
+| `declarativeNetRequestWithHostAccess` | Applies the `headers` and `queryparams` rule types, and the scripts/images/pages half of block and redirect rules that apply to all requests. These edit requests at the network layer, which the page-level interceptor cannot reach. The `WithHostAccess` variant only acts on sites your own rules match. | [`service_worker/dnr.js`](service_worker/dnr.js). |
+| `webRequest` — **optional**, not granted at install | Only if you switch on "Show header, query-param and all-request rules in the log" in Settings: Chrome then asks you, and SpliceTap gives the permission back when you switch it off. Non-blocking listeners compare each request with your network-layer rules and log the ones that match (redacted URL, rule name). They observe; they never change, delay or block a request, and nothing is sent anywhere. | [`service_worker/background.js`](service_worker/background.js), the network observer; URL redaction in [`src/redact.js`](src/redact.js). |
 | `host_permissions: <all_urls>` | The interceptor has to run on whichever site you are debugging, and there is no way to know in advance which site that is — it is your app, on your machine. | Declared in [`manifest.json`](manifest.json); the interceptor is [`content/injected.js`](content/injected.js). |
 
 ## What SpliceTap does not do
@@ -39,8 +40,13 @@ Every claim below is verifiable against the source in this repository.
   suggest secrets (token, secret, session, signature, auth, key, password,
   code, jwt…) and token-like path segments from URLs before they reach the log.
 - **No remote code.** Everything that runs ships in the package. There is no
-  `eval`, no `new Function`, no remotely-hosted script, and no remotely-fetched
-  rule payload. Manifest V3 forbids remote code, but note that it did not stop
+  remotely-hosted script and no remotely-fetched rule payload. One opt-in
+  feature does evaluate code: **code responses** compile the JavaScript *you*
+  type into a mock rule, with the `Function` constructor, inside the page you
+  are testing. It is off until you switch on "Allow code responses" in
+  Settings, it never fetches code from anywhere, and a page whose
+  Content-Security-Policy forbids eval simply gets the real response. Nothing
+  else uses `eval` or `new Function`. Manifest V3 forbids remote code, but note that it did not stop
   the July 2026 ModHeader incident — the collector there shipped *inside* the
   reviewed bundle. Which is the point of this document: the check that matters
   is the one you can run yourself.

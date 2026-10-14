@@ -166,7 +166,10 @@ not measurements.
 
 ## 5. What this means for SpliceTap
 
-**Worth adopting:**
+**Worth adopting** — all five were built on 15 October 2026, the SpliceTap way described in the
+third column: the network observer behind an optional permission, all-request block/redirect
+via declarativeNetRequest, opt-in code responses (global switch, off by default), request-body
+rules, and HAR export from the DevTools panel. See README and PARITY.md.
 
 | Idea | Requestly's way | Suggested SpliceTap way |
 |---|---|---|

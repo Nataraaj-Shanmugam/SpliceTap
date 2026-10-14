@@ -10,17 +10,11 @@ const ed = require('./editor-driver');
 
 const HOSTS = ['overlay', 'options'];
 
-// TODO(coordinator): the schema group's change (type 'requestBody', response
-// mode 'code', the appliesTo rules) is not in this worktree, so the current
-// schema refuses what these tests save and they are expected to fail here.
-// After the merge, change this line to `const afterSchemaMerge = test;`.
-const afterSchemaMerge = test.failing;
-// TODO(coordinator): the two tests that go on to send a real request also need
-// the interceptor's runtime (requestBody rules, code responses) and the network
-// group's plumbing. After those merge, `const afterRuntimeMerge = test;`.
-// (Checked against the schema group's files alone: every afterSchemaMerge
-// test passes and only these four, two per host, still fail.)
-const afterRuntimeMerge = test.failing;
+// These save rules only the merged schema accepts (requestBody, code mode,
+// appliesTo) and, for the runtime pair, need the interceptor and the
+// background plumbing too. All of it is merged, so they are plain tests.
+const afterSchemaMerge = test;
+const afterRuntimeMerge = test;
 
 describe.each(HOSTS)('editor features — %s host', (hostKind) => {
     let h;

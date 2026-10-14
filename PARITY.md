@@ -27,18 +27,23 @@ Requestly's 5-second extension cap, and no account or telemetry at all.
 
 It is **not** a full Requestly replacement. The largest gaps:
 
-1. **Reach.** Block, redirect and delay act only on `fetch`/XHR. Requestly
-   also reaches scripts, stylesheets, images and documents — which is how its
-   most common workflow, "point the production bundle at my local build",
-   works. SpliceTap cannot do that today.
+1. **Reach.** *Closed for block and redirect (15 October 2026):* with "all
+   requests" ticked — the default for new rules — they reach scripts,
+   stylesheets, images and page navigations through declarativeNetRequest, so
+   "point the production bundle at my local build" works. Delay and mock still
+   act only on `fetch`/XHR; Requestly delays other resources by routing them
+   through its own server, which SpliceTap deliberately does not do.
 2. **Migration.** There is no importer for Requestly rules (or ModHeader,
    Charles, Resource Override). A Requestly export is now *recognised* and
    explained, but not converted.
 3. **Targeting.** No "only on these sites" (page-domain) filter, and no
    resource-type filter.
-4. **Programmability.** No request-body rule, and no JavaScript response
-   transform; SpliceTap's answer is merge patches and placeholders, which cover
-   most cases without code but not all.
+4. **Programmability.** *Closed (15 October 2026):* a **Modify request body**
+   rule (static or JSON merge patch) and opt-in **code responses** (your
+   JavaScript, run in the page, off until enabled in Settings). Requestly's
+   code transforms can also read the *real* response; SpliceTap's code
+   responses answer from the request alone, and patch mode still covers
+   "change a few fields of the real response".
 5. **The surrounding platform** — team sync, session recording, an API client,
    hosted mocks — is out of scope by design: SpliceTap is local-only.
 
@@ -47,15 +52,15 @@ It is **not** a full Requestly replacement. The largest gaps:
 | Requestly | SpliceTap | Notes |
 |---|---|---|
 | Modify API Response — static | ✅ | `mock` rule. Status, headers, body, delay; served without the network. Verified for 10 status codes, Unicode, 1 MB bodies, every fetch/XHR body reader. |
-| Modify API Response — dynamic (JavaScript) | ◑ | No code. Covered instead by JSON Merge Patch (`patch` mode) and 14 placeholders (`{{guid}}`, `{{request.url}}`, …). Not covered: logic that depends on the response. |
+| Modify API Response — dynamic (JavaScript) | ◑ | `mock` with `response.mode: 'code'`: the body of an async function gets `request` (url, method, headers, body, json) and returns a body or `{status, headers, body}`. Opt-in in Settings; runs in the page, so the page's CSP can forbid it (the request then passes through, logged). Not covered: code that reads the *real* response — use `patch` mode for that. |
 | Modify API Response — status override, keep real body | ✗ | `patch` mode always keeps the real status (pinned). |
 | Modify API Response — GraphQL operation | ✅ | `match.graphql.operationName`, over fetch, XHR and `Request` bodies. |
-| Modify Request Body | ✗ | No rule type (pinned). |
+| Modify Request Body | ✅ | `requestBody` rule: replace the body (text, JSON, placeholders) or JSON-merge-patch it, over fetch and XHR. The modified request is what later rules match and what a redirect sends. |
 | Modify Headers | ◑ | Set and remove, request and response, applied by declarativeNetRequest and verified on the wire. No "append". Deliberately fetch/XHR only (C-11), where Requestly also reaches documents and subresources. |
-| Cancel Request | ◑ | `block`, fetch/XHR only — an `<img>` or `<script>` is not blocked (pinned). |
+| Cancel Request | ✅ | `block`. With "all requests" (default for new rules) it also blocks scripts, stylesheets, images and page navigations via declarativeNetRequest; unticked, fetch/XHR only. |
 | Modify Query Params | ◑ | Add, replace and remove, on the wire. No "Remove All". |
 | Modify User Agent | ◑ | Via a headers rule (and the *Custom User-Agent* template); the header changes, `navigator.userAgent` does not. No device presets. |
-| Redirect / Map Remote | ◑ | `redirect`, with `$1`–`$9` from a regex; keeps method, body and headers, including `fetch(Request)` with a body. fetch/XHR only — a `<script src>` is not redirected (pinned). |
+| Redirect / Map Remote | ✅ | `redirect`, with `$1`–`$9` from a regex; keeps method, body and headers, including `fetch(Request)` with a body. With "all requests" (default for new rules, needs a full destination URL) it also redirects scripts, stylesheets, images and page navigations — the "production bundle → local build" workflow. |
 | Replace String (in URL) | ◑ | Achievable with a regex redirect and capture groups, for fetch/XHR. |
 | Delay | ✅ ★ | fetch/XHR up to 30 s (verified at 6 s); Requestly's extension caps fetch/XHR at 5 s. Not applicable to other resources. |
 | Insert Script (JS/CSS) | ✗ | Not planned: arbitrary page injection is a Web Store review risk and overlaps userscript managers. |
@@ -84,11 +89,11 @@ It is **not** a full Requestly replacement. The largest gaps:
 | Rule order / precedence | ✅ | First match wins; reordering changes the winner. |
 | Rule groups | ✗ | Ordering only. |
 | "Test" a rule | ◑ | SpliceTap's "Check syntax" validates structure only, and each rule shows its live hit count ("N hits" / "No hits yet") as evidence it fired; Requestly opens a page and reports whether the rule applied. |
-| Templates | ✅ | Seven, each verified for its stated purpose. Two were broken (see bugs); the persona review found two more gaps — Redirect to localhost on absolute URLs, CORS Unblock on PUT/DELETE — now fixed (PER-9, PER-24). |
+| Templates | ✅ | Eight (Modify request body added), each verified for its stated purpose. Two were broken (see bugs); the persona review found two more gaps — Redirect to localhost on absolute URLs, CORS Unblock on PUT/DELETE — now fixed (PER-9, PER-24). |
 | Export / import own rules | ✅ | Including v1 files and replace-vs-merge. |
 | Import from Requestly / ModHeader / Charles / Resource Override | ✗ | A Requestly export is now detected and explained instead of rejected as "invalid". |
-| Execution visibility | ◑ | DevTools panel log (redacted) of every mock, block, delay and redirect — with the final status for delays and redirects — plus chaos failures and skipped patches; per-rule hit counts; a "Not applied" marker for rules Chrome refused. Header and query-param rules are applied by Chrome's network layer with no per-request feedback, so they are not logged or counted — check Chrome's Network tab. |
-| Session recording / HAR | ✗ | No recording or HAR export. |
+| Execution visibility | ✅ | DevTools panel log (redacted) of every mock, block, delay, redirect and request-body rule — with the final status for delays and redirects — plus chaos failures and skipped patches; per-rule hit counts; a "Not applied" marker for rules Chrome refused. Header, query-param and all-request rules appear too once you switch on the opt-in network observer (optional `webRequest` permission), marked "Seen on the network" — like Requestly, SpliceTap infers these by matching the request itself, because Chrome does not report which network rule fired. |
+| Session recording / HAR | ◑ | **HAR export** of the interception log from the DevTools panel, with response bodies from Capture where one matches. No session recording. |
 | Team sync, sharing, workspaces | ✗ | Not planned: SpliceTap stores nothing off-device. |
 | API client, hosted mock server, file server | ✗ | Separate products; out of scope. |
 | Browsers | ◑ | Chrome 120+, tested. Requestly lists Chrome, Firefox, Edge, Brave, Arc, Vivaldi and Opera. |
@@ -138,14 +143,14 @@ in Chrome). `fetch` is unaffected.
 |---|---|---|---|
 | 1 | **Import Requestly rules** — convert Redirect, Cancel, Delay, Headers, QueryParam, static Response and UserAgent; name the rest as unconvertible | Small–medium | **Build.** The most direct adoption lever, and Requestly itself ships importers for three competitors. |
 | 2 | **Page-domain filter** — "only on these sites" | Medium | **Build.** Matcher, schema, editor, and `initiatorDomains` for network rules. |
-| 3 | **Reach scripts, styles, images** for redirect and block | Medium | **Build** the redirect half via declarativeNetRequest — "point prod's bundle at localhost" is a headline Requestly use. |
+| 3 | **Reach scripts, styles, images** for redirect and block | Medium | **Done** (15 Oct 2026): both halves, via declarativeNetRequest. |
 | 4 | **Real Test** — try a URL against a rule, live, in the editor | Small | **Build.** Pattern mistakes are the commonest rule bug. |
 | 5 | **Status override in patch mode** | Small | Build. |
-| 6 | **HAR export** of the interception log and captures | Small | Build. |
+| 6 | **HAR export** of the interception log and captures | Small | **Done** (15 Oct 2026). |
 | 7 | Query param *Remove All*, header *Append* | Small | Build when convenient. |
-| 8 | Modify request body (static, merge patch) | Medium | Consider. |
+| 8 | Modify request body (static, merge patch) | Medium | **Done** (15 Oct 2026). |
 | 9 | Rule groups | Medium | Consider. |
-| 10 | JavaScript response transforms | — | Not recommended: page CSP decides whether it can run at all; patch and placeholders cover most cases. |
+| 10 | JavaScript response transforms | — | **Done, opt-in** (15 Oct 2026): off by default; where page CSP forbids it, the request passes through and the log says so. |
 | 11 | Insert Script | — | Not recommended: Web Store review risk. |
 | 12 | Sync, sharing, recording, API client, hosted mocks | — | Not recommended: contradicts local-only, and each is a product of its own. |
 
