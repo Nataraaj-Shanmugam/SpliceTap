@@ -34,6 +34,7 @@
     try { delete window.SpliceTapPatch; } catch (e) { /* non-configurable: leave it */ }
 
     const findMatchingRule = sharedMatcher && sharedMatcher.findMatchingRule;
+    const findMatchingRequestBodyRule = sharedMatcher && sharedMatcher.findMatchingRequestBodyRule;
     const matchUrl = sharedMatcher && sharedMatcher.matchUrl;
     const isCatastrophicRegex = sharedMatcher && sharedMatcher.isCatastrophicRegex;
     const processDynamicResponse = sharedPlaceholders && sharedPlaceholders.processDynamicResponse;
@@ -221,7 +222,8 @@
         // rescanning/reallocating on every single request — P-1/P-3/P-10/P-16).
         _anyRuleUsesHeaders: false,
         _anyRuleUsesGraphQL: false,
-        _hasRedirectRules: false
+        _hasRedirectRules: false,
+        _hasRequestBodyRules: false // F3
     };
 
     // Helper: Logging with debug mode check
@@ -576,13 +578,16 @@
      *
      * Two scans keep findMatchingRule's first-match order exactly: the winner
      * is whichever of the two hits comes first in the rule list.
+     *
+     * `finder` (optional) is findMatchingRequestBodyRule for the F3 pass.
      */
-    function findRule(request, rawUrl) {
+    function findRule(request, rawUrl, finder) {
+        const find = finder || findMatchingRule;
         const rules = tmState.rules;
-        const hit = findMatchingRule(rules, matchRequest(request.url, request));
+        const hit = find(rules, matchRequest(request.url, request));
         if (rawUrl === request.url) return hit;
 
-        const rawHit = findMatchingRule(rules, matchRequest(rawUrl, request));
+        const rawHit = find(rules, matchRequest(rawUrl, request));
         if (!hit || !rawHit || hit === rawHit) return hit || rawHit;
         for (let i = 0; i < rules.length; i++) {
             if (rules[i] === hit) return hit;
@@ -611,7 +616,8 @@
         const rules = tmState.rules;
         for (let i = 0; i < rules.length && rules[i] !== target; i++) {
             const rule = rules[i];
-            if (!rule || !rule.enabled) continue;
+            // F3: request-body rules are their own pass, not a contender.
+            if (!rule || !rule.enabled || rule.type === 'requestBody') continue;
             const match = rule.match || EMPTY_RECORD;
             const conditional = (match.headers && objectKeys(match.headers).length > 0) ||
                 (match.graphql && match.graphql.operationName);
@@ -856,6 +862,180 @@
             init.body = await request.clone().arrayBuffer();
         }
         return init;
+    }
+
+    // --- F3: request-body rules ---
+
+    const REQUEST_BODY_REPLACED = 'Request body replaced';
+    const REQUEST_BODY_PATCHED = 'Request body patched';
+    const REQUEST_BODY_SKIP = 'Request body not patched — ';
+
+    // Captured so a page replacing the globals cannot change how a body is read.
+    const NativeFormData = typeof FormData !== 'undefined' ? FormData : null;
+    const NativeBlob = typeof Blob !== 'undefined' ? Blob : null;
+    const NativeURLSearchParams = typeof URLSearchParams !== 'undefined' ? URLSearchParams : null;
+    const NativeReadableStream = typeof window.ReadableStream !== 'undefined' ? window.ReadableStream : null;
+    const NativeTextDecoder = typeof TextDecoder !== 'undefined' ? TextDecoder : null;
+    const NativeArrayBuffer = ArrayBuffer;
+    const isArrayBufferView = ArrayBuffer.isView;
+
+    /** What a fetch or XHR body is: 'none', 'text', 'bytes', or its type's name. */
+    function bodyKind(body) {
+        if (body === null || body === undefined) return 'none';
+        if (typeof body === 'string') return 'text';
+        if (body instanceof NativeArrayBuffer || isArrayBufferView(body)) return 'bytes';
+        if (NativeFormData && body instanceof NativeFormData) return 'FormData';
+        if (NativeURLSearchParams && body instanceof NativeURLSearchParams) return 'URLSearchParams';
+        if (NativeBlob && body instanceof NativeBlob) return 'Blob';
+        if (NativeReadableStream && body instanceof NativeReadableStream) return 'ReadableStream';
+        return 'not text'; // an XHR Document, or anything else
+    }
+
+    /** UTF-8 text from bytes, or null when they are not valid UTF-8. */
+    function decodeUtf8(bytes) {
+        if (!NativeTextDecoder) return null;
+        try {
+            return new NativeTextDecoder('utf-8', { __proto__: null, fatal: true }).decode(bytes);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Q-17: an XHR body as text for GraphQL matching — a string, a
+    // URLSearchParams, or the graphql-upload FormData's "operations" field.
+    function xhrBodyText(body) {
+        if (typeof body === 'string') return body;
+        if (NativeURLSearchParams && body instanceof NativeURLSearchParams) return body.toString();
+        if (NativeFormData && body instanceof NativeFormData && typeof body.get === 'function') {
+            const operations = body.get('operations');
+            return typeof operations === 'string' ? operations : null;
+        }
+        return null;
+    }
+
+    /** The body as text when it is text or bytes, else null — readable synchronously. */
+    function bodyAsText(body) {
+        const kind = bodyKind(body);
+        if (kind === 'text') return body;
+        return kind === 'bytes' ? decodeUtf8(body) : null;
+    }
+
+    // PER-19's skip reasons, worded for a request body.
+    function requestPatchSkipReason(target, patch) {
+        if (!isPatchApplicable || isPatchApplicable(target, patch)) return null;
+        if (patch !== null && typeof patch === 'object' && !isArray(patch) && objectKeys(patch).length === 0) {
+            return REQUEST_BODY_SKIP + 'the patch is empty';
+        }
+        const kind = isArray(target) ? 'array' : (target === null ? 'null' : typeof target);
+        return `${REQUEST_BODY_SKIP}the body is not a JSON object (${kind})`;
+    }
+
+    /**
+     * F3: a requestBody rule applied to `body`, synchronously (XHR send()
+     * cannot wait). Null for a mode this build does not know. Otherwise a
+     * null-prototype record: `body` to send, `changed`, `json` (a static
+     * object/array body, which wants a JSON Content-Type) and the log `note`.
+     * Static: the rule's body through placeholders, as a mock body is.
+     * Patch: a JSON merge patch onto JSON text only — FormData, Blob,
+     * URLSearchParams, a stream or a non-object JSON body is left as it is.
+     */
+    function rewriteRequestBody(rule, body, details) {
+        const config = rule.requestBody || EMPTY_RECORD;
+        const mode = config.mode || 'static';
+        if (mode !== 'static' && mode !== 'patch') return null;
+        const out = objectCreate(null);
+        out.body = body;
+        out.changed = false;
+        out.json = false;
+
+        if (mode === 'static') {
+            const value = config.body === undefined ? '' : config.body;
+            out.body = renderBody(value, details);
+            out.json = value !== null && typeof value === 'object';
+            out.changed = true;
+            out.note = REQUEST_BODY_REPLACED;
+            return out;
+        }
+
+        const text = bodyAsText(body);
+        if (text === null) {
+            const kind = bodyKind(body);
+            out.note = REQUEST_BODY_SKIP + (kind === 'none' ? 'the request has no body' : `the body is ${kind}, not JSON text`);
+            return out;
+        }
+        let data;
+        try {
+            data = jsonParse(text);
+        } catch (e) {
+            out.note = REQUEST_BODY_SKIP + 'the body is not valid JSON';
+            return out;
+        }
+        const patch = renderPatch(config.patch === undefined ? objectCreate(null) : config.patch, details);
+        const skipped = requestPatchSkipReason(data, patch);
+        if (skipped) {
+            out.note = skipped;
+            return out;
+        }
+        out.body = jsonStringify(toNullProto(jsonMergePatch(data, patch)));
+        out.changed = true;
+        out.note = REQUEST_BODY_PATCHED;
+        return out;
+    }
+
+    // Every member fetch() reads from an init, own or inherited.
+    const REQUEST_INIT_MEMBERS = ['method', 'headers', 'body', 'referrer', 'referrerPolicy', 'mode', 'credentials',
+        'cache', 'redirect', 'integrity', 'keepalive', 'signal', 'duplex', 'priority', 'window'];
+
+    /**
+     * Copy a page's fetch init onto `init` as fetch would read it: inherited
+     * members included, and an undefined member treated as absent (so
+     * `{body: undefined}` keeps a Request's own body).
+     */
+    function copyRequestInit(init, config) {
+        const keys = objectKeys(config);
+        for (let i = 0; i < keys.length; i++) {
+            const value = config[keys[i]];
+            if (value !== undefined) init[keys[i]] = value;
+        }
+        for (let i = 0; i < REQUEST_INIT_MEMBERS.length; i++) {
+            const value = config[REQUEST_INIT_MEMBERS[i]];
+            if (value !== undefined) init[REQUEST_INIT_MEMBERS[i]] = value;
+        }
+        return init;
+    }
+
+    /**
+     * F3: a requestBody rule applied to a fetch. Null when it does not apply;
+     * otherwise `note`, and — when the body changed — `args`: the URL and a
+     * null-prototype init that send the new body. A Request is rebuilt with
+     * every field it carries (PER-11), with the page's init over it.
+     */
+    async function rewriteFetchBody(rule, resource, config, isRequestObj, url, method) {
+        const init = objectCreate(null);
+        if (isRequestObj) objectAssign(init, await requestInit(resource));
+        if (config) copyRequestInit(init, config);
+
+        const rewritten = rewriteRequestBody(rule, init.body, { __proto__: null, url, method });
+        if (!rewritten) return null;
+        const out = objectCreate(null);
+        out.note = rewritten.note;
+        if (!rewritten.changed) return out;
+
+        if (rewritten.note === REQUEST_BODY_REPLACED) {
+            try {
+                const headers = new Headers(init.headers === undefined ? undefined : init.headers);
+                // A multipart type names a boundary the new body does not
+                // have (a Request built from FormData carries one).
+                if (mimeEssence(headers.get('content-type')) === 'multipart/form-data') headers.delete('content-type');
+                if (rewritten.json && !headers.has('content-type')) headers.set('Content-Type', 'application/json');
+                init.headers = headers;
+            } catch (e) {
+                // Headers fetch itself will refuse: leave them for it to report.
+            }
+        }
+        init.body = rewritten.body;
+        out.args = [isRequestObj ? resource.url : resource, init];
+        return out;
     }
 
     // --- Response construction helpers (Q-2, Q-24, Q-28) ---
@@ -1212,8 +1392,8 @@
 
         async function handleInterceptedFetch(...args) {
             const startedAt = Date.now();
-            const [resource, config] = args;
-            const isRequestObj = resource instanceof NativeRequest;
+            let [resource, config] = args;
+            let isRequestObj = resource instanceof NativeRequest;
             const isURLObj = resource instanceof NativeURL;
             // Q-6: fetch(new URL(...)) previously left `url` as a non-string
             // object, breaking matchUrl's .toLowerCase() and later crashing
@@ -1242,7 +1422,7 @@
 
             // 2. Read request headers into a lowercase-keyed plain object —
             // only if some enabled rule actually has a header condition (P-3).
-            const headers = tmState._anyRuleUsesHeaders
+            let headers = tmState._anyRuleUsesHeaders
                 ? collectRequestHeaders(resource, config, isRequestObj)
                 : EMPTY_HEADERS;
 
@@ -1256,17 +1436,53 @@
                 }
             }
 
+            // F3: the request-body pass, before the main first-match, which
+            // then sees the new body and Content-Type. Not on a mocked
+            // redirect's next hop: a browser re-sends the body it already had.
+            let bodyRule = null;
+            let bodyNote = null;
+            if (tmState._hasRequestBodyRules && method !== 'GET' && method !== 'HEAD' && !(config && config[REDIRECT_HOPS])) {
+                const candidate = findRule({ url, method, headers, bodyText }, rawUrl, findMatchingRequestBodyRule);
+                const rewritten = candidate && relayAlive()
+                    ? await rewriteFetchBody(candidate, resource, config, isRequestObj, url, method)
+                    : null;
+                if (rewritten) {
+                    bodyRule = candidate;
+                    bodyNote = rewritten.note;
+                    log(`${bodyNote}: ${method} ${url} (Rule: ${candidate.name})`);
+                    if (rewritten.args) {
+                        args = rewritten.args;
+                        resource = args[0];
+                        config = args[1];
+                        isRequestObj = false;
+                        if (tmState._anyRuleUsesHeaders) headers = collectRequestHeaders(resource, config, false);
+                        if (tmState._anyRuleUsesGraphQL) bodyText = await readBodyText(resource, config, false);
+                    }
+                }
+            }
+
+            const context = { __proto__: null, startedAt, resource, config, isRequestObj, rawUrl, url, method, signal, headers, bodyText };
+            const outcome = reflectApply(fetchMainPass, this, [args, context]);
+            // Logged once the page has its answer, like a delay (PER-56).
+            return bodyRule ? logWhenSettled(outcome, bodyRule, url, method, { startedAt, note: bodyNote }) : outcome;
+        }
+
+        // The main first-match pass over mock/block/delay/redirect, on the
+        // request as the F3 pass left it.
+        async function fetchMainPass(args, context) {
+            const { startedAt, resource, config, isRequestObj, rawUrl, url, method, signal, headers, bodyText } = context;
+
             // 4. Find matching rule
             const rule = findRule({ url, method, headers, bodyText }, rawUrl);
             if (!rule || !relayAlive()) {
                 // Nothing to apply — but this is exactly the response worth
                 // capturing, since a rule for it does not exist yet.
                 if (isCaptureArmed()) {
-                    const passed = await originalFetch.apply(this, args);
+                    const passed = await reflectApply(originalFetch, this, args);
                     captureFetchResponse(passed, url, method);
                     return passed;
                 }
-                return originalFetch.apply(this, args);
+                return reflectApply(originalFetch, this, args);
             }
 
             const effectiveType = rule.type || 'mock';
@@ -1511,7 +1727,10 @@
         let uploadTotal = 0;
         // PER-56: a redirect open() applied, logged once the response settles.
         let pendingRedirect = null;
-        let logToken = null;
+        let logEpoch = 0; // bumped by open(): logs still pending for the last request are dropped
+        // F3: the URL as open() was given it, before a redirect rewrote it.
+        let sourceUrl = '';
+        let sourceAbsUrl = '';
 
         // Store original methods
         const originalOpen = xhr.open;
@@ -1566,15 +1785,14 @@
         /**
          * PER-56: log `rule` when this request's response settles, with the
          * status the page received ('failed' for an error, abort or
-         * timeout). A later open() cancels it.
+         * timeout). A later open() cancels it. F3: a request can have two —
+         * its requestBody rule's and its main rule's.
          */
         function logAtLoadend(rule, url, method, outcome) {
-            const token = {};
-            logToken = token;
+            const epoch = logEpoch;
             const onLoadend = () => {
                 xhr.removeEventListener('loadend', onLoadend);
-                if (logToken !== token) return;
-                logToken = null;
+                if (logEpoch !== epoch) return;
                 const status = xhr.status;
                 logInterception(rule, url, method, status > 0 ? status : null,
                     { __proto__: null, finalStatus: status > 0 ? status : 'failed', ...outcome });
@@ -2056,11 +2274,13 @@
             isAborted = false;
             uploadPending = false;
             pendingRedirect = null;
-            logToken = null;
+            logEpoch++;
 
             requestMethod = String(method).toUpperCase();
             requestUrl = url instanceof NativeURL ? url.href : String(url);
             requestAbsUrl = resolveUrl(requestUrl);
+            sourceUrl = requestUrl;
+            sourceAbsUrl = requestAbsUrl;
             requestHeaders = {};
             openMethod = method;
             openRest = args;
@@ -2187,6 +2407,33 @@
                 return undefined;
             }
 
+            // F3: the request-body pass, before the main first-match below,
+            // which then matches the new body. It runs before the redirect
+            // open() applied, so a redirect sends the new body too; it
+            // matches the URL as the page opened it.
+            let sendArgs = arguments;
+            if (tmState._hasRequestBodyRules && requestMethod !== 'GET' && requestMethod !== 'HEAD') {
+                const bodyRule = findRule({
+                    url: sourceAbsUrl, method: requestMethod, headers: requestHeaders, bodyText: xhrBodyText(body)
+                }, sourceUrl, findMatchingRequestBodyRule);
+                const rewritten = bodyRule && relayAlive()
+                    ? rewriteRequestBody(bodyRule, body, { __proto__: null, url: sourceAbsUrl, method: requestMethod })
+                    : null;
+                if (rewritten) {
+                    log(`${rewritten.note}: XHR ${requestMethod} ${sourceUrl} (Rule: ${bodyRule.name})`);
+                    if (rewritten.changed) {
+                        body = rewritten.body;
+                        sendArgs = [body];
+                        if (rewritten.json && headerValue(requestHeaders, 'content-type') === undefined) {
+                            reflectApply(originalSetRequestHeader, xhr, ['Content-Type', 'application/json']);
+                            requestHeaders['content-type'] = 'application/json';
+                            requestHeaderList[requestHeaderList.length] = ['Content-Type', 'application/json'];
+                        }
+                    }
+                    logAtLoadend(bodyRule, sourceAbsUrl, requestMethod, { __proto__: null, startedAt: sendStart, note: rewritten.note });
+                }
+            }
+
             // A redirect rule was already applied (URL rewritten) in open() —
             // the real network call now goes to the redirected URL; it is
             // logged when that response settles (PER-56).
@@ -2196,19 +2443,10 @@
                         { startedAt: sendStart, redirectedTo: pendingRedirect.redirectedTo });
                     pendingRedirect = null;
                 }
-                return reflectApply(originalSend, this, arguments);
+                return reflectApply(originalSend, this, sendArgs);
             }
 
-            // Q-17: handle non-string bodies (URLSearchParams, the
-            // graphql-upload FormData convention) instead of silently
-            // defeating GraphQL matching.
-            const bodyText = typeof body === 'string'
-                ? body
-                : (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams)
-                    ? body.toString()
-                    : (typeof FormData !== 'undefined' && body instanceof FormData && typeof body.get === 'function')
-                        ? (typeof body.get('operations') === 'string' ? body.get('operations') : null)
-                        : null;
+            const bodyText = xhrBodyText(body);
 
             const rule = findRule({
                 url: requestAbsUrl,
@@ -2254,7 +2492,7 @@
                         }
                     });
                 }
-                return reflectApply(originalSend, this, arguments);
+                return reflectApply(originalSend, this, sendArgs);
             }
 
             const effectiveType = rule.type || 'mock';
@@ -2275,7 +2513,7 @@
                 requestUrl = newUrl;
                 requestAbsUrl = resolveUrl(newUrl);
                 redirectHandled = true;
-                return reflectApply(originalSend, this, arguments);
+                return reflectApply(originalSend, this, sendArgs);
             }
 
             // Q-12: synchronous XHR (open(..., false)) blocks the calling
@@ -2309,7 +2547,7 @@
                 // delay / patch / anything else can't be honored without
                 // blocking the thread — pass through to a real synchronous request.
                 log(`Rule "${rule.name}" (type ${effectiveType}) cannot be mocked on a synchronous XHR; passing through`);
-                return reflectApply(originalSend, this, arguments);
+                return reflectApply(originalSend, this, sendArgs);
             }
 
             if (effectiveType === 'block') {
@@ -2368,7 +2606,7 @@
             }
 
             // Anything else — passthrough.
-            return reflectApply(originalSend, this, arguments);
+            return reflectApply(originalSend, this, sendArgs);
         });
 
         // Override setRequestHeader — record it AND always call through so
@@ -2410,6 +2648,7 @@
         let usesHeaders = false;
         let usesGraphQL = false;
         let hasRedirect = false;
+        let hasRequestBody = false;
         const synced = tmState.rules;
         for (let i = 0; i < synced.length; i++) {
             const r = synced[i];
@@ -2417,10 +2656,12 @@
             if (r.match && r.match.headers && objectKeys(r.match.headers).length > 0) usesHeaders = true;
             if (r.match && r.match.graphql && r.match.graphql.operationName) usesGraphQL = true;
             if ((r.type || 'mock') === 'redirect') hasRedirect = true;
+            if (r.type === 'requestBody') hasRequestBody = true;
         }
         tmState._anyRuleUsesHeaders = usesHeaders;
         tmState._anyRuleUsesGraphQL = usesGraphQL;
         tmState._hasRedirectRules = hasRedirect;
+        tmState._hasRequestBodyRules = hasRequestBody && typeof findMatchingRequestBodyRule === 'function';
 
         if (tmState.settings.debugMode) {
             log('State synced:', {
@@ -2466,6 +2707,7 @@
         tmState._anyRuleUsesHeaders = false;
         tmState._anyRuleUsesGraphQL = false;
         tmState._hasRedirectRules = false;
+        tmState._hasRequestBodyRules = false;
         document.removeEventListener(SYNC_STATE_EVENT, onSyncState, true);
         log('Extension context gone; interception stopped for this page');
     }

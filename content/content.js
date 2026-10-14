@@ -87,10 +87,12 @@
     }
 
     // Rule types the interceptor (content/injected.js) actually consults.
-    // Must mirror src/matcher.js's INTERCEPTOR_TYPES. 'headers'/'queryparams'
-    // are DNR-backed and are never read by the interceptor, so we don't pay
-    // to clone them into the MAIN world of every frame (P-8).
-    const INTERCEPTOR_RULE_TYPES = ['mock', 'block', 'delay', 'redirect'];
+    // Must mirror src/matcher.js's INTERCEPTOR_TYPES, plus F3's 'requestBody',
+    // which the interceptor applies in a pass of its own before those.
+    // 'headers'/'queryparams' are DNR-backed and are never read by the
+    // interceptor, so we don't pay to clone them into the MAIN world of every
+    // frame (P-8).
+    const INTERCEPTOR_RULE_TYPES = ['mock', 'block', 'delay', 'redirect', 'requestBody'];
 
     // State
     let stateRequestTimeout = null;
