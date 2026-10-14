@@ -100,6 +100,9 @@
     // Rule types handled by the interceptor (fetch/XHR patch). 'headers' and
     // 'queryparams' are DNR-backed and are never matched here.
     const INTERCEPTOR_TYPES = new Set(['mock', 'block', 'delay', 'redirect']);
+    // F3: request-body rules run as their own pass before the main one, so
+    // they are deliberately not in INTERCEPTOR_TYPES.
+    const REQUEST_BODY_TYPE = 'requestBody';
 
     // Compiled-pattern cache (P-4): matchUrl is called once per enabled rule on
     // every intercepted request, so recompiling a RegExp per call is pure waste.
@@ -674,6 +677,21 @@
      * matches any method.
      */
     function findMatchingRule(rules, request) {
+        return findFirstMatch(rules, request, false);
+    }
+
+    /**
+     * F3: the first enabled `requestBody` rule (array order) matching the
+     * request, judged exactly as findMatchingRule judges the main pass. A
+     * separate pass, as in Requestly: the interceptor applies this rule to
+     * the body first, then runs findMatchingRule on the modified request.
+     */
+    function findMatchingRequestBodyRule(rules, request) {
+        return findFirstMatch(rules, request, true);
+    }
+
+    // `requestBodyPass`: requestBody rules only (F3), else the main-pass types.
+    function findFirstMatch(rules, request, requestBodyPass) {
         if (!isArray(rules)) return null;
         const { url, method, headers, bodyText } = request || {};
 
@@ -696,7 +714,7 @@
             if (!rule || !own(rule, 'enabled')) continue;
 
             const type = own(rule, 'type') || 'mock';
-            if (!setHas(INTERCEPTOR_TYPES, type)) continue;
+            if (requestBodyPass ? type !== REQUEST_BODY_TYPE : !setHas(INTERCEPTOR_TYPES, type)) continue;
 
             const match = own(rule, 'match') || {};
             const ruleMethod = stringToUpperCase(own(match, 'method') || '*');
@@ -715,7 +733,7 @@
     // isCatastrophicRegex is exported so the save-time validator and the
     // redirect path guard against the same thing this matcher does, rather
     // than each re-deriving (or, as before, omitting) the check.
-    const api = { matchUrl, matchHeaders, matchGraphQL, findMatchingRule, isCatastrophicRegex };
+    const api = { matchUrl, matchHeaders, matchGraphQL, findMatchingRule, findMatchingRequestBodyRule, isCatastrophicRegex };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
