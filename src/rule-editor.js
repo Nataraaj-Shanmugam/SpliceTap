@@ -50,6 +50,10 @@
     // its target before request headers exist (CQ-4).
     const CONDITION_TYPES = ['mock', 'block', 'delay'];
 
+    // F1: redirect and block can also be applied by declarativeNetRequest to
+    // every resource type (appliesTo: 'all'), not only to fetch/XHR.
+    const APPLIES_TO_TYPES = ['block', 'redirect'];
+
     // Fields that belong to exactly one rule type. When an edit changes the
     // type, the old type's field is removed rather than carried as dead data.
     const TYPE_FIELDS = {
@@ -115,7 +119,7 @@
         if (/^Delay must/i.test(m)) return type === 'delay' ? 'tmDelayMs' : 'tmDelay';
         if (/response patch/i.test(m)) return 'tmPatch';
         if (/^The response body/i.test(m)) return 'tmBody';
-        if (/^Redirect destination/i.test(m)) return 'tmRedirect';
+        if (/^Redirect destination|^Use a full URL/i.test(m)) return 'tmRedirect';
         if (/^Request header #|^request header operations|^At least one request or response header/i.test(m)) return 'tmHdrReq';
         if (/^Response header #|^response header operations|^Access-Control-Allow-Origin/i.test(m)) return 'tmHdrRes';
         if (/^"add"|^Added parameter|^At least one query parameter/i.test(m)) return 'tmQpAdd';
@@ -697,6 +701,14 @@
                 <span class="tm-hint" id="tmRedirectHint">If URL Pattern is a /regex/, use $1-$9 for capture groups.</span>
               </div>
 
+              <!-- F1: redirect and block reach fetch/XHR in the page; ticking
+                   this also sends every other resource type through Chrome's
+                   network layer (appliesTo: 'all'). -->
+              <div class="tm-field" id="tmAppliesAllField" data-types="block redirect">
+                <label class="tm-check"><input type="checkbox" id="tmAppliesAll" aria-describedby="tmAppliesAllHint"> Also apply to scripts, images, styles and pages</label>
+                <span class="tm-hint" id="tmAppliesAllHint">fetch/XHR are handled in the page; everything else by Chrome's network layer.</span>
+              </div>
+
               <!-- headers -->
               <div class="tm-field" data-types="headers">
                 <label for="tmHdrReq">Request Headers (JSON array of {op, name, value})</label>
@@ -1097,6 +1109,9 @@
 
             $('tmDelayMs').value = r.delayMs || 1000;
             $('tmRedirect').value = (r.redirect && r.redirect.destination) || '';
+            // F1: a new rule defaults to "all requests" (Requestly's behaviour);
+            // an existing one shows what it stores, absent meaning page-only.
+            $('tmAppliesAll').checked = rule ? r.appliesTo === 'all' : true;
 
             const hm = r.headersMod || {};
             $('tmHdrReq').value = hm.request && hm.request.length ? JSON.stringify(hm.request, null, 2) : '';
@@ -1155,6 +1170,14 @@
                 if (op) match.graphql = { operationName: op };
             }
             rule.match = match;
+
+            // F1: appliesTo is valid on redirect and block only; any other type
+            // must not carry a stale one over from a type change.
+            if (APPLIES_TO_TYPES.includes(type)) {
+                rule.appliesTo = $('tmAppliesAll').checked ? 'all' : 'page';
+            } else {
+                delete rule.appliesTo;
+            }
 
             if (type === 'mock') {
                 const mode = $('tmMode').value;
@@ -1386,7 +1409,12 @@
         return {
             open,
             close: () => close(false),
-            isOpen: () => !!(hostEl && hostEl.isConnected)
+            isOpen: () => !!(hostEl && hostEl.isConnected),
+            // The rule the form currently describes, before the schema judges
+            // it. Save uses this; it is exposed so a unit test can assert what
+            // a form state produces without a trusted click on Save (which
+            // the editor, by design, refuses from script).
+            collect: () => collect()
         };
     }
 
