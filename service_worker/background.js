@@ -17,7 +17,7 @@ import '../src/matcher.js';
 import '../src/rule-schema.js';
 import './dnr.js';
 
-const { syncDnrRules, deepEqual } = globalThis.SpliceTapDnr;
+const { syncDnrRules, deepEqual, isDnrRule, isNetworkRule } = globalThis.SpliceTapDnr;
 const { generateId } = globalThis.SpliceTapCommon;
 const RuleSchema = globalThis.SpliceTapRuleSchema;
 
@@ -482,7 +482,10 @@ class SpliceTapBackground {
                     if (typeof ruleToSave.id !== 'string' || !ruleToSave.id.trim()) {
                         ruleToSave.id = generateId();
                     }
-                    if ((ruleToSave.type === 'headers' || ruleToSave.type === 'queryparams') && !ruleToSave.dnrRuleId) {
+                    // F1: appliesTo:'all' redirect/block rules are network
+                    // rules too. One flipped back to 'page' keeps its id; the
+                    // sync withdraws its DNR rule.
+                    if (isDnrRule(ruleToSave) && !ruleToSave.dnrRuleId) {
                         ruleToSave.dnrRuleId = await this.allocateDnrIdSerialized();
                     }
                     // QA-1: the storage layer's own result used to be discarded
@@ -953,7 +956,7 @@ class SpliceTapBackground {
             chosen.push({ rule, previous, asStored: false });
         }
 
-        const isDnr = (r) => r.type === 'headers' || r.type === 'queryparams';
+        const isDnr = (r) => isDnrRule(r); // F1: includes appliesTo:'all' redirect/block
         const usedDnrIds = new Set();
         const keepsOwnId = new Set();
         for (const entry of chosen) {
@@ -1004,9 +1007,10 @@ class SpliceTapBackground {
         // backreferences and oversized patterns are valid JS but rejected by
         // DNR — and a rejected rule takes its whole updateDynamicRules batch
         // down with it. Ask Chrome rather than approximate RE2 here.
-        const type = rule && (rule.type || 'mock');
         const pattern = rule && rule.match && rule.match.url;
-        const dnrBacked = type === 'headers' || type === 'queryparams';
+        // F1: an appliesTo:'all' redirect/block rule's regex runs in RE2 too.
+        const networkRule = isNetworkRule(rule);
+        const dnrBacked = isDnrRule(rule);
         if (errors.length === 0 && dnrBacked && RuleSchema.isRegexPattern(pattern)
             && chrome.declarativeNetRequest && typeof chrome.declarativeNetRequest.isRegexSupported === 'function') {
             try {
@@ -1018,7 +1022,9 @@ class SpliceTapBackground {
                     const why = support.reason === 'memoryLimitExceeded'
                         ? "it is too complex for Chrome's network rules"
                         : "Chrome's network rules do not support its syntax (no lookarounds or backreferences)";
-                    errors.push(`Invalid URL pattern: this regex cannot be used for header or query-parameter rules — ${why}`);
+                    errors.push(networkRule
+                        ? `Invalid URL pattern: this regex cannot be used for a rule that applies to all requests — ${why}. Untick "all requests" or simplify it.`
+                        : `Invalid URL pattern: this regex cannot be used for header or query-parameter rules — ${why}`);
                 }
             } catch (error) {
                 // Availability check only; the resilient sync in dnr.js still

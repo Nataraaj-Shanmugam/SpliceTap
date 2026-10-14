@@ -1,7 +1,8 @@
 /**
  * SpliceTap DNR (declarativeNetRequest) sync.
- * Maps v2 'headers' / 'queryparams' rules to chrome.declarativeNetRequest
- * dynamic rules and keeps the DNR ruleset in sync with stored rules.
+ * Maps v2 'headers' / 'queryparams' rules, and redirect / block rules with
+ * appliesTo:'all' (F1), to chrome.declarativeNetRequest dynamic rules and
+ * keeps the DNR ruleset in sync with stored rules.
  *
  * Module-loading note: written UMD-only (no top-level ESM `export`) because
  * this repo's Jest has no ESM transform (see src/index.js's require-based
@@ -16,6 +17,25 @@
     'use strict';
 
     const DNR_TYPES = ['headers', 'queryparams'];
+
+    // F1: redirect and block rules marked appliesTo:'all' also reach page
+    // resources (scripts, images, documents…) through DNR. fetch/XHR stay
+    // with the interceptor, so `xmlhttprequest` is left out and no request
+    // is handled twice.
+    const NETWORK_TYPES = ['redirect', 'block'];
+    const ALL_RESOURCE_TYPES = [
+        'main_frame', 'sub_frame', 'script', 'stylesheet', 'image', 'font', 'media', 'object',
+        'ping', 'csp_report', 'websocket', 'webtransport', 'webbundle', 'other'
+    ];
+    // C-11: what headers/queryparams rules reach ('other' covers some fetches).
+    const API_RESOURCE_TYPES = ['xmlhttprequest', 'other'];
+    // F1: earlier rules win, as in the interceptor's first-match.
+    const NETWORK_PRIORITY_BASE = 100000;
+
+    const isNetworkRule = (rule) => !!rule && NETWORK_TYPES.indexOf(rule.type) !== -1 && rule.appliesTo === 'all';
+
+    /** Does this rule compile to a DNR rule (and so need a dnrRuleId)? */
+    const isDnrRule = (rule) => !!rule && (DNR_TYPES.indexOf(rule.type) !== -1 || isNetworkRule(rule));
 
     // S-3's forbidden-header list and the header-op validator now live in
     // src/rule-schema.js, shared with the editors and the save boundary. They
@@ -81,9 +101,10 @@
      *   only ever touches API-style requests, never the page's own document,
      *   script, or image loads (C-11) — narrower blast radius, and it also
      *   matches what this product is actually for (mocking/modifying API
-     *   calls, not general page resources).
+     *   calls, not general page resources). F1: appliesTo:'all' rules pass
+     *   ALL_RESOURCE_TYPES instead.
      */
-    function buildCondition(match) {
+    function buildCondition(match, resourceTypes = API_RESOURCE_TYPES) {
         const condition = {};
         const pattern = match && match.url;
 
@@ -100,9 +121,79 @@
             condition.requestMethods = [method.toLowerCase()];
         }
 
-        condition.resourceTypes = ['xmlhttprequest', 'other'];
+        condition.resourceTypes = resourceTypes.slice();
 
         return condition;
+    }
+
+    const isRegexPattern = (pattern) => typeof pattern === 'string' && pattern.length >= 2
+        && pattern.startsWith('/') && pattern.endsWith('/');
+
+    // Capture groups in a regex body, or Infinity when JS cannot compile it
+    // (RE2 syntax JS lacks): Chrome then judges the substitution itself.
+    function captureGroupCount(body) {
+        try {
+            return new RegExp(body + '|').exec('').length - 1;
+        } catch (error) {
+            return Infinity;
+        }
+    }
+
+    /**
+     * F1: a destination with $1-$9 as an RE2 rewrite string. As in the
+     * interceptor (computeRedirectUrl), $0 and references past the last group
+     * stay literal; a literal backslash must be doubled for RE2.
+     */
+    function toRegexSubstitution(destination, groups) {
+        let out = '';
+        for (let i = 0; i < destination.length; i++) {
+            const c = destination[i];
+            const digit = destination[i + 1];
+            if (c === '\\') {
+                out += '\\\\';
+            } else if (c === '$' && digit >= '1' && digit <= '9' && Number(digit) <= groups) {
+                out += '\\' + digit;
+                i++;
+            } else {
+                out += c;
+            }
+        }
+        return out;
+    }
+
+    /**
+     * F1: an appliesTo:'all' redirect or block rule -> its DNR action and
+     * condition, or null when DNR cannot express it faithfully.
+     */
+    function buildNetworkRule(rule) {
+        const match = rule.match || {};
+        // DNR has no header or GraphQL conditions. Compiling without them
+        // would redirect or block more than the rule says, so such a rule
+        // stays with the interceptor.
+        const hasHeaders = match.headers && typeof match.headers === 'object' && Object.keys(match.headers).length > 0;
+        if (hasHeaders || (match.graphql && match.graphql.operationName)) return null;
+
+        const condition = buildCondition(match, ALL_RESOURCE_TYPES);
+        if (rule.type === 'block') return { condition, action: { type: 'block' } };
+
+        const destination = rule.redirect && rule.redirect.destination;
+        // A root-relative destination has no meaning for an arbitrary
+        // resource; the schema requires a full URL for these rules.
+        if (typeof destination !== 'string' || !/^https?:\/\/[^/?#\\]/i.test(destination)) return null;
+
+        if (isRegexPattern(match.url) && /\$[1-9]/.test(destination)) {
+            const body = match.url.slice(1, -1);
+            // regexSubstitution replaces only the matched part of the URL;
+            // the interceptor replaces the whole URL (PER-9). Matching the
+            // whole URL around the pattern gives the same result. A
+            // non-capturing group keeps the rule's group numbers.
+            condition.regexFilter = '^.*?(?:' + body + ').*$';
+            return {
+                condition,
+                action: { type: 'redirect', redirect: { regexSubstitution: toRegexSubstitution(destination, captureGroupCount(body)) } }
+            };
+        }
+        return { condition, action: { type: 'redirect', redirect: { url: destination } } };
     }
 
     function mapHeaderOp(op) {
@@ -164,10 +255,25 @@
      * Pure mapping: one v2 rule of type 'headers'/'queryparams' -> one DNR
      * dynamic rule object. Returns null for non-DNR-backed types or rules
      * without an allocated dnrRuleId (DNR ids must be positive integers).
+     *
+     * F1: also appliesTo:'all' redirect/block rules, with priority
+     * 100000 - `index` (the rule's position in the rule list), so an earlier
+     * rule wins — over a later one, and over any query-param redirect.
      */
-    function ruleToDnr(rule) {
-        if (!rule || DNR_TYPES.indexOf(rule.type) === -1 || !rule.dnrRuleId) {
+    function ruleToDnr(rule, index = 0) {
+        if (!rule || !isDnrRule(rule) || !rule.dnrRuleId) {
             return null;
+        }
+
+        if (isNetworkRule(rule)) {
+            const built = buildNetworkRule(rule);
+            if (!built) return null;
+            return {
+                id: rule.dnrRuleId,
+                priority: Math.max(1, NETWORK_PRIORITY_BASE - (Number(index) || 0)),
+                condition: built.condition,
+                action: built.action
+            };
         }
 
         const condition = buildCondition(rule.match || {});
@@ -247,8 +353,11 @@
     async function syncOnce(rules, isActive) {
         try {
             const dnrApi = chrome.declarativeNetRequest;
+            // F1: each rule keeps its list position, which sets the
+            // priority of a redirect/block network rule.
             const candidates = isActive
-                ? (rules || []).filter((rule) => rule && rule.enabled && DNR_TYPES.indexOf(rule.type) !== -1)
+                ? (rules || []).map((rule, index) => ({ rule, index }))
+                    .filter(({ rule }) => rule && rule.enabled && isDnrRule(rule))
                 : [];
 
             const known = await loadKnownRejected();
@@ -257,8 +366,8 @@
             const reject = (rule, error) => rejected.push({ id: rule.id, name: rule.name, error });
             const ids = new Set();
             let entries = [];
-            for (const rule of candidates) {
-                const dnr = ruleToDnr(rule);
+            for (const { rule, index } of candidates) {
+                const dnr = ruleToDnr(rule, index);
                 if (!dnr) continue;
                 const signature = JSON.stringify(dnr);
                 if (known.has(signature)) {
@@ -480,7 +589,10 @@
         return true;
     }
 
-    const api = { ruleToDnr, syncDnrRules, dnrRuleEqual, validateHeadersMod, FORBIDDEN_HEADER_NAMES, deepEqual };
+    const api = {
+        ruleToDnr, syncDnrRules, dnrRuleEqual, validateHeadersMod, FORBIDDEN_HEADER_NAMES, deepEqual,
+        isDnrRule, isNetworkRule, ALL_RESOURCE_TYPES, API_RESOURCE_TYPES
+    };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
