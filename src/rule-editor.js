@@ -41,14 +41,20 @@
         ['delay', 'Delay'],
         ['redirect', 'Redirect'],
         ['headers', 'Modify Headers'],
-        ['queryparams', 'Query Params']
+        ['queryparams', 'Query Params'],
+        ['requestBody', 'Modify Request Body']
     ];
 
     // Rule types the in-page interceptor handles, and so the ones that can
     // carry header/GraphQL match conditions. headers/queryparams are applied
     // by declarativeNetRequest, which cannot express them; redirect must pick
-    // its target before request headers exist (CQ-4).
-    const CONDITION_TYPES = ['mock', 'block', 'delay'];
+    // its target before request headers exist (CQ-4). F3: requestBody is the
+    // interceptor's too, and its shape names headers and graphql.
+    const CONDITION_TYPES = ['mock', 'block', 'delay', 'requestBody'];
+
+    // F1: redirect and block can also be applied by declarativeNetRequest to
+    // every resource type (appliesTo: 'all'), not only to fetch/XHR.
+    const APPLIES_TO_TYPES = ['block', 'redirect'];
 
     // Fields that belong to exactly one rule type. When an edit changes the
     // type, the old type's field is removed rather than carried as dead data.
@@ -57,7 +63,8 @@
         delay: 'delayMs',
         redirect: 'redirect',
         headers: 'headersMod',
-        queryparams: 'queryParams'
+        queryparams: 'queryParams',
+        requestBody: 'requestBody'
     };
 
     // CQ-10: limits come from the one shared definition (src/common.js).
@@ -65,7 +72,8 @@
         return (global.SpliceTapCommon && global.SpliceTapCommon.LIMITS) || {
             STATUS_MIN: 200, STATUS_MAX: 599,
             DELAY_MIN: 0, DELAY_MAX: 30000,
-            DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000
+            DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000,
+            CODE_MAX: 20000 // F4
         };
     }
 
@@ -105,17 +113,32 @@
 
         if (/^Rule name/i.test(m)) return 'tmName';
         if (/^Unknown rule type/i.test(m)) return 'tmType';
+        // F1: the all-requests checkbox is what these two are about — a stray
+        // appliesTo, and "all requests" combined with a header/GraphQL
+        // condition (which only fetch/XHR can be checked against).
+        if (/^"appliesTo"|^Rules that apply to all requests/i.test(m)) return 'tmAppliesAll';
         if (/URL pattern/i.test(m)) return 'tmUrl';
         if (/GraphQL operation matching requires method|^HTTP method/i.test(m)) return 'tmMethod';
         if (/GraphQL condition/i.test(m)) return 'tmGraphql';
         if (/^Match request headers/i.test(m)) return 'tmMatchHeaders';
+        // F3: every request-body message opens "Request body", then names the
+        // part: "mode", "(static)" or "(patch)". A GET/HEAD refusal opens
+        // "HTTP method" and is caught above.
+        // "Request body settings are required" names no part, and the mode
+        // select is the part that is always there.
+        if (/^Request body mode/i.test(m)) return 'tmReqMode';
+        if (/^Request body \(patch\)/i.test(m)) return 'tmReqPatch';
+        if (/^Request body \(static\)/i.test(m)) return 'tmReqBody';
+        if (/^Request body/i.test(m)) return 'tmReqMode';
+        // F4: the code of a code response (missing, or over the limit).
+        if (/^Code response/i.test(m)) return 'tmCode';
         if (/^Response mode/i.test(m)) return 'tmMode';
         if (/status code/i.test(m)) return 'tmStatus';
         if (/^Response headers/i.test(m)) return 'tmResHeaders';
         if (/^Delay must/i.test(m)) return type === 'delay' ? 'tmDelayMs' : 'tmDelay';
         if (/response patch/i.test(m)) return 'tmPatch';
         if (/^The response body/i.test(m)) return 'tmBody';
-        if (/^Redirect destination/i.test(m)) return 'tmRedirect';
+        if (/^Redirect destination|^Use a full URL/i.test(m)) return 'tmRedirect';
         if (/^Request header #|^request header operations|^At least one request or response header/i.test(m)) return 'tmHdrReq';
         if (/^Response header #|^response header operations|^Access-Control-Allow-Origin/i.test(m)) return 'tmHdrRes';
         if (/^"add"|^Added parameter|^At least one query parameter/i.test(m)) return 'tmQpAdd';
@@ -386,6 +409,32 @@
         }
 
         .tm-hint { font-size: 0.6875em; color: #8b9ab3; line-height: 1.45; }
+        .tm-hint code {
+            font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 1em;
+        }
+
+        /* F4: a code listing, not prose — kept left-to-right, unwrapped. */
+        .tm-field textarea.tm-code {
+            direction: ltr;
+            text-align: left;
+            white-space: pre;
+            overflow-x: auto;
+            tab-size: 2;
+        }
+
+        /* F4: a heads-up, not an error: amber-tinted, main text colour so the
+           contrast does not depend on the tint. */
+        .tm-note {
+            padding: 7px 10px;
+            border-radius: 8px;
+            font-size: 0.75em;
+            line-height: 1.45;
+            color: #e7eefb;
+            background: rgba(245, 158, 11, 0.14);
+            border: 1px solid rgba(245, 158, 11, 0.4);
+        }
+        .tm-note[hidden] { display: none; }
 
         /* PER-77: required-field marker (the glyph, not the colour, carries
            the meaning; aria-required carries it for assistive tech) and the
@@ -464,7 +513,7 @@
            block being revealed, so its label/control gap still applies. */
         .tm-field[data-types].tm-visible { display: flex; }
 
-        /* ── Light theme (class set on .tm-backdrop by applyTheme) ──────── */
+        /* ── Light theme (class set on .tm-backdrop by applySettings) ──────── */
         .tm-light { color-scheme: light; background: rgba(15, 23, 42, 0.32); }
         .tm-light .tm-panel {
             background: #ffffff;
@@ -478,6 +527,11 @@
         .tm-light .tm-field > label:not(.tm-check) { color: #5d6a80; }
         .tm-light .tm-hint,
         .tm-light .tm-legend { color: #5d6a80; }
+        .tm-light .tm-note {
+            color: #101828;
+            background: rgba(217, 119, 6, 0.1);
+            border-color: rgba(217, 119, 6, 0.4);
+        }
         .tm-light .tm-req,
         .tm-light .tm-field-err { color: #b91c1c; }
         .tm-light .tm-field [aria-invalid="true"] { border-color: #b91c1c !important; }
@@ -527,6 +581,7 @@
         @media (forced-colors: active) {
             .tm-panel,
             .tm-error,
+            .tm-note,
             .tm-hintbar,
             .tm-btn,
             .tm-field input[type="text"],
@@ -649,6 +704,7 @@
                   <select id="tmMode">
                     <option value="static">Static</option>
                     <option value="patch">Patch (merge into real)</option>
+                    <option value="code">Code (JavaScript)</option>
                   </select>
                 </div>
               </div>
@@ -657,17 +713,17 @@
                    handles (mock, block, delay). They were shown for mocks
                    only, so editing a block or delay rule that carried them
                    (valid, and importable) silently dropped them on save. -->
-              <div class="tm-field" data-types="mock block delay">
+              <div class="tm-field" data-types="mock block delay requestBody">
                 <label for="tmGraphql">GraphQL Operation Name (optional)</label>
                 <input type="text" id="tmGraphql" placeholder="e.g. getUsers">
               </div>
 
-              <div class="tm-field" data-types="mock block delay">
+              <div class="tm-field" data-types="mock block delay requestBody">
                 <label for="tmMatchHeaders">Match Request Headers (JSON, optional)</label>
                 <textarea id="tmMatchHeaders" rows="2" placeholder='{"x-api-key": "abc"}'></textarea>
               </div>
 
-              <div class="tm-field" data-types="mock">
+              <div class="tm-field" data-types="mock" id="tmResHeadersField">
                 <label for="tmResHeaders">Response Headers (JSON)</label>
                 <textarea id="tmResHeaders" rows="2">{"Content-Type": "application/json"}</textarea>
               </div>
@@ -683,6 +739,40 @@
                 <span class="tm-hint" id="tmPatchHint">Merged into the real response (RFC 7386). null deletes a key.</span>
               </div>
 
+              <!-- F4: a code response. The gate note is shown only once the
+                   settings have been read and say code responses are off; the
+                   rule can be saved either way. dir="ltr" and wrap="off" keep
+                   the code a code listing on an RTL page too. -->
+              <div class="tm-field" data-types="mock" id="tmCodeField">
+                <label for="tmCode">Response Code (JavaScript)${REQ}</label>
+                <div class="tm-note" id="tmCodeOffNote" hidden>Code responses are off &mdash; turn them on in SpliceTap Settings.</div>
+                <textarea id="tmCode" class="tm-code" rows="9" aria-required="true" dir="ltr" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="return { status: 200, body: { id: 1 } };" aria-describedby="tmCodeHint tmCodeSecurity"></textarea>
+                <span class="tm-hint" id="tmCodeHint">Body of an async function. <code>request</code> has url, method, headers, body, json. Return a body or {status, headers, body}.</span>
+                <span class="tm-hint" id="tmCodeSecurity">Runs inside the page you are testing.</span>
+              </div>
+
+              <!-- F3: modify request body -->
+              <div class="tm-field" data-types="requestBody">
+                <label for="tmReqMode">Body Change</label>
+                <select id="tmReqMode" aria-describedby="tmReqModeHint">
+                  <option value="static">Replace body</option>
+                  <option value="patch">JSON patch</option>
+                </select>
+                <span class="tm-hint" id="tmReqModeHint">Changes the body of fetch/XHR requests that carry one, before any other rule is matched. GET and HEAD have no body, so they are not offered as methods.</span>
+              </div>
+
+              <div class="tm-field" data-types="requestBody" id="tmReqBodyField">
+                <label for="tmReqBody">Request Body</label>
+                <textarea id="tmReqBody" rows="7" placeholder='{"id": 1, "name": "Test User"}' aria-describedby="tmReqBodyHint"></textarea>
+                <span class="tm-hint" id="tmReqBodyHint">Replaces the request's body. Placeholders like {{guid}}, {{timestamp}} and {{randomInt}} are filled in for a plain-text body.</span>
+              </div>
+
+              <div class="tm-field" data-types="requestBody" id="tmReqPatchField">
+                <label for="tmReqPatch">Request Body Patch (JSON Merge Patch)</label>
+                <textarea id="tmReqPatch" rows="7" placeholder='{"user": {"role": "admin"}}' aria-describedby="tmReqPatchHint"></textarea>
+                <span class="tm-hint" id="tmReqPatchHint">Merged into the request's JSON body (RFC 7386). null deletes a key. A body that isn't a JSON object is left unchanged.</span>
+              </div>
+
               <!-- delay -->
               <div class="tm-field" data-types="delay">
                 <label for="tmDelayMs">Delay (ms)</label>
@@ -695,6 +785,14 @@
                 <label for="tmRedirect">Redirect Destination${REQ}</label>
                 <input type="text" id="tmRedirect" placeholder="https://localhost:3000/api" aria-required="true" aria-describedby="tmRedirectHint">
                 <span class="tm-hint" id="tmRedirectHint">If URL Pattern is a /regex/, use $1-$9 for capture groups.</span>
+              </div>
+
+              <!-- F1: redirect and block reach fetch/XHR in the page; ticking
+                   this also sends every other resource type through Chrome's
+                   network layer (appliesTo: 'all'). -->
+              <div class="tm-field" id="tmAppliesAllField" data-types="block redirect">
+                <label class="tm-check"><input type="checkbox" id="tmAppliesAll" aria-describedby="tmAppliesAllHint"> Also apply to scripts, images, styles and pages</label>
+                <span class="tm-hint" id="tmAppliesAllHint">fetch/XHR are handled in the page; everything else by Chrome's network layer.</span>
               </div>
 
               <!-- headers -->
@@ -756,6 +854,7 @@
         let closeArmed = false;
         let closeWarningShown = false;    // PER-84: the unsaved-changes message is what's in the error box
         let unloadGuarded = false;        // PER-63: a beforeunload handler is registered
+        let settings = null;              // F4: the extension settings, once read; null until then
 
         const $ = (id) => shadow && shadow.getElementById(id);
         const send = (message) => chrome.runtime.sendMessage(message);
@@ -766,7 +865,12 @@
             tmUrl: 'tmUrlHint',
             tmPatch: 'tmPatchHint',
             tmDelayMs: 'tmDelayMsHint',
-            tmRedirect: 'tmRedirectHint'
+            tmRedirect: 'tmRedirectHint',
+            tmAppliesAll: 'tmAppliesAllHint',
+            tmReqMode: 'tmReqModeHint',
+            tmReqBody: 'tmReqBodyHint',
+            tmReqPatch: 'tmReqPatchHint',
+            tmCode: 'tmCodeHint tmCodeSecurity'
         };
 
         /**
@@ -834,6 +938,7 @@
             });
             $('tmType').addEventListener('change', () => applyTypeVisibility());
             $('tmMode').addEventListener('change', () => applyTypeVisibility());
+            $('tmReqMode').addEventListener('change', () => applyTypeVisibility());
             $('tmHintClose').addEventListener('click', dismissHint);
 
             // Close on backdrop click (but not when clicking inside the panel).
@@ -883,6 +988,10 @@
             set('tmPatch', t.patch);
             set('tmDelayMs', t.delayMs);
             set('tmRedirect', t.redirectDestination);
+            // F3: the flat form of a template's requestBody object.
+            set('tmReqMode', t.requestBodyMode);
+            set('tmReqBody', t.requestBodyBody);
+            set('tmReqPatch', t.requestBodyPatch);
             set('tmGraphql', t.graphqlOperation);
             set('tmHdrReq', t.headersModRequest);
             set('tmHdrRes', t.headersModResponse);
@@ -965,15 +1074,56 @@
                 el.classList.toggle('tm-visible', el.dataset.types.split(' ').includes(type));
             });
             if (type === 'mock') {
-                const patch = $('tmMode').value === 'patch';
-                $('tmBodyField').classList.toggle('tm-visible', !patch);
+                const mode = $('tmMode').value;
+                const patch = mode === 'patch';
+                const code = mode === 'code';
+                $('tmBodyField').classList.toggle('tm-visible', !patch && !code);
                 $('tmPatchField').classList.toggle('tm-visible', patch);
+                $('tmCodeField').classList.toggle('tm-visible', code);
                 // Patch mode keeps the real response's status, so a Status Code
                 // field there was a control with no effect: set 503 and the
                 // page still got the real 200. Hidden while it cannot apply.
+                // F4: a code response returns its own status and headers (200
+                // and a guessed Content-Type unless it says otherwise), so the
+                // same goes for both fields in code mode.
                 // (Inline style: the field's own display rule outranks [hidden].)
-                $('tmStatusField').style.display = patch ? 'none' : '';
+                $('tmStatusField').style.display = patch || code ? 'none' : '';
+                $('tmResHeadersField').style.display = code ? 'none' : '';
             }
+            if (type === 'requestBody') {
+                const patch = $('tmReqMode').value === 'patch';
+                $('tmReqBodyField').classList.toggle('tm-visible', !patch);
+                $('tmReqPatchField').classList.toggle('tm-visible', patch);
+            }
+
+            // F3: a request with no body (GET, HEAD) has nothing to change, so
+            // those methods are not offered. A rule switched over from one of
+            // them falls back to Any (*), which the schema allows.
+            const method = $('tmMethod');
+            const bodyless = type === 'requestBody';
+            for (const opt of method.options) {
+                if (opt.value === 'GET' || opt.value === 'HEAD') {
+                    opt.disabled = bodyless;
+                    opt.hidden = bodyless;
+                }
+            }
+            if (bodyless && (method.value === 'GET' || method.value === 'HEAD')) method.value = '*';
+
+            // Hints that exist only in some states are linked only then.
+            linkDescriptions(method);
+            refreshCodeNote();
+        }
+
+        /**
+         * F4: whether the gate note shows. Only once the settings have been
+         * read and say code responses are off — an unreadable setting must not
+         * claim a state it could not confirm. Saving is allowed either way.
+         */
+        function refreshCodeNote() {
+            const note = $('tmCodeOffNote');
+            if (!note) return;
+            note.hidden = !(settings && settings.allowCodeResponses !== true);
+            linkDescriptions($('tmCode'));
         }
 
         function showError(msg) {
@@ -996,14 +1146,35 @@
         // the first one takes focus — focus used to stay on Save, so a
         // keyboard user had to hunt for what the alert was about.
 
+        /**
+         * PER-86: point a field's aria-describedby at everything that
+         * describes it right now — its hint(s), any hint that exists only in
+         * some states (F3: why the method list is short for a request-body
+         * rule; F4: the code-responses-are-off note), and its error if it has
+         * one.
+         */
+        function linkDescriptions(el) {
+            if (!el) return;
+            const ids = [];
+            if (el.id === 'tmCode') {
+                const note = $('tmCodeOffNote');
+                if (note && !note.hidden) ids.push('tmCodeOffNote');
+            }
+            if (FIELD_HINTS[el.id]) ids.push(FIELD_HINTS[el.id]);
+            if (el.id === 'tmMethod' && $('tmType').value === 'requestBody') ids.push('tmReqModeHint');
+            const err = $(el.id + 'Err');
+            if (err) ids.push(err.id);
+            if (ids.length) el.setAttribute('aria-describedby', ids.join(' '));
+            else el.removeAttribute('aria-describedby');
+        }
+
         function clearFieldError(id) {
             const el = $(id);
             if (!el) return;
             el.removeAttribute('aria-invalid');
             const err = $(id + 'Err');
             if (err) err.remove();
-            if (FIELD_HINTS[id]) el.setAttribute('aria-describedby', FIELD_HINTS[id]);
-            else el.removeAttribute('aria-describedby');
+            linkDescriptions(el);
         }
 
         function clearFieldErrors() {
@@ -1025,7 +1196,7 @@
                 err.textContent += ' · ' + message;
             }
             el.setAttribute('aria-invalid', 'true');
-            el.setAttribute('aria-describedby', [FIELD_HINTS[id], err.id].filter(Boolean).join(' '));
+            linkDescriptions(el);
             return true;
         }
 
@@ -1094,9 +1265,21 @@
                 ? ''
                 : (typeof res.body === 'string' ? res.body : JSON.stringify(res.body, null, 2));
             $('tmPatch').value = res.patch ? JSON.stringify(res.patch, null, 2) : '';
+            $('tmCode').value = typeof res.code === 'string' ? res.code : '';
+
+            // F3
+            const rb = r.requestBody || {};
+            $('tmReqMode').value = rb.mode || 'static';
+            $('tmReqBody').value = rb.body === undefined
+                ? ''
+                : (typeof rb.body === 'string' ? rb.body : JSON.stringify(rb.body, null, 2));
+            $('tmReqPatch').value = rb.patch ? JSON.stringify(rb.patch, null, 2) : '';
 
             $('tmDelayMs').value = r.delayMs || 1000;
             $('tmRedirect').value = (r.redirect && r.redirect.destination) || '';
+            // F1: a new rule defaults to "all requests" (Requestly's behaviour);
+            // an existing one shows what it stores, absent meaning page-only.
+            $('tmAppliesAll').checked = rule ? r.appliesTo === 'all' : true;
 
             const hm = r.headersMod || {};
             $('tmHdrReq').value = hm.request && hm.request.length ? JSON.stringify(hm.request, null, 2) : '';
@@ -1156,11 +1339,23 @@
             }
             rule.match = match;
 
+            // F1: appliesTo is valid on redirect and block only; any other type
+            // must not carry a stale one over from a type change.
+            if (APPLIES_TO_TYPES.includes(type)) {
+                rule.appliesTo = $('tmAppliesAll').checked ? 'all' : 'page';
+            } else {
+                delete rule.appliesTo;
+            }
+
             if (type === 'mock') {
                 const mode = $('tmMode').value;
                 // Patch mode hides the Status Code field, so a bad value there
                 // could not be fixed; it falls back to the field's default.
-                const statusCode = mode === 'patch'
+                // F4: code mode hides the Status Code and Response Headers
+                // fields too (the code returns both), so neither can be fixed
+                // from the form: the status falls back to 200, and headers the
+                // form cannot show are not parsed.
+                const statusCode = mode === 'patch' || mode === 'code'
                     ? (parseWholeNumber($('tmStatus').value).value || 200)
                     : readInteger('tmStatus', 'Status Code', problems);
                 const delay = readInteger('tmDelay', 'Delay (ms)', problems);
@@ -1168,18 +1363,41 @@
                     statusCode,
                     // CQ-2: derived from the code, not hardcoded 'OK'.
                     statusText: (global.SpliceTapTemplates && global.SpliceTapTemplates.getStatusText(statusCode)) || '',
-                    headers: parseJson('tmResHeaders', 'Response Headers', {}, problems),
+                    headers: mode === 'code'
+                        ? parseJson('tmResHeaders', 'Response Headers', {}, [])
+                        : parseJson('tmResHeaders', 'Response Headers', {}, problems),
                     delay: delay || 0, // blank means no delay
                     mode
                 });
                 if (mode === 'patch') {
                     response.patch = parseJson('tmPatch', 'Response Patch', {}, problems);
                     delete response.body;
+                    delete response.code;
+                } else if (mode === 'code') {
+                    // Kept exactly as typed (indentation matters to nobody but
+                    // the author); a blank one is left '' for the schema to refuse.
+                    const code = $('tmCode').value;
+                    response.code = code.trim() ? code : '';
+                    delete response.body;
+                    delete response.patch;
                 } else {
                     response.body = readBody($('tmBody').value);
                     delete response.patch;
+                    delete response.code;
                 }
                 rule.response = response;
+            } else if (type === 'requestBody') {
+                // F3: only the part the chosen mode uses is stored.
+                const mode = $('tmReqMode').value;
+                const requestBody = Object.assign({}, (editingRule && editingRule.requestBody) || {}, { mode });
+                if (mode === 'patch') {
+                    requestBody.patch = parseJson('tmReqPatch', 'Request Body Patch', {}, problems);
+                    delete requestBody.body;
+                } else {
+                    requestBody.body = readBody($('tmReqBody').value);
+                    delete requestBody.patch;
+                }
+                rule.requestBody = requestBody;
             } else if (type === 'delay') {
                 rule.delayMs = readInteger('tmDelayMs', 'Delay (ms)', problems);
             } else if (type === 'redirect') {
@@ -1337,9 +1555,15 @@
             }
         }
 
-        async function applyTheme() {
+        // F4: the one read of the settings serves the theme and the
+        // code-responses note. Both hosts get them the same way: the
+        // overlay never loads data itself, and the options page's own copy
+        // may be stale by the time a rule is opened.
+        async function applySettings() {
             try {
                 const state = await send({ type: 'getRules' });
+                settings = (state && state.settings) || null;
+                refreshCodeNote();
                 const theme = (state && state.settings && state.settings.theme) || 'auto';
                 const resolved = theme === 'auto'
                     ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
@@ -1367,6 +1591,7 @@
 
             ensureHost();
             editingRule = request.rule || null;
+            settings = null; // re-read below; never show last open's answer
             populate(editingRule, request.prefillUrl);
             // A11Y-7: populate() fires input/change events as it fills the
             // form; reset the dirty flags afterwards, or every editor would
@@ -1376,7 +1601,7 @@
             closeArmed = false;
             setSaving(false);
             clearError();
-            applyTheme();
+            applySettings();
             maybeShowHint();
 
             const nameInput = $('tmName');
@@ -1386,7 +1611,12 @@
         return {
             open,
             close: () => close(false),
-            isOpen: () => !!(hostEl && hostEl.isConnected)
+            isOpen: () => !!(hostEl && hostEl.isConnected),
+            // The rule the form currently describes, before the schema judges
+            // it. Save uses this; it is exposed so a unit test can assert what
+            // a form state produces without a trusted click on Save (which
+            // the editor, by design, refuses from script).
+            collect: () => collect()
         };
     }
 
