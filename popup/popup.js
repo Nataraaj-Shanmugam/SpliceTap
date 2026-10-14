@@ -265,6 +265,11 @@ class SpliceTapPopup {
             this.settings.debugMode = e.target.checked;
             this.saveSettings();
         });
+        // F2: this handler must reach chrome.permissions.request before any
+        // await — Chrome only shows the prompt inside a user gesture.
+        this.addListener('observeNetworkRules', 'change', (e) => this.onObserveToggle(e.target));
+        // F4
+        this.addListener('allowCodeResponses', 'change', (e) => this.onCodeResponsesToggle(e.target));
         this.addListener('chaosModeEnabled', 'change', (e) => {
             if (!this.settings.chaosMode) this.settings.chaosMode = {};
             this.settings.chaosMode.enabled = e.target.checked;
@@ -581,7 +586,7 @@ class SpliceTapPopup {
                              pattern is what gets truncated, and the full text
                              is in the title. -->
                         <div class="rule-details" title="${this.escapeHtml(this.getRuleDetailsTitle(rule))}">
-                            <span class="rule-method ${methodClass}">${safeMethod}</span><span class="rule-outcome">→ ${this.escapeHtml(this.getRuleSummaryText(rule))}</span> <span class="rule-url">${safeUrl}</span>${this.getRuleDestinationHTML(rule)}
+                            <span class="rule-method ${methodClass}">${safeMethod}</span><span class="rule-outcome">→ ${this.escapeHtml(this.getRuleSummaryText(rule))}</span> ${this.getRuleScopeChipHTML(rule)}<span class="rule-url">${safeUrl}</span>${this.getRuleDestinationHTML(rule)}
                         </div>
                     </div>
                     <div class="status-indicator" role="img" aria-label="${statusTooltip}" title="${statusTooltip}">${statusIcon}</div>
@@ -871,7 +876,10 @@ class SpliceTapPopup {
             delay: 'Delay',
             redirect: 'Redirect',
             headers: 'Headers',
-            queryparams: 'Query Params'
+            queryparams: 'Query Params',
+            // F3: the badge is the short name; the long one, "Modify request
+            // body", is the row's outcome and what search matches.
+            requestBody: 'Request body'
         };
         // S-5/Q-22: `type` is placed in a `data-type="..."` attribute. An
         // imported rule with an arbitrary `type` string could otherwise break
@@ -903,13 +911,49 @@ class SpliceTapPopup {
                 return 'Modify headers';
             case 'queryparams':
                 return 'Modify query params';
+            case 'requestBody': {
+                // F3: what happens to the body, not just that it is modified.
+                const mode = rule.requestBody && rule.requestBody.mode;
+                if (mode === 'patch') return 'Patch body';
+                if (mode === 'static') return 'Replace body';
+                return 'Modify request body';
+            }
             case 'mock':
             default: {
                 if (!rule.response) return '200 OK';
                 const delaySuffix = rule.response.delay ? ` (+${rule.response.delay}ms)` : '';
+                // F4: a code response has no status of its own to show; the
+                // function picks it at run time.
+                if (rule.response.mode === 'code') return `Code response${delaySuffix}`;
                 return `${rule.response.statusCode || 200} ${rule.response.statusText || 'OK'}${delaySuffix}`;
             }
         }
+    }
+
+    /**
+     * F1 / F4: the small chips that say how far a rule reaches or how it
+     * answers — "All requests" for a redirect or block that also covers
+     * scripts, images and pages, and "Code" for a mock that runs JavaScript.
+     * A code rule says so when Settings has code responses switched off, since
+     * then it lets the request through instead of answering.
+     *
+     * They sit on the detail line, after the outcome. The name line already
+     * carries Disabled, the type and the hit count, and a fourth chip there
+     * squeezed the rule's name down to a letter.
+     */
+    getRuleScopeChipHTML(rule) {
+        const type = rule.type || 'mock';
+        let html = '';
+        if ((type === 'redirect' || type === 'block') && rule.appliesTo === 'all') {
+            html += '<span class="rule-scope-chip" title="Also applies to scripts, images, pages and every other resource type, not only fetch and XHR">All requests</span>';
+        }
+        if (type === 'mock' && rule.response && rule.response.mode === 'code') {
+            const allowed = !!(this.settings && this.settings.allowCodeResponses);
+            html += allowed
+                ? '<span class="rule-scope-chip" title="Answers with your JavaScript">Code</span>'
+                : '<span class="rule-scope-chip is-off" title="Code responses are turned off in Settings, so this rule lets requests through">Code<span class="visually-hidden"> (off in Settings)</span></span>';
+        }
+        return html;
     }
 
     /**
@@ -1480,6 +1524,12 @@ class SpliceTapPopup {
             rule.match && rule.match.url,
             rule.match && rule.match.method,
             rule.type || 'mock',
+            // F3: the type's long name, so "modify request body" finds these
+            // (the key above is the one-word "requestBody").
+            rule.type === 'requestBody' ? 'modify request body' : '',
+            rule.requestBody ? JSON.stringify(rule.requestBody) : '',
+            // F1: the chip text on the row.
+            rule.appliesTo === 'all' ? 'all requests' : '',
             rule.redirect && rule.redirect.destination,
             rule.response ? JSON.stringify(rule.response) : ''
         ].filter(Boolean).join(' ').toLowerCase();
@@ -1724,6 +1774,161 @@ class SpliceTapPopup {
         }
 
         this.updateChaosRateState();
+
+        const codeEl = document.getElementById('allowCodeResponses');
+        if (codeEl) codeEl.checked = !!s.allowCodeResponses;
+        this.updateCodeWarning();
+
+        this.refreshObserveToggle();
+    }
+
+    // ── F2: header, query-param and all-request rules in the log ───────────
+
+    /** The optional permission the background's network observer needs. */
+    static get OBSERVE_PERMISSIONS() {
+        return { permissions: ['webRequest'] };
+    }
+
+    /** The inline note under the switch; empty text hides it. */
+    setObserveNote(text) {
+        const note = document.getElementById('observeNote');
+        if (!note) return;
+        note.textContent = text || '';
+        note.hidden = !text;
+    }
+
+    /**
+     * Show the switch as on only while the setting is on AND Chrome still
+     * holds the permission. The user can take the permission back from
+     * chrome://extensions at any time, which leaves the stored setting on but
+     * the observer unable to run; the switch must not claim otherwise.
+     */
+    async refreshObserveToggle() {
+        const input = document.getElementById('observeNetworkRules');
+        if (!input || this._observeBusy) return;
+
+        const wanted = !!(this.settings && this.settings.observeNetworkRules);
+        input.checked = wanted;
+        if (!wanted) return;
+
+        // A newer render, or a click, supersedes this check.
+        const seq = (this._observeSeq = (this._observeSeq || 0) + 1);
+        let held = false;
+        try {
+            held = !!(await chrome.permissions.contains(SpliceTapPopup.OBSERVE_PERMISSIONS));
+        } catch (error) {
+            console.warn('SpliceTap popup: could not check the webRequest permission', error);
+        }
+        if (seq !== this._observeSeq || this._observeBusy) return;
+
+        input.checked = held;
+        this.setObserveNote(held ? '' : 'Chrome\'s "webRequest" permission is no longer granted, so this is off. Switch it on to grant it again.');
+    }
+
+    onObserveToggle(input) {
+        // A second click while Chrome's prompt or the save is pending would
+        // race the first; put the switch back where the pending change left it.
+        if (this._observeBusy) {
+            input.checked = !input.checked;
+            return;
+        }
+        this._observeSeq = (this._observeSeq || 0) + 1;
+
+        if (input.checked) {
+            // F2: called synchronously, inside the click's user gesture.
+            let request;
+            try {
+                request = Promise.resolve(chrome.permissions.request(SpliceTapPopup.OBSERVE_PERMISSIONS));
+            } catch (error) {
+                request = Promise.reject(error);
+            }
+            this._observeBusy = true;
+            this.setObserveNote('');
+            this.completeObserveOn(input, request);
+        } else {
+            this._observeBusy = true;
+            this.completeObserveOff(input);
+        }
+    }
+
+    async completeObserveOn(input, request) {
+        try {
+            let granted = false;
+            try {
+                granted = !!(await request);
+            } catch (error) {
+                console.warn('SpliceTap popup: webRequest permission request failed', error);
+                input.checked = false;
+                this.setObserveNote('Chrome could not ask for the permission, so this stays off.');
+                this.announce('Could not ask for the permission. The setting stays off.', 'error');
+                return;
+            }
+
+            if (!granted) {
+                // Declined (or dismissed): nothing was changed, so say so.
+                input.checked = false;
+                const note = 'Permission was declined, so these rules still won\'t appear in the log. Nothing else changed.';
+                this.setObserveNote(note);
+                this.announce(note);
+                return;
+            }
+
+            this.settings.observeNetworkRules = true;
+            if (await this.saveSettings()) {
+                this.announce('Header, query-param and all-request rules will now appear in the log.');
+            } else {
+                this.settings.observeNetworkRules = false;
+                input.checked = false;
+            }
+        } finally {
+            this._observeBusy = false;
+        }
+    }
+
+    async completeObserveOff(input) {
+        try {
+            this.settings.observeNetworkRules = false;
+            this.setObserveNote('');
+            if (!(await this.saveSettings())) {
+                // The background still has it on; keep the permission with it.
+                this.settings.observeNetworkRules = true;
+                input.checked = true;
+                return;
+            }
+            try {
+                await chrome.permissions.remove(SpliceTapPopup.OBSERVE_PERMISSIONS);
+            } catch (error) {
+                // Setting is off already, so the observer is stopped either way.
+                console.warn('SpliceTap popup: could not release the webRequest permission', error);
+            }
+            this.announce('These rules no longer appear in the log. The permission was given back.');
+        } finally {
+            this._observeBusy = false;
+        }
+    }
+
+    // ── F4: code responses ──────────────────────────────────────────────────
+
+    /** The one-line warning shows exactly while code responses are allowed. */
+    updateCodeWarning() {
+        const warning = document.getElementById('codeWarn');
+        if (warning) warning.hidden = !(this.settings && this.settings.allowCodeResponses);
+    }
+
+    async onCodeResponsesToggle(input) {
+        const allowed = input.checked;
+        this.settings.allowCodeResponses = allowed;
+        this.updateCodeWarning();
+        if (await this.saveSettings()) {
+            // Rows say "Code" or "Code (off in Settings)"; keep them current.
+            if ((this.rules || []).some((r) => r && r.response && r.response.mode === 'code')) this.renderRules();
+            this.announce(allowed ? 'Code responses are on. Rules set to Code will run JavaScript.' : 'Code responses are off.');
+        } else {
+            // Not stored, so don't leave the switch claiming it is.
+            this.settings.allowCodeResponses = !allowed;
+            input.checked = !allowed;
+            this.updateCodeWarning();
+        }
     }
 
     /**
@@ -1751,10 +1956,13 @@ class SpliceTapPopup {
             });
             if (!response || !response.success) {
                 this.showError('Could not save settings');
+                return false;
             }
+            return true;
         } catch (error) {
             console.error('Failed to save settings:', error);
             this.showError('Could not save settings');
+            return false;
         }
     }
 

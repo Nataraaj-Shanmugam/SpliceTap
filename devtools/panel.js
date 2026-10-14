@@ -119,6 +119,22 @@
         return entry.kind === 'chaos' ? 'chaos' : (entry.ruleType || 'mock');
     }
 
+    // F3: the badge says what a person would say; every other type reads as
+    // its own key ("mock", "headers"). Display only — filtering and the badge's
+    // data-type use the key.
+    const TYPE_LABELS = { requestBody: 'Request body' };
+
+    function typeLabel(type) {
+        return Object.prototype.hasOwnProperty.call(TYPE_LABELS, type) ? TYPE_LABELS[type] : type;
+    }
+
+    // F2: header, query-param and all-request rules are applied by Chrome, not
+    // by SpliceTap, so their entries come from the network observer with a note
+    // that says so (not from the interceptor, which would set a status).
+    function isObserved(entry) {
+        return typeof entry.note === 'string' && entry.note.indexOf('Seen on the network') === 0;
+    }
+
     // Maps a status to a CSS class + label. A status is: 0 for block, null for
     // a delay that had not settled when it was logged, 302 for a redirect
     // (synthetic: no response was ever a 302), 'failed' for a request that
@@ -170,7 +186,22 @@
             const shown = entry.finalStatus === undefined ? 'redirected' : String(entry.finalStatus);
             return { cls: 'status-neutral', text: '→ ' + shown + via, detail: true };
         }
-        const shown = statusInfo(entry.finalStatus !== undefined ? entry.finalStatus : entry.status);
+        const settled = entry.finalStatus !== undefined ? entry.finalStatus : entry.status;
+        const unsettled = settled === undefined || settled === null;
+        // F2: an observed entry that carries no status (a request-side rule,
+        // seen before any response) is not "pending" — nothing is waiting.
+        if (unsettled && isObserved(entry)) {
+            return type === 'block'
+                ? { cls: 'status-error', text: 'blocked', detail: false }
+                : { cls: 'status-neutral', text: 'applied', detail: false };
+        }
+        // F3: a request-body rule changes what is sent; the response is
+        // whatever the server then says, so with no status it is "modified",
+        // not a request that never settled.
+        if (unsettled && type === 'requestBody') {
+            return { cls: 'status-neutral', text: 'modified', detail: false };
+        }
+        const shown = statusInfo(settled);
         if (type === 'delay' && entry.finalStatus !== undefined && isCount(entry.elapsedMs)) {
             return { cls: shown.cls, text: shown.text + ' after ' + entry.elapsedMs + ' ms', detail: true };
         }
@@ -220,12 +251,7 @@
     async function fetchInterceptionLog() {
         // QA-3: scope the log to the tab this panel is inspecting. Without
         // this the panel showed traffic intercepted in every other tab too.
-        const inspectedTabId = (typeof chrome !== 'undefined'
-            && chrome.devtools
-            && chrome.devtools.inspectedWindow)
-            ? chrome.devtools.inspectedWindow.tabId
-            : undefined;
-        const response = await sendMessage({ type: 'getInterceptionLog', tabId: inspectedTabId });
+        const response = await sendMessage({ type: 'getInterceptionLog', tabId: inspectedTabId() });
         if (response && response.success) {
             clearError();
             // Background stores entries oldest-first (ring buffer push order);
@@ -449,7 +475,7 @@
         const ruleTypeSpan = document.createElement('span');
         ruleTypeSpan.className = 'rule-type-badge';
         ruleTypeSpan.dataset.type = ruleType;
-        ruleTypeSpan.textContent = ruleType;
+        ruleTypeSpan.textContent = typeLabel(ruleType);
         ruleCell.appendChild(ruleNameSpan);
         ruleCell.appendChild(ruleTypeSpan);
         row.appendChild(ruleCell);
@@ -611,6 +637,75 @@
         });
     }
 
+    function inspectedTabId() {
+        return (typeof chrome !== 'undefined' && chrome.devtools && chrome.devtools.inspectedWindow)
+            ? chrome.devtools.inspectedWindow.tabId
+            : undefined;
+    }
+
+    // F5: hand a string to the browser as a file, through a Blob and a link
+    // with a download name (extension pages have no downloads permission here
+    // and need none for this).
+    function downloadText(fileName, text, mimeType) {
+        const blob = new Blob([text], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        link.hidden = true;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        // The click has queued the download; release the blob afterwards.
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }
+
+    // F5: every entry in the log (not only the rows the filter or Dismiss
+    // leaves on screen), with response bodies from captures where the same
+    // method and URL was captured. The log is fetched fresh rather than taken
+    // from the last poll, so the file is what the background holds right now.
+    async function exportHar() {
+        const announcer = byId('logAnnouncer');
+        const say = (text) => { if (announcer) announcer.textContent = text; };
+
+        const [logResponse, captureResponse] = await Promise.all([
+            sendMessage({ type: 'getInterceptionLog', tabId: inspectedTabId() }),
+            sendMessage({ type: 'getCaptures' })
+        ]);
+        if (!logResponse || !logResponse.success) {
+            showError('Could not read the log to export it.');
+            say('Export failed.');
+            return;
+        }
+        clearError();
+
+        const logged = logResponse.entries || [];
+        if (logged.length === 0) {
+            say('Nothing to export yet. Trigger a request that matches one of your rules.');
+            return;
+        }
+        // A missing captures list only costs the response bodies.
+        const captures = (captureResponse && captureResponse.success && captureResponse.captures) || [];
+
+        let version = '';
+        try { version = chrome.runtime.getManifest().version; } catch (e) { /* shown blank */ }
+        const har = window.SpliceTapHar.buildHar(logged, captures, { version });
+        const fileName = window.SpliceTapHar.harFileName(new Date());
+        downloadText(fileName, JSON.stringify(har, null, 2), 'application/json');
+        say('Exported ' + logged.length + (logged.length === 1 ? ' request' : ' requests') + ' to ' + fileName + '.');
+    }
+
+    function setupExportButton() {
+        const btn = byId('exportHarBtn');
+        if (!btn) return;
+        btn.addEventListener('click', () => {
+            exportHar().catch((error) => {
+                console.error('SpliceTap panel: HAR export failed', error);
+                showError('Export failed: ' + error.message);
+            });
+        });
+    }
+
     // WCAG 2.2.2 Pause, Stop, Hide — a real user-facing control, independent
     // of the visibility-driven pause below (a keyboard/screen-reader user
     // can't rely on "switch to another DevTools tab" to get relief from
@@ -747,6 +842,7 @@
             setupThemeMediaListener();
             setupClearButton();
             setupPauseButton();
+            setupExportButton();
             setupFilterControls();
             setupRowDelegation();
             refresh();
