@@ -2,7 +2,9 @@
 
 **Compared:** SpliceTap 0.0.1 against Requestly's browser extension, as
 documented in its current interceptor docs (sources at the end), on
-10 October 2026.
+10 October 2026. For *how* Requestly implements these features — read from
+its open-source code, with the security and design differences that follow —
+see [REQUESTLY-ANALYSIS.md](REQUESTLY-ANALYSIS.md).
 
 **How SpliceTap was tested:** headlessly, in Chrome for Testing 148, with the
 real unpacked extension, driving real pages and reading what actually reached
