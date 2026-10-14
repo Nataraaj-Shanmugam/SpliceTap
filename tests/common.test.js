@@ -60,7 +60,8 @@ describe('LIMITS', () => {
             DELAY_MIN: 0,
             DELAY_MAX: 30000,
             DELAY_MS_MIN: 1,
-            DELAY_MS_MAX: 30000
+            DELAY_MS_MAX: 30000,
+            CODE_MAX: 20000
         });
     });
 

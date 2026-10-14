@@ -63,7 +63,8 @@
         DELAY_MIN: 0,        // response delay on a mock rule
         DELAY_MAX: 30000,
         DELAY_MS_MIN: 1,     // the delay rule type's own wait
-        DELAY_MS_MAX: 30000
+        DELAY_MS_MAX: 30000,
+        CODE_MAX: 20000      // F4: characters of a mock rule's code response
     };
 
     const api = { escapeHtml, generateId, LIMITS };

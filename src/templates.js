@@ -129,6 +129,24 @@
                     { op: 'set', name: 'User-Agent', value: 'Mozilla/5.0 (SpliceTap)' }
                 ]
             }
+        },
+        {
+            // F3: last in the list, so the editors' first-option behaviour is
+            // unchanged. The requestBody* fields are the flat form of the
+            // rule's `requestBody` object: mode, then body (static, text) or
+            // patch (patch, JSON text). The method is '*' because the rule
+            // only ever acts on requests that carry a body — GET and HEAD
+            // pass through it untouched — and a rule saved with GET is refused.
+            id: 'modifyRequestBody',
+            label: 'Modify request body (JSON patch)',
+            description: 'Merge a few fields into the JSON body your page sends',
+            rule: {
+                type: 'requestBody',
+                method: '*',
+                url: '*/api/*',
+                requestBodyMode: 'patch',
+                requestBodyPatch: '{\n  "debug": true\n}'
+            }
         }
     ];
 

@@ -32,7 +32,8 @@
         || (typeof require === 'function' ? require('./common.js') : null);
     const LIMITS = (common && common.LIMITS) || {
         NAME_MAX: 100, URL_MAX: 500, STATUS_MIN: 200, STATUS_MAX: 599,
-        DELAY_MIN: 0, DELAY_MAX: 30000, DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000
+        DELAY_MIN: 0, DELAY_MAX: 30000, DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000,
+        CODE_MAX: 20000
     };
 
     // PER-52: 1xx statuses are interim ("100 Continue", "103 Early Hints"):
@@ -46,14 +47,25 @@
     // back empty after a reload. Refuse well short of that.
     const JSON_DEPTH_MAX = 64;
 
-    const RULE_TYPES = ['mock', 'block', 'delay', 'redirect', 'headers', 'queryparams'];
+    // F3: 'requestBody' rewrites the outgoing body of fetch/XHR in the page.
+    const RULE_TYPES = ['mock', 'block', 'delay', 'redirect', 'headers', 'queryparams', 'requestBody'];
 
     // What the editors offer. Also the set declarativeNetRequest accepts as a
     // requestMethods value (lowercased), so a headers/queryparams rule with
     // any other method would be rejected by Chrome — and take its batch down.
     const METHODS = ['*', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
-    const RESPONSE_MODES = ['static', 'patch'];
+    // F4: 'code' answers with the result of the rule's own async function.
+    const RESPONSE_MODES = ['static', 'patch', 'code'];
+
+    // F3: how a requestBody rule changes the body. Unlike a mock response,
+    // there is no default mode — the rule has to say what it does.
+    const REQUEST_BODY_MODES = ['static', 'patch'];
+
+    // F1: where a redirect or block rule applies. 'page' (the default when the
+    // field is absent) is fetch/XHR only, handled in the page; 'all' adds every
+    // other resource type through declarativeNetRequest.
+    const APPLIES_TO = ['page', 'all'];
 
     // RFC 9110 field-name: a token. Anything else is rejected by `new
     // Headers()` in the page and by declarativeNetRequest in the browser.
@@ -395,6 +407,46 @@
         }
     }
 
+    /**
+     * F3: the `requestBody` object of a requestBody rule. Every message opens
+     * with "Request body" so the editors can tell them from the rest; the
+     * second word group says which field ("mode", "(static)", "(patch)").
+     */
+    function validateRequestBody(config, errors) {
+        if (!isPlainObject(config)) {
+            errors.push('Request body settings are required');
+            return;
+        }
+        const mode = config.mode;
+        if (mode === undefined) {
+            errors.push('Request body mode is required: "static" or "patch"');
+        } else if (!REQUEST_BODY_MODES.includes(mode)) {
+            const shown = typeof mode === 'string' ? `, not "${mode.slice(0, 30)}"` : '';
+            errors.push(`Request body mode must be "static" or "patch"${shown}`);
+        }
+
+        if (mode === 'static') {
+            const body = config.body;
+            // An empty string is a real body (it empties the request), so only
+            // an absent body is "missing".
+            if (body === undefined) {
+                errors.push('Request body (static) needs a "body" — an empty string is allowed');
+            } else if (typeof body !== 'string' && !Array.isArray(body) && !isPlainObject(body)) {
+                errors.push('Request body (static) must be text, a JSON object or a JSON array');
+            }
+        } else if (mode === 'patch' && !isPlainObject(config.patch)) {
+            errors.push('Request body (patch) must be a JSON object, like {"debug": true}');
+        }
+
+        // PER-30 applies to whatever is stored, whichever mode is chosen.
+        if (config.body !== undefined && exceedsDepth(config.body, JSON_DEPTH_MAX)) {
+            errors.push(`Request body (static) is nested more than ${JSON_DEPTH_MAX} levels deep, which cannot be stored reliably. Flatten it.`);
+        }
+        if (config.patch !== undefined && exceedsDepth(config.patch, JSON_DEPTH_MAX)) {
+            errors.push(`Request body (patch) is nested more than ${JSON_DEPTH_MAX} levels deep, which cannot be stored reliably. Flatten it.`);
+        }
+    }
+
     function validateDelay(value, min, max, errors) {
         // PER-25: a number, and a whole one. parseInt used to accept "300ms"
         // (and read "2e3" as 2), which then waited about 0 ms at runtime.
@@ -439,6 +491,18 @@
             errors.push(`Unknown rule type: ${type}`);
         }
 
+        // F1: `appliesTo` belongs to redirect and block rules only. Any other
+        // type with the field is refused rather than ignored, so a rule that
+        // claims to reach every resource type never silently reaches none.
+        if (rule.appliesTo !== undefined) {
+            if (type !== 'redirect' && type !== 'block') {
+                errors.push(`"appliesTo" is only for redirect and block rules, not ${type} rules`);
+            } else if (!APPLIES_TO.includes(rule.appliesTo)) {
+                errors.push('"appliesTo" must be "page" or "all"');
+            }
+        }
+        const allRequests = (type === 'redirect' || type === 'block') && rule.appliesTo === 'all';
+
         const match = rule.match;
         if (!isPlainObject(match) || !match.url) {
             errors.push('URL pattern is required');
@@ -451,6 +515,10 @@
             errors.push('HTTP method is required');
         } else if (!METHODS.includes(String(match.method).toUpperCase())) {
             errors.push(`HTTP method must be one of ${METHODS.join(', ')}`);
+        } else if (type === 'requestBody' && ['GET', 'HEAD'].includes(String(match.method).toUpperCase())) {
+            // F3: a GET or HEAD request has no body to change. Opens with
+            // "HTTP method" so it lands on the method field, not the body.
+            errors.push('HTTP method for a request body rule cannot be GET or HEAD, because those requests carry no body. Use POST, PUT, PATCH, DELETE or Any (*).');
         }
 
         if (isPlainObject(match)) {
@@ -477,11 +545,13 @@
             } else {
                 const mode = r.mode || 'static';
                 if (!RESPONSE_MODES.includes(mode)) {
-                    errors.push(`Response mode must be "static" or "patch", not "${mode}"`);
+                    errors.push(`Response mode must be "static", "patch" or "code", not "${mode}"`);
                 }
-                // Patch mode keeps the real response's status, so the field
-                // is optional there; static mode is what it is used for.
-                if (mode !== 'patch' || r.statusCode !== undefined) {
+                // Patch mode keeps the real response's status, and a code
+                // response defaults to 200 unless the code returns one (F4), so
+                // the field is optional in both; static mode is what it is
+                // used for.
+                if ((mode !== 'patch' && mode !== 'code') || r.statusCode !== undefined) {
                     const status = validateStatusCode(r.statusCode);
                     if (!status.isValid) errors.push(`Invalid status code: ${status.error}`);
                 }
@@ -489,6 +559,16 @@
                 if (r.delay !== undefined) validateDelay(r.delay, LIMITS.DELAY_MIN, LIMITS.DELAY_MAX, errors);
                 if (mode === 'patch' && r.patch !== undefined && !isPlainObject(r.patch)) {
                     errors.push('A response patch must be a JSON object');
+                }
+                // F4: the code is the response, so it is the one thing code
+                // mode needs. The schema cannot compile it — extension pages
+                // forbid eval — so only its presence and size are checked here.
+                if (mode === 'code') {
+                    if (typeof r.code !== 'string' || r.code.length === 0) {
+                        errors.push(`Code response needs code: 1 to ${LIMITS.CODE_MAX} characters of JavaScript, written as the body of an async function.`);
+                    } else if (r.code.length > LIMITS.CODE_MAX) {
+                        errors.push(`Code response is too long (max ${LIMITS.CODE_MAX} characters).`);
+                    }
                 }
                 if (r.body !== undefined && exceedsDepth(r.body, JSON_DEPTH_MAX)) {
                     errors.push(`The response body is nested more than ${JSON_DEPTH_MAX} levels deep, which cannot be stored reliably. Flatten it.`);
@@ -503,6 +583,12 @@
             const destination = rule.redirect && rule.redirect.destination;
             const destinationError = validateRedirectDestination(destination);
             if (destinationError) errors.push(destinationError);
+            // F1: a root-relative destination means "this page's origin",
+            // which declarativeNetRequest cannot express for a script, image
+            // or navigation. (An invalid destination already has its error.)
+            if (allRequests && !destinationError && !/^https?:\/\//i.test(destination)) {
+                errors.push('Use a full URL (https://…) to redirect scripts, images and pages, or untick "all requests".');
+            }
             // PER-22: $1-$9 only mean something when the URL pattern is a
             // /regex/ with capture groups. A wildcard has none, so the page
             // was sent to the literal text "$1" (or every path collapsed to
@@ -520,6 +606,15 @@
             }
         } else if (type === 'queryparams') {
             errors.push(...validateQueryParams(rule.queryParams || {}).errors);
+        } else if (type === 'requestBody') {
+            validateRequestBody(rule.requestBody, errors);
+        }
+
+        // F4: only a mock rule can run code. Any other type that names the
+        // mode is refused rather than ignored, so a rule that looks like it
+        // runs code never quietly runs nothing.
+        if (type !== 'mock' && isPlainObject(rule.response) && rule.response.mode === 'code') {
+            errors.push(`Code response is only available on mock rules, not ${type} rules`);
         }
 
         // headers/queryparams are applied by declarativeNetRequest, which
@@ -528,22 +623,32 @@
         // before request headers exist — so the same rule would redirect a
         // fetch and skip the identical XHR (CQ-4). Enforced here, where every
         // write passes, rather than only in the options form.
+        // F1: a redirect/block that applies to all requests is DNR-backed too
+        // (for the non-fetch/XHR types), so it has the same two limits.
         const dnrBacked = type === 'headers' || type === 'queryparams';
-        if ((dnrBacked || type === 'redirect') && isPlainObject(match)) {
+        if ((dnrBacked || type === 'redirect' || allRequests) && isPlainObject(match)) {
             const hasHeaders = isPlainObject(match.headers) && Object.keys(match.headers).length > 0;
             const hasGraphql = isPlainObject(match.graphql) && match.graphql.operationName;
             if (hasHeaders || hasGraphql) {
-                errors.push(dnrBacked
-                    ? 'Header/GraphQL match conditions are not supported for this rule type'
-                    : 'Redirect rules cannot use header or GraphQL match conditions, because the redirect target must be chosen before request headers exist');
+                if (dnrBacked) {
+                    errors.push('Header/GraphQL match conditions are not supported for this rule type');
+                } else if (type === 'redirect') {
+                    errors.push('Redirect rules cannot use header or GraphQL match conditions, because the redirect target must be chosen before request headers exist');
+                } else {
+                    // Compiled without the condition, the rule would block every
+                    // request to the URL, not only the ones the condition names.
+                    errors.push('Rules that apply to all requests cannot use header or GraphQL match conditions, because only fetch and XHR requests can be checked against them. Untick "all requests", or remove the condition.');
+                }
             }
         }
 
         // declarativeNetRequest's urlFilter is ASCII-only; a non-ASCII filter
         // is rejected, with the same whole-batch consequence as above.
-        if (dnrBacked && isPlainObject(match) && typeof match.url === 'string'
+        if ((dnrBacked || allRequests) && isPlainObject(match) && typeof match.url === 'string'
             && !isRegexPattern(match.url) && /[^\x20-\x7e]/.test(match.url)) {
-            errors.push('URL patterns for header and query-parameter rules can only contain plain ASCII characters');
+            errors.push(dnrBacked
+                ? 'URL patterns for header and query-parameter rules can only contain plain ASCII characters'
+                : 'URL patterns for rules that apply to all requests can only contain plain ASCII characters');
         }
 
         return { valid: errors.length === 0, errors };
@@ -559,6 +664,7 @@
         isRegexPattern,
         patternNamesHost,
         RULE_TYPES,
+        APPLIES_TO,
         METHODS,
         FORBIDDEN_HEADER_NAMES,
         // The limits this validator enforces: the shared ones, with the
