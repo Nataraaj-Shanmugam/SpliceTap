@@ -614,3 +614,36 @@ describe('PER-28: setRules re-issues duplicate ids', () => {
         expect(mock.getDynamicRules()).toHaveLength(2);
     });
 });
+
+describe('hit-count flush never rewrites the rule list (found by the e2e stress run)', () => {
+    test('a flush holding an older in-memory list keeps every stored rule', async () => {
+        const { mock, bg, send } = await setup();
+        await send({ type: 'saveRule', rule: mockRule('a') });
+        await send({ type: 'saveRule', rule: mockRule('b') });
+
+        // The in-memory list as it stood before `b` was saved, with a hit
+        // bumped on `a` — the state a trailing flush could act on while a
+        // saveRule was between its write and its reload.
+        bg.rules = bg.rules.filter((r) => r.id === 'a');
+        bg.rules[0].hitCount = 3;
+        bg._rulesDirty = true;
+        await bg._persistVolatile(true);
+
+        const stored = mock.raw.spliceTapRules;
+        expect(stored.map((r) => r.id).sort()).toEqual(['a', 'b']);
+        expect(stored.find((r) => r.id === 'a').hitCount).toBe(3);
+    });
+
+    test('a save racing a flush keeps the new rule in storage and in memory', async () => {
+        const { mock, bg, send } = await setup();
+        await send({ type: 'saveRule', rule: mockRule('a') });
+        bg.rules[0].hitCount = 1;
+        bg._rulesDirty = true;
+
+        const [, saved] = await Promise.all([bg._persistVolatile(true), send({ type: 'saveRule', rule: mockRule('c') })]);
+
+        expect(saved.success).toBe(true);
+        expect(mock.raw.spliceTapRules.map((r) => r.id).sort()).toEqual(['a', 'c']);
+        expect(bg.rules.map((r) => r.id).sort()).toEqual(['a', 'c']);
+    });
+});

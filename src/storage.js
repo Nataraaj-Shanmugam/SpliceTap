@@ -226,6 +226,38 @@ export class SpliceTapStorage {
      * failure, which is exactly why background.js's `savedRule` could hold an
      * error object while the handler still answered success:true (QA-1).
      */
+    /**
+     * Write rules' hit counts — and nothing else about them — onto whatever is
+     * stored, inside the mutation chain.
+     *
+     * `countsFor` is called when the write actually runs, so it reports the
+     * in-memory counts at that moment rather than when the flush was queued.
+     * Only rules already stored are touched: a count can never add, drop or
+     * revert a rule, unlike writing the caller's whole rules array (see the
+     * background's _persistVolatile).
+     */
+    async mergeHitCounts(countsFor) {
+        return this._serializeMutation(async () => {
+            try {
+                const counts = (typeof countsFor === 'function' ? countsFor() : countsFor) || {};
+                const rules = await this.getRules();
+                let changed = false;
+                for (const rule of rules) {
+                    if (!rule || !Object.prototype.hasOwnProperty.call(counts, rule.id)) continue;
+                    const held = counts[rule.id];
+                    if (typeof held === 'number' && held !== rule.hitCount) {
+                        rule.hitCount = held;
+                        changed = true;
+                    }
+                }
+                return changed ? await this.saveRules(rules) : { success: true };
+            } catch (error) {
+                console.error('Failed to save hit counts:', error);
+                return { success: false, error: error.message };
+            }
+        });
+    }
+
     async saveRule(rule) {
         return this._serializeMutation(async () => {
             try {

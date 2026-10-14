@@ -842,7 +842,20 @@ class SpliceTapBackground {
 
         if (this._rulesDirty) {
             this._rulesDirty = false;
-            await this.storage.saveRules(this.rules);
+            // This wrote `this.rules` whole, outside storage's mutation chain,
+            // so it could land between a saveRule's write and the reload after
+            // it: storage got back a snapshot without the rule just saved, the
+            // reload adopted it, and the rule vanished from storage and from
+            // every tab while the save answered success (1 in 120 headless
+            // runs under load). Only the counts are written now, inside the
+            // chain, onto whatever is stored.
+            await this.storage.mergeHitCounts(() => {
+                const counts = {};
+                for (const rule of this.rules) {
+                    if (rule && rule.id && rule.hitCount) counts[rule.id] = rule.hitCount;
+                }
+                return counts;
+            });
         }
     }
 
