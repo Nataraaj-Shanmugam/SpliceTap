@@ -41,7 +41,7 @@ How the fixes were made and checked:
   interceptor, background/DNR, schema/matcher, popup, editor/panel. Phase 2: XHR and fetch
   fidelity, matcher hardening plus log display, and docs.
 - **Every fix carries a regression test** that fails without it.
-- **Merged on an integration branch and re-run there:** 759 unit tests, and the full headless
+- **Merged on an integration branch and re-run there:** 761 unit tests, and the full headless
   suite listed in README.
 - **The original reproduction probes were re-run** for every High item. Each one that reproduced
   the bug now shows it fixed; the results are in the verification log kept with the review.

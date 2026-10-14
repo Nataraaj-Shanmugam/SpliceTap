@@ -10,7 +10,7 @@ No proxy. No backend changes. No build step.
 
 [![Version](https://img.shields.io/badge/version-0.0.1-1e63f5?style=flat-square)](https://github.com/Nataraaj-Shanmugam/SpliceTap/releases)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-0bbcd4?style=flat-square)](https://developer.chrome.com/docs/extensions/mv3/intro/)
-[![Tests](https://img.shields.io/badge/tests-759%20unit%20%C2%B7%20408%20headless-22c55e?style=flat-square)](#contributing)
+[![Tests](https://img.shields.io/badge/tests-761%20unit%20%C2%B7%20408%20headless-22c55e?style=flat-square)](#contributing)
 [![License](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
 
 [Website](https://nataraaj-shanmugam.github.io/SpliceTap/)&nbsp;·&nbsp;[Privacy Policy](https://nataraaj-shanmugam.github.io/SpliceTap/privacy.html)&nbsp;·&nbsp;[Report a bug](https://github.com/Nataraaj-Shanmugam/SpliceTap/issues)
