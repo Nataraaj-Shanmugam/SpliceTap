@@ -15,15 +15,32 @@ import '../src/common.js';
 import '../src/templates.js'; // status reason phrases, read by storage.normalizeRule
 import '../src/matcher.js';
 import '../src/rule-schema.js';
+import '../src/redact.js';
 import './dnr.js';
 
-const { syncDnrRules, deepEqual, isDnrRule, isNetworkRule } = globalThis.SpliceTapDnr;
+const { syncDnrRules, deepEqual, isDnrRule, isNetworkRule, ruleToDnr } = globalThis.SpliceTapDnr;
 const { generateId } = globalThis.SpliceTapCommon;
 const RuleSchema = globalThis.SpliceTapRuleSchema;
+const { matchUrl } = globalThis.SpliceTapMatcher;
+const { redactUrl } = globalThis.SpliceTapRedact;
+
+// F2: the network observer (optional webRequest permission). Each listener
+// has its own precomputed candidate list; see _refreshNetworkObserver.
+const OBSERVED_NOTE = 'Seen on the network — Chrome applied this rule; SpliceTap matched it independently';
+const OBSERVER_PHASES = ['beforeRequest', 'sendHeaders', 'headersReceived'];
+const OBSERVER_EVENTS = { beforeRequest: 'onBeforeRequest', sendHeaders: 'onSendHeaders', headersReceived: 'onHeadersReceived' };
+// Events that woke the worker before its rules loaded, replayed once they have.
+const OBSERVER_PENDING_MAX = 50;
+// Request ids already logged per rule: a redirect re-runs the listeners
+// under the same id, and the rule must not count twice.
+const OBSERVER_SEEN_MAX = 500;
+const SETTINGS_BOOLEANS = ['observeNetworkRules', 'allowCodeResponses']; // F2, F4
 
 // PER-34: the rule types the page-side interceptor runs (src/matcher.js
 // INTERCEPTOR_TYPES). headers/queryparams rules are applied by Chrome (DNR).
-const INTERCEPTOR_TYPES = new Set(['mock', 'block', 'delay', 'redirect']);
+// F3: plus requestBody, which the interceptor runs in its own pass before
+// the main first-match (so it is not in the matcher's INTERCEPTOR_TYPES).
+const INTERCEPTOR_TYPES = new Set(['mock', 'block', 'delay', 'redirect', 'requestBody']);
 
 // PER-6: the only messages content scripts send — the relay (content.js:
 // getRules, logInterceptionBatch, logCapture; logInterception is its older
@@ -93,6 +110,16 @@ class SpliceTapBackground {
         this._ruleIndex = new Map();
         this._ruleIndexSource = null;
 
+        // F2: the network observer's state. Candidates are rebuilt whenever
+        // rules, settings, the master switch or the permission change.
+        this._observerCandidates = { beforeRequest: [], sendHeaders: [], headersReceived: [] };
+        this._observerPending = []; // null once the stored state has loaded
+        this._observerSeen = new Map(); // requestId -> Set of ruleIds logged
+        this._observerHandlers = {};
+        for (const phase of OBSERVER_PHASES) {
+            this._observerHandlers[phase] = (details) => this._observeRequest(phase, details);
+        }
+
         // Register event listeners synchronously, in the first turn of the
         // service-worker script. MV3 workers are ephemeral; a listener added
         // only after an `await` can miss the very event that woke the worker.
@@ -102,10 +129,12 @@ class SpliceTapBackground {
         this.setupExtensionLifecycle();
         this.setupCommands();
         this.setupSuspendFlush();
+        this.setupNetworkObserver();
 
         this.ready = this.loadStoredData()
             .then(() => console.log('SpliceTap background service worker initialized (Config Mode)'))
-            .catch((error) => console.error('Failed to initialize background service worker:', error));
+            .catch((error) => console.error('Failed to initialize background service worker:', error))
+            .then(() => this._drainObserverPending());
     }
 
     /**
@@ -623,7 +652,20 @@ class SpliceTapBackground {
 
                 case 'settingsUpdated': {
                     if (request.settings) {
-                        this.settings = request.settings;
+                        const settings = request.settings;
+                        if (typeof settings !== 'object' || Array.isArray(settings)) {
+                            return { success: false, error: 'Settings must be an object' };
+                        }
+                        // F2/F4: switches that widen what SpliceTap does
+                        // (observe all traffic, run rule code in pages) are
+                        // turned on only by a literal true, never by a
+                        // truthy string a caller got wrong.
+                        const invalid = SETTINGS_BOOLEANS.find((key) =>
+                            settings[key] !== undefined && typeof settings[key] !== 'boolean');
+                        if (invalid) {
+                            return { success: false, error: `"${invalid}" must be true or false` };
+                        }
+                        this.settings = settings;
                         // QA-1: the popup's Settings tab saves on every change
                         // with no Save button, so a silently failed write would
                         // leave the UI showing a setting that was never stored.
@@ -1124,8 +1166,10 @@ class SpliceTapBackground {
      */
     broadcastState() {
         // Every state change funnels through here, so this is the one place the
-        // badge needs to be refreshed from.
+        // badge needs to be refreshed from — and (F2) the network observer's
+        // candidate lists.
         this.updateBadge();
+        this._refreshNetworkObserver();
         this._bumpStateVersion();
         return this._sendStateToTabs();
     }
@@ -1339,6 +1383,202 @@ class SpliceTapBackground {
             });
         }
     }
+
+    /**
+     * F2: header, query-param and all-request rules run inside Chrome (DNR),
+     * which reports nothing back, so they never reached the log (PER-54).
+     * With the optional webRequest permission and the observeNetworkRules
+     * setting, non-blocking listeners match each request against those rules
+     * independently and log the ones Chrome applied. They only observe:
+     * nothing waits on them, and they never read storage.
+     *
+     * The listeners are attached here, in the first turn, whenever the
+     * permission is held, so the event that woke the worker is not lost; it
+     * is queued until the rules have loaded, and the listeners are detached
+     * then if the setting is off.
+     */
+    setupNetworkObserver() {
+        const permissions = chrome.permissions;
+        if (permissions && permissions.onAdded && permissions.onRemoved) {
+            const refresh = () => this.ready.then(() => this._refreshNetworkObserver());
+            permissions.onAdded.addListener(refresh);
+            permissions.onRemoved.addListener(refresh);
+        }
+        if (chrome.webRequest) {
+            for (const phase of OBSERVER_PHASES) this._setObserverListener(phase, true);
+        }
+    }
+
+    _setObserverListener(phase, on) {
+        const api = chrome.webRequest;
+        const event = api && api[OBSERVER_EVENTS[phase]];
+        if (!event) return;
+        const handler = this._observerHandlers[phase];
+        const attached = event.hasListener(handler);
+        if (on && !attached) event.addListener(handler, { urls: ['<all_urls>'] });
+        else if (!on && attached) event.removeListener(handler);
+    }
+
+    /**
+     * F2: rebuild each listener's candidate list and attach only the
+     * listeners that have candidates. Called from broadcastState (every rule,
+     * settings and on/off change) and on permission changes.
+     *
+     * A candidate is a rule as Chrome holds it: compiled by ruleToDnr, so the
+     * resource types and methods are exactly the DNR rule's, and skipped when
+     * Chrome refused it (this.dnrRejected).
+     */
+    _refreshNetworkObserver() {
+        const candidates = { beforeRequest: [], sendHeaders: [], headersReceived: [] };
+        const queryRedirects = [];
+        const on = !!chrome.webRequest && this.isActive
+            && !!this.settings && this.settings.observeNetworkRules === true;
+
+        if (on) {
+            const rejected = this.dnrRejected || new Map();
+            (this.rules || []).forEach((rule, index) => {
+                if (!rule || !rule.enabled || rejected.has(rule.id)) return;
+                const compiled = ruleToDnr(rule, index);
+                if (!compiled) return;
+                const { condition, action } = compiled;
+                const candidate = {
+                    rule,
+                    pattern: rule.match && rule.match.url,
+                    types: new Set(condition.resourceTypes),
+                    methods: condition.requestMethods ? new Set(condition.requestMethods) : null,
+                    queryTransform: action.redirect && action.redirect.transform
+                        ? action.redirect.transform.queryTransform
+                        : null
+                };
+                if (rule.type === 'headers') {
+                    if (action.requestHeaders) candidates.sendHeaders.push(candidate);
+                    if (action.responseHeaders) candidates.headersReceived.push(candidate);
+                } else if (isNetworkRule(rule)) {
+                    candidates.beforeRequest.push(candidate);
+                } else {
+                    queryRedirects.push(candidate);
+                }
+            });
+            // Network rules (priority 100000 - index) outrank every
+            // query-param redirect (priority 1), wherever they sit in the list.
+            candidates.beforeRequest.push(...queryRedirects);
+        }
+
+        this._observerCandidates = candidates;
+        // While the stored state is still loading, stay attached to queue.
+        if (this._observerPending) return;
+        for (const phase of OBSERVER_PHASES) {
+            this._setObserverListener(phase, candidates[phase].length > 0);
+        }
+    }
+
+    /** Replay what arrived before the rules loaded, then settle the listeners. */
+    _drainObserverPending() {
+        const pending = this._observerPending || [];
+        this._observerPending = null;
+        this._refreshNetworkObserver();
+        for (const [phase, details] of pending) this._observeRequest(phase, details);
+    }
+
+    _observeRequest(phase, details) {
+        if (this._observerPending) {
+            if (this._observerPending.length < OBSERVER_PENDING_MAX) this._observerPending.push([phase, details]);
+            return;
+        }
+        const candidates = this._observerCandidates[phase];
+        if (!candidates || candidates.length === 0 || !details) return;
+
+        const url = details.url;
+        const method = String(details.method || '').toLowerCase();
+        let logged = 0;
+        for (const candidate of candidates) {
+            if (!candidate.types.has(details.type)) continue;
+            if (candidate.methods && !candidate.methods.has(method)) continue;
+            if (!observedUrlMatches(url, candidate.pattern)) continue;
+            // Chrome skips a query transform that would not change the URL —
+            // including on the request it just redirected.
+            if (candidate.queryTransform && !queryTransformChanges(url, candidate.queryTransform)) continue;
+
+            if (this._markObserved(details.requestId, candidate.rule.id) && this._logObserved(candidate.rule, phase, details)) {
+                logged++;
+            }
+            // Only one block or redirect applies to a request: the highest
+            // priority, i.e. the first network rule, else a query-param
+            // redirect. Every matching headers rule applies.
+            if (phase === 'beforeRequest') break;
+        }
+        if (logged > 0) this._persistVolatile().catch(() => undefined);
+    }
+
+    /** True the first time this rule is seen for this request. */
+    _markObserved(requestId, ruleId) {
+        const key = String(requestId);
+        let ruleIds = this._observerSeen.get(key);
+        if (!ruleIds) {
+            ruleIds = new Set();
+            this._observerSeen.set(key, ruleIds);
+            if (this._observerSeen.size > OBSERVER_SEEN_MAX) {
+                this._observerSeen.delete(this._observerSeen.keys().next().value);
+            }
+        }
+        if (ruleIds.has(ruleId)) return false;
+        ruleIds.add(ruleId);
+        return true;
+    }
+
+    /** One hit, through the same path (and checks) as the interceptor's. */
+    _logObserved(rule, phase, details) {
+        const entry = {
+            ts: Date.now(),
+            kind: 'rule',
+            ruleId: rule.id,
+            ruleName: rule.name,
+            ruleType: rule.type,
+            method: String(details.method || 'GET').toUpperCase(),
+            url: redactUrl(details.url),
+            note: OBSERVED_NOTE
+        };
+        if (phase === 'headersReceived' && Number.isInteger(details.statusCode)) {
+            entry.finalStatus = details.statusCode;
+        }
+        const sender = (typeof details.tabId === 'number' && details.tabId >= 0) ? { tab: { id: details.tabId } } : null;
+        return this._recordLogEntry(entry, sender);
+    }
+}
+
+/**
+ * F2: does a URL Chrome reports match a rule's pattern, as the DNR condition
+ * does? matchUrl compares the absolute URL; a wildcard pattern starting with
+ * '/' is matched from the path (and '//' from after the scheme), as the DNR
+ * condition anchors it (PER-21) and the interceptor matches a relative URL.
+ */
+function observedUrlMatches(url, pattern) {
+    if (typeof url !== 'string' || !pattern) return false;
+    if (matchUrl(url, pattern)) return true;
+    if (pattern[0] !== '/' || RuleSchema.isRegexPattern(pattern) || pattern.indexOf('*') === -1) return false;
+    const scheme = /^[a-z][a-z0-9+.-]*:/i.exec(url);
+    if (!scheme) return false;
+    const afterScheme = url.slice(scheme[0].length);
+    if (pattern.startsWith('//')) return matchUrl(afterScheme, pattern);
+    const path = afterScheme.replace(/^\/\/[^/?#]*/, '');
+    return matchUrl(path, pattern);
+}
+
+/** F2: would Chrome's queryTransform change this URL? */
+function queryTransformChanges(url, transform) {
+    let params;
+    try {
+        params = new URL(url).searchParams;
+    } catch (error) {
+        return true;
+    }
+    for (const key of transform.removeParams || []) {
+        if (params.has(key)) return true;
+    }
+    for (const param of transform.addOrReplaceParams || []) {
+        if (params.get(param.key) !== param.value) return true;
+    }
+    return false;
 }
 
 // Initialize

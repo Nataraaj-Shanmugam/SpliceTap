@@ -292,3 +292,475 @@ describe('F1: dnrRuleId allocation and the network layer', () => {
         expect((await send({ type: 'saveRule', rule: blockAll({ appliesTo: 'page', match: { url: '/a(?=b)/', method: '*' } }) })).success).toBe(true);
     });
 });
+
+// ---- F2: settings -------------------------------------------------------------
+
+describe('F2/F4: the observeNetworkRules and allowCodeResponses settings', () => {
+    test('both default to false', async () => {
+        const { send } = await setup();
+        const { settings } = await send({ type: 'getRules' });
+        expect(settings.observeNetworkRules).toBe(false);
+        expect(settings.allowCodeResponses).toBe(false);
+    });
+
+    test('settingsUpdated persists both, and getRules reports them', async () => {
+        const { mock, send } = await setup();
+        const { settings } = await send({ type: 'getRules' });
+        const response = await send({ type: 'settingsUpdated', settings: { ...settings, observeNetworkRules: true, allowCodeResponses: true } });
+        expect(response.success).toBe(true);
+        expect(mock.raw.spliceTapSettings).toMatchObject({ observeNetworkRules: true, allowCodeResponses: true });
+        expect((await send({ type: 'getRules' })).settings).toMatchObject({ observeNetworkRules: true, allowCodeResponses: true });
+
+        await send({ type: 'settingsUpdated', settings: { ...settings, observeNetworkRules: false, allowCodeResponses: false } });
+        expect(mock.raw.spliceTapSettings).toMatchObject({ observeNetworkRules: false, allowCodeResponses: false });
+    });
+
+    test.each([
+        ['observeNetworkRules', 'true'],
+        ['allowCodeResponses', 1],
+        ['allowCodeResponses', 'yes'],
+        ['observeNetworkRules', null]
+    ])('refuses %s = %p, leaving the stored settings alone', async (key, value) => {
+        const { mock, bg, send } = await setup();
+        const response = await send({ type: 'settingsUpdated', settings: { theme: 'dark', [key]: value } });
+        expect(response.success).toBe(false);
+        expect(response.error).toMatch(new RegExp(key));
+        expect(mock.raw.spliceTapSettings).toBeUndefined();
+        expect(bg.settings[key]).toBe(false);
+    });
+
+    test('refuses settings that are not an object', async () => {
+        const { send } = await setup();
+        expect((await send({ type: 'settingsUpdated', settings: ['observeNetworkRules'] })).success).toBe(false);
+        expect((await send({ type: 'settingsUpdated', settings: 'all' })).success).toBe(false);
+    });
+
+    test('a content script still cannot change settings (PER-6)', async () => {
+        const { mock, send } = await setup();
+        const response = await send({ type: 'settingsUpdated', settings: { allowCodeResponses: true } }, { tab: { id: 1 }, frameId: 0, url: 'https://evil.test/' });
+        expect(response.success).toBe(false);
+        expect(mock.raw.spliceTapSettings).toBeUndefined();
+    });
+});
+
+// ---- F2: the network observer ---------------------------------------------------
+
+function webRequestEvent() {
+    const listeners = [];
+    return {
+        addListener(fn, filter) { listeners.push(fn); this.filters.push(filter); },
+        removeListener(fn) { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); },
+        hasListener(fn) { return listeners.includes(fn); },
+        filters: [],
+        _listeners: listeners,
+        _emit(details) { listeners.slice().forEach((fn) => fn(details)); }
+    };
+}
+
+function grantWebRequest(mock) {
+    mock.chrome.webRequest = {
+        onBeforeRequest: webRequestEvent(),
+        onSendHeaders: webRequestEvent(),
+        onHeadersReceived: webRequestEvent()
+    };
+    return mock.chrome.webRequest;
+}
+
+function withPermissionsEvents(mock) {
+    mock.chrome.permissions = { onAdded: webRequestEvent(), onRemoved: webRequestEvent() };
+}
+
+const SETTINGS_ON = { spliceTapSettings: { observeNetworkRules: true } };
+
+const headersRule = (overrides = {}) => ({
+    id: 'hdr', name: 'Add header', type: 'headers', enabled: true, dnrRuleId: 1,
+    match: { url: '*/echo*', method: '*' },
+    headersMod: { request: [{ op: 'set', name: 'X-A', value: '1' }] },
+    ...overrides
+});
+
+const queryRule = (overrides = {}) => ({
+    id: 'qp', name: 'Add flag', type: 'queryparams', enabled: true, dnrRuleId: 2,
+    match: { url: '*/echo*', method: '*' },
+    queryParams: { add: [{ key: 'flag', value: 'on' }], remove: [] },
+    ...overrides
+});
+
+/** A background with webRequest granted, these rules stored and the observer on. */
+async function observing(rules, { settings = SETTINGS_ON, ...options } = {}) {
+    let webRequest;
+    const ctx = await setup({
+        initial: { spliceTapRules: rules, ...settings },
+        ...options,
+        extend(mock) { webRequest = grantWebRequest(mock); withPermissionsEvents(mock); }
+    });
+    return { ...ctx, webRequest };
+}
+
+let requestCounter = 0;
+const request = (overrides = {}) => ({
+    requestId: String(++requestCounter), url: 'http://h.test/echo', method: 'GET', type: 'xmlhttprequest', tabId: 7, ...overrides
+});
+
+const logOf = async (send) => (await send({ type: 'getInterceptionLog' })).entries;
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+describe('F2: listeners attach only with the permission, the setting and a candidate', () => {
+    test('without webRequest nothing is attached and nothing throws', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [headersRule()], ...SETTINGS_ON } });
+        expect((await send({ type: 'getRules' })).success).toBe(true);
+    });
+
+    test('with the setting off, no listener stays attached', async () => {
+        const { webRequest } = await observing([headersRule()], { settings: {} });
+        expect(webRequest.onBeforeRequest._listeners).toHaveLength(0);
+        expect(webRequest.onSendHeaders._listeners).toHaveLength(0);
+        expect(webRequest.onHeadersReceived._listeners).toHaveLength(0);
+    });
+
+    test('only the listeners with candidates are attached, over <all_urls>', async () => {
+        const { webRequest } = await observing([headersRule()]);
+        expect(webRequest.onSendHeaders._listeners).toHaveLength(1);
+        expect(webRequest.onSendHeaders.filters[0]).toEqual({ urls: ['<all_urls>'] });
+        expect(webRequest.onBeforeRequest._listeners).toHaveLength(0);
+        expect(webRequest.onHeadersReceived._listeners).toHaveLength(0);
+    });
+
+    test('turning the setting on and off attaches and detaches', async () => {
+        const { send, webRequest, bg } = await observing([headersRule()], { settings: {} });
+        await send({ type: 'settingsUpdated', settings: { ...bg.settings, observeNetworkRules: true } });
+        expect(webRequest.onSendHeaders._listeners).toHaveLength(1);
+        await send({ type: 'settingsUpdated', settings: { ...bg.settings, observeNetworkRules: false } });
+        expect(webRequest.onSendHeaders._listeners).toHaveLength(0);
+    });
+
+    test('a rule change rebuilds the candidates (a new rule attaches its listener)', async () => {
+        const { send, webRequest } = await observing([]);
+        expect(webRequest.onBeforeRequest._listeners).toHaveLength(0);
+        await send({ type: 'saveRule', rule: blockAll() });
+        expect(webRequest.onBeforeRequest._listeners).toHaveLength(1);
+        await send({ type: 'toggleRule', ruleId: 'blk', enabled: false });
+        expect(webRequest.onBeforeRequest._listeners).toHaveLength(0);
+    });
+
+    test('switching SpliceTap off empties the candidates', async () => {
+        const { send, webRequest } = await observing([headersRule()]);
+        await send({ type: 'toggleExtension', active: false });
+        expect(webRequest.onSendHeaders._listeners).toHaveLength(0);
+    });
+
+    test('reacts to the permission being granted and removed', async () => {
+        const { mock, send } = await setup({
+            initial: { spliceTapRules: [headersRule()], ...SETTINGS_ON },
+            extend: withPermissionsEvents
+        });
+        const webRequest = grantWebRequest(mock);
+        mock.chrome.permissions.onAdded._emit({ permissions: ['webRequest'] });
+        await tick();
+        expect(webRequest.onSendHeaders._listeners).toHaveLength(1);
+
+        webRequest.onSendHeaders._emit(request());
+        expect(await logOf(send)).toHaveLength(1);
+
+        delete mock.chrome.webRequest;
+        mock.chrome.permissions.onRemoved._emit({ permissions: ['webRequest'] });
+        await tick();
+        webRequest.onSendHeaders._emit(request());
+        expect(await logOf(send)).toHaveLength(1);
+    });
+
+    test('an event that woke the worker before its rules loaded is replayed, not lost', async () => {
+        const mock = createChromeMock({ initial: { spliceTapRules: [headersRule()], ...SETTINGS_ON } });
+        const webRequest = grantWebRequest(mock);
+        restoreChrome = installChrome(mock.chrome);
+        const bg = loadEsmModule(BACKGROUND, { chrome: mock.chrome, console: quietConsole }).default;
+        activeBackground = bg;
+        // Attached in the first turn, before anything is loaded.
+        expect(webRequest.onSendHeaders._listeners).toHaveLength(1);
+        webRequest.onSendHeaders._emit(request());
+        webRequest.onBeforeRequest._emit(request()); // no candidate once loaded
+        await bg.ready;
+        expect(bg.interceptionLog.map((e) => e.ruleId)).toEqual(['hdr']);
+        expect(webRequest.onBeforeRequest._listeners).toHaveLength(0);
+    });
+});
+
+describe('F2: what a hit records', () => {
+    test('a headers rule with request ops is logged from onSendHeaders, redacted, with a hit', async () => {
+        const { send, bg, webRequest } = await observing([headersRule()]);
+        webRequest.onSendHeaders._emit(request({ url: 'http://h.test/echo?access_token=SECRET1&page=2', tabId: 4 }));
+
+        const [entry] = await logOf(send);
+        expect(entry).toMatchObject({
+            kind: 'rule',
+            ruleId: 'hdr',
+            ruleName: 'Add header',
+            ruleType: 'headers',
+            method: 'GET',
+            url: 'http://h.test/echo?access_token=%5Bredacted%5D&page=2',
+            note: 'Seen on the network — Chrome applied this rule; SpliceTap matched it independently',
+            tabId: 4
+        });
+        expect(entry.finalStatus).toBeUndefined();
+        expect(JSON.stringify(entry)).not.toContain('SECRET1');
+        expect(bg.rules[0].hitCount).toBe(1);
+        expect(bg.stats.intercepted).toBe(1);
+    });
+
+    test('the hit count is persisted with the log', async () => {
+        const { mock, bg, webRequest } = await observing([headersRule()]);
+        webRequest.onSendHeaders._emit(request());
+        webRequest.onSendHeaders._emit(request());
+        await bg._persistVolatile(true);
+        // The listener's own (unawaited) flush may hold the write.
+        const deadline = Date.now() + 2000;
+        while (mock.raw.spliceTapRules[0].hitCount !== 2 && Date.now() < deadline) await tick();
+        expect(mock.raw.spliceTapRules[0].hitCount).toBe(2);
+        expect(mock.rawSession.spliceTapInterceptionLog).toHaveLength(2);
+    });
+
+    test('a headers rule with response ops is logged from onHeadersReceived, statusCode as finalStatus', async () => {
+        const { send, webRequest } = await observing([headersRule({ headersMod: { response: [{ op: 'set', name: 'X-B', value: '2' }] } })]);
+        expect(webRequest.onSendHeaders._listeners).toHaveLength(0);
+        webRequest.onHeadersReceived._emit(request({ statusCode: 201 }));
+        const [entry] = await logOf(send);
+        expect(entry.finalStatus).toBe(201);
+    });
+
+    test('a rule with request and response ops counts once per request', async () => {
+        const { send, webRequest } = await observing([headersRule({
+            headersMod: { request: [{ op: 'set', name: 'X-A', value: '1' }], response: [{ op: 'remove', name: 'X-B' }] }
+        })]);
+        const r = request();
+        webRequest.onSendHeaders._emit(r);
+        webRequest.onHeadersReceived._emit({ ...r, statusCode: 200 });
+        expect(await logOf(send)).toHaveLength(1);
+    });
+
+    test('a request id is counted once per rule, across the redirect Chrome made', async () => {
+        const { send, webRequest } = await observing([headersRule()]);
+        const r = request();
+        webRequest.onSendHeaders._emit(r);
+        webRequest.onSendHeaders._emit({ ...r, url: r.url + '?after=redirect' });
+        expect(await logOf(send)).toHaveLength(1);
+    });
+
+    test('matching uses the DNR rule\'s resource types and methods', async () => {
+        const { send, webRequest } = await observing([headersRule({ match: { url: '*/echo*', method: 'POST' } })]);
+        webRequest.onSendHeaders._emit(request({ type: 'image', method: 'POST' })); // headers rules: API traffic only
+        webRequest.onSendHeaders._emit(request({ method: 'GET' }));
+        webRequest.onSendHeaders._emit(request({ url: 'http://h.test/other', method: 'POST' }));
+        expect(await logOf(send)).toHaveLength(0);
+        webRequest.onSendHeaders._emit(request({ type: 'other', method: 'POST' }));
+        expect(await logOf(send)).toHaveLength(1);
+    });
+
+    test('a /path* pattern is matched from the path, as DNR anchors it', async () => {
+        const { send, webRequest } = await observing([headersRule({ match: { url: '/echo*', method: '*' } })]);
+        webRequest.onSendHeaders._emit(request({ url: 'http://h.test/echo/1' }));
+        webRequest.onSendHeaders._emit(request({ url: 'http://h.test/x/echo/1' }));
+        expect((await logOf(send)).map((e) => e.url)).toEqual(['http://h.test/echo/1']);
+    });
+
+    test('a query-param rule is logged from onBeforeRequest when its transform changes the URL', async () => {
+        const { send, webRequest } = await observing([queryRule()]);
+        webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/echo?flag=on' })); // Chrome changes nothing
+        expect(await logOf(send)).toHaveLength(0);
+        webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/echo?flag=off' }));
+        expect((await logOf(send)).map((e) => e.ruleId)).toEqual(['qp']);
+    });
+
+    test('an all-request block or redirect is logged for page resources, never for xmlhttprequest', async () => {
+        const { send, webRequest } = await observing([blockAll({ dnrRuleId: 3 })]);
+        webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/assets/pixel.png', type: 'xmlhttprequest' }));
+        expect(await logOf(send)).toHaveLength(0); // the interceptor logs fetch/XHR itself
+        for (const type of ['image', 'script', 'main_frame', 'other']) {
+            webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/assets/pixel.png?t=' + type, type }));
+        }
+        expect((await logOf(send)).map((e) => e.ruleType)).toEqual(['block', 'block', 'block', 'block']);
+    });
+
+    test('only the winning block/redirect is logged: network rules first, then list order', async () => {
+        const { send, webRequest } = await observing([
+            queryRule({ match: { url: '*', method: '*' } }),
+            redirectAll({ id: 'r1', dnrRuleId: 4, match: { url: '*/assets/*', method: '*' } }),
+            blockAll({ id: 'b2', dnrRuleId: 5, match: { url: '*/assets/*', method: '*' } })
+        ]);
+        webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/assets/app.js', type: 'script' }));
+        expect((await logOf(send)).map((e) => e.ruleId)).toEqual(['r1']);
+    });
+
+    test('disabled rules and rules Chrome refused are not candidates', async () => {
+        const { send, bg, webRequest } = await observing([headersRule({ enabled: false }), headersRule({ id: 'h2', dnrRuleId: 9 })]);
+        bg.dnrRejected = new Map([['h2', 'refused']]);
+        bg._refreshNetworkObserver();
+        expect(webRequest.onSendHeaders._listeners).toHaveLength(0);
+        webRequest.onSendHeaders._emit(request());
+        expect(await logOf(send)).toHaveLength(0);
+    });
+
+    test('a request from no tab is logged without a tab id', async () => {
+        const { send, webRequest } = await observing([headersRule()]);
+        webRequest.onSendHeaders._emit(request({ tabId: -1 }));
+        expect((await logOf(send))[0].tabId).toBeNull();
+    });
+});
+
+// ---- F2: shared redaction -----------------------------------------------------
+
+describe('F2: src/redact.js redacts exactly like the interceptor (PER-4)', () => {
+    const { redactUrl } = require('../src/redact');
+    const SECRET = 'LEAKME7f3a';
+    const token = 'f3a9c2e8b1d4a7c6e5f8a2b3c4d5e6f7';
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+
+    // The SEC2-4 list (tests/fix-interceptor-2.test.js), plus what must survive.
+    const cases = [
+        `/api/users?session_id=${SECRET}`,
+        `/api/users?sessionid=${SECRET}`,
+        `/api/users?JSESSIONID=${SECRET}`,
+        `/api/users?id_token=${SECRET}`,
+        `/api/users?refresh_token=${SECRET}`,
+        `/api/users?access-token=${SECRET}`,
+        `/api/users?code=${SECRET}`,
+        `/api/users?client_secret=${SECRET}`,
+        `/api/users?jwt=${SECRET}`,
+        `/api/users?X-Amz-Signature=${SECRET}`,
+        `/api/users?sig=${SECRET}`,
+        `/api/users?user[token]=${SECRET}`,
+        `/api/users#access_token=${SECRET}&state=s1`,
+        `/api/users#/callback?id_token=${SECRET}`,
+        `/api/users/reset/${token}${SECRET}`,
+        `/api/users/verify/${jwt}${SECRET}`,
+        `/api/users;jsessionid=${SECRET}`,
+        '/api/users/42?page=2&q=shoes#section',
+        '/api/users/report-2024-final.pdf',
+        `/api/users?page=2&refresh_token=${SECRET}#access_token=${SECRET}&state=s1`,
+        `/api/users/${'a1'.repeat(1100)}x?q=${'y'.repeat(100)}`
+    ];
+
+    async function interceptorLogged(url) {
+        const h = createInterceptor();
+        h.syncState({ rules: [{ id: 'r', name: 'R', enabled: true, type: 'mock', match: { url: '*', method: '*' }, response: { statusCode: 200, headers: {}, body: {}, delay: 0, mode: 'static' } }] });
+        const entries = h.collect(h.channels.log);
+        await h.fetch(url);
+        return entries[0].url;
+    }
+
+    test.each(cases)('absolute %s', async (casePath) => {
+        const url = 'https://example.test' + casePath;
+        const ours = redactUrl(url);
+        expect(ours).toBe(await interceptorLogged(url));
+        if (casePath.includes(SECRET)) {
+            expect(ours).not.toContain(SECRET);
+            expect(ours).toMatch(/redacted/);
+        }
+    });
+
+    test.each(cases.slice(0, 4))('relative %s resolves against a base like the interceptor', async (casePath) => {
+        expect(redactUrl(casePath, 'https://example.test/page')).toBe(await interceptorLogged(casePath));
+    });
+
+    test('an unparseable URL is kept as-is', () => {
+        expect(redactUrl('not a url')).toBe('not a url');
+    });
+
+    test('is published on globalThis for the service worker', () => {
+        expect(globalThis.SpliceTapRedact.redactUrl).toBe(redactUrl);
+    });
+});
+
+// ---- F3: plumbing ---------------------------------------------------------------
+
+describe('F3: requestBody rules reach the interceptor', () => {
+    const bodyRule = (overrides = {}) => ({
+        id: 'rb', name: 'Body', type: 'requestBody', enabled: true,
+        match: { url: '*/api/*', method: 'POST' },
+        requestBody: { mode: 'static', body: { replaced: true } },
+        ...overrides
+    });
+
+    test('_interceptorRules includes enabled requestBody rules, in list order', async () => {
+        const { bg, send } = await setup({
+            initial: {
+                spliceTapRules: [
+                    bodyRule(),
+                    bodyRule({ id: 'rb-off', enabled: false }),
+                    { id: 'm', name: 'M', type: 'mock', enabled: true, match: { url: '*', method: '*' }, response: { statusCode: 200, headers: {}, body: {}, delay: 0 } },
+                    headersRule()
+                ]
+            }
+        });
+        expect(bg._interceptorRules().map((r) => r.id)).toEqual(['rb', 'm']);
+        expect((await send({ type: 'getRules', scope: 'interceptor' })).rules.map((r) => r.id)).toEqual(['rb', 'm']);
+    });
+
+    test('the syncState broadcast carries them, body and all', async () => {
+        const { mock, send, bg } = await setup({ initial: { spliceTapRules: [bodyRule()] }, tabs: [{ id: 3, url: 'https://a.test/' }] });
+        mock.sentTabMessages.length = 0;
+        await send({ type: 'settingsUpdated', settings: { ...bg.settings, theme: 'dark' } });
+        await new Promise((r) => setTimeout(r, 20));
+        const sync = mock.sentTabMessages.find((m) => m.message.type === 'syncState');
+        expect(sync.message.rules).toEqual([expect.objectContaining({ id: 'rb', requestBody: { mode: 'static', body: { replaced: true } } })]);
+    });
+
+    test('a requestBody hit is accepted into the log and counted', async () => {
+        const { bg, send } = await setup({ initial: { spliceTapRules: [bodyRule()] } });
+        const response = await send({
+            type: 'logInterception',
+            entry: { ts: Date.now(), url: 'https://a.test/api/x', method: 'POST', ruleId: 'rb', ruleName: 'Body', ruleType: 'requestBody', status: 200, kind: 'rule', note: 'Request body replaced' }
+        }, { tab: { id: 3 }, frameId: 0, url: 'https://a.test/' });
+        expect(response.success).toBe(true);
+        expect((await logOf(send))[0]).toMatchObject({ ruleType: 'requestBody', note: 'Request body replaced' });
+        expect(bg.rules[0].hitCount).toBe(1);
+    });
+});
+
+describe('F3/F4/F1: storage.normalizeRule keeps the new fields', () => {
+    let storage;
+    beforeEach(() => {
+        const mock = createChromeMock();
+        restoreChrome = installChrome(mock.chrome);
+        const { SpliceTapStorage } = loadEsmModule(path.resolve(__dirname, '..', 'src', 'storage.js'), { chrome: mock.chrome });
+        storage = new SpliceTapStorage();
+    });
+
+    test('requestBody (static and patch) passes through untouched', () => {
+        const rule = { id: 'rb', type: 'requestBody', match: { url: '*', method: 'POST' }, requestBody: { mode: 'patch', patch: { a: { b: 1 } } } };
+        expect(storage.normalizeRule(rule)).toEqual(rule);
+        const staticRule = { ...rule, requestBody: { mode: 'static', body: '' } };
+        expect(storage.normalizeRule(staticRule).requestBody).toEqual({ mode: 'static', body: '' });
+    });
+
+    test('appliesTo is kept', () => {
+        expect(storage.normalizeRule(blockAll()).appliesTo).toBe('all');
+        expect(storage.normalizeRule(redirectAll({ appliesTo: 'page' })).appliesTo).toBe('page');
+    });
+
+    test('a code response keeps mode "code" and its code', () => {
+        const rule = { id: 'c', type: 'mock', match: { url: '*', method: '*' }, response: { mode: 'code', code: 'return { ok: true };', delay: 5 } };
+        const normalized = storage.normalizeRule(rule);
+        expect(normalized.response.mode).toBe('code');
+        expect(normalized.response.code).toBe('return { ok: true };');
+        expect(normalized.response.delay).toBe(5);
+    });
+
+    test('unknown fields and unknown modes are not stripped or rewritten', () => {
+        const rule = { id: 'u', type: 'mock', futureField: { x: 1 }, match: { url: '*', method: '*', extra: 1 }, response: { mode: 'stream', statusCode: 200, other: 'y' } };
+        const normalized = storage.normalizeRule(rule);
+        expect(normalized.futureField).toEqual({ x: 1 });
+        expect(normalized.match.extra).toBe(1);
+        expect(normalized.response.mode).toBe('stream');
+        expect(normalized.response.other).toBe('y');
+    });
+
+    test('they survive a save and reload', async () => {
+        const rules = [blockAll(), { id: 'rb', name: 'B', type: 'requestBody', enabled: true, match: { url: '*', method: 'POST' }, requestBody: { mode: 'static', body: { a: 1 } } },
+            { id: 'c', name: 'C', type: 'mock', enabled: true, match: { url: '*', method: '*' }, response: { mode: 'code', code: 'return 1', statusCode: 200 } }];
+        await storage.replaceRules(rules);
+        const loaded = await storage.getRules();
+        expect(loaded[0].appliesTo).toBe('all');
+        expect(loaded[1].requestBody).toEqual({ mode: 'static', body: { a: 1 } });
+        expect(loaded[2].response).toMatchObject({ mode: 'code', code: 'return 1' });
+    });
+});
