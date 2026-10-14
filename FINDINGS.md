@@ -4,16 +4,16 @@
 **Date:** 2026-08-28
 **Scope:** Full codebase, docs and store-readiness, ahead of first Chrome Web Store submission.
 
-## Status — updated 10 October 2026
+## Status — updated 14 October 2026
 
-**Original audit: 53 recorded fixed, 4 declined — 8 of the 53 reopened by
-the fourth pass.** SEC-1, SEC-2, PROD-5, UX-2, UX-3 and PERF-10 are still
-broken, and A11Y-4 and A11Y-8 are only partly fixed; see **Fourth pass**
-below. The four declined items are listed with the trade-off or measurement
-behind each.
+**Original audit: 53 fixed, 4 declined.** The fourth pass reopened eight
+of the 53 (SEC-1, SEC-2, PROD-5, UX-2, UX-3, PERF-10, and A11Y-4 and A11Y-8
+in part); all eight are now fixed again, each with a regression test that
+fails on the code that had been recorded as fixed. The four declined items
+are listed with the trade-off or measurement behind each.
 
-**Second pass: 14 further issues, all recorded fixed (E2E-7 reopened by the
-fourth pass).** A headless suite that loads
+**Second pass: 14 further issues, all fixed** (E2E-7 was reopened by the
+fourth pass and is fixed again). A headless suite that loads
 the real extension into Chrome found problems no review or unit test had —
 including two that made the product unusable. See **Second pass** below.
 Three of the 14 were regressions introduced by this project's own remediation
@@ -25,7 +25,8 @@ stale rule set when rules changed during load (29 of 30 trials), and two
 templates that never matched a local API on a port. They are recorded with
 the comparison in [PARITY.md](PARITY.md) (P-1 to P-12).
 
-**Fourth pass: 89 open findings, none fixed yet.** Seven persona reviews
+**Fourth pass: 89 findings — 77 fixed, 7 partly fixed with the limit
+documented, 5 enhancements not started.** Seven persona reviews
 (product owner, QA, end-user developer, compatibility, security,
 accessibility, performance), all run headlessly against the real extension,
 produced 110 findings — 89 after merging duplicates: 17 High, 39 Medium,
@@ -35,8 +36,10 @@ rule set (so SEC-2 is not fixed), rules matching the URL as the page spelled
 it (so the editor's own default pattern misses relative calls), redirect,
 precedence and header bugs, a bulk write that silently deletes stored rules,
 and a paused tab freezing every rule change. Nine items recorded as fixed
-here (the eight above, plus E2E-7 from the second pass) are reopened. All
-of it — evidence, causes, fixes and a prioritised roadmap — is in
+here (the eight above, plus E2E-7 from the second pass) were reopened.
+Every High item is now fixed, and the probes that originally reproduced
+each one were re-run against the merged code to show it. Evidence, causes,
+the per-item fix status and the remaining roadmap are in
 [PERSONA-REVIEW.md](PERSONA-REVIEW.md) (PER-1 to PER-89).
 
 The report after this section is the original audit and is kept as written;

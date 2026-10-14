@@ -7,7 +7,7 @@ documented in its current interceptor docs (sources at the end), on
 **How SpliceTap was tested:** headlessly, in Chrome for Testing 148, with the
 real unpacked extension, driving real pages and reading what actually reached
 the network from the test server's side. Every ✅ below is backed by a test in
-`tests/e2e/` — 244 headless tests in total — not by reading the code. Every
+`tests/e2e/` — 408 headless tests in total — not by reading the code. Every
 "SpliceTap cannot" claim is pinned in `tests/e2e/parity-limits.e2e.test.js`,
 so it fails, and forces this page to be updated, if it ever stops being true.
 

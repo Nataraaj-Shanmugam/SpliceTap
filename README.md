@@ -10,7 +10,7 @@ No proxy. No backend changes. No build step.
 
 [![Version](https://img.shields.io/badge/version-0.0.1-1e63f5?style=flat-square)](https://github.com/Nataraaj-Shanmugam/SpliceTap/releases)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-0bbcd4?style=flat-square)](https://developer.chrome.com/docs/extensions/mv3/intro/)
-[![Tests](https://img.shields.io/badge/tests-312%20unit%20%C2%B7%20244%20headless-22c55e?style=flat-square)](#contributing)
+[![Tests](https://img.shields.io/badge/tests-759%20unit%20%C2%B7%20408%20headless-22c55e?style=flat-square)](#contributing)
 [![License](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
 
 [Website](https://nataraaj-shanmugam.github.io/SpliceTap/)&nbsp;·&nbsp;[Privacy Policy](https://nataraaj-shanmugam.github.io/SpliceTap/privacy.html)&nbsp;·&nbsp;[Report a bug](https://github.com/Nataraaj-Shanmugam/SpliceTap/issues)
@@ -233,10 +233,13 @@ offers two buttons:
 - **Mock** — a rule replaying that exact status, content type and body, ready to
   edit.
 - **Patch** — a rule that lets the real response through and merges your changes
-  into it, with the captured body showing you which fields exist to change.
+  into it. Offered only when the captured body is a JSON object; open the
+  capture's response in Chrome's Network tab to see which fields exist to change.
 
 New rules are created **disabled**, so nothing starts intercepting while you are
-still looking at it.
+still looking at it. Captured URLs are redacted like the log, so a URL that
+carried a secret parameter yields a pattern containing `[redacted]` — edit it
+before enabling the rule.
 
 Capture is the one feature that records response bodies, so it is deliberately
 bounded: off until you switch it on, a **REC** badge on the toolbar icon the
@@ -254,7 +257,7 @@ can see at a glance that failures are being injected deliberately rather than
 debugging a problem that isn't real.
 
 ### DevTools Panel
-Open Chrome DevTools and select the **SpliceTap** panel. Because mocked/blocked/delayed/redirected requests never reach the real network stack (and so can't appear in the normal Network tab), the panel instead shows SpliceTap's own interception log: it polls the background service worker every 3 seconds and renders each applied rule (method, URL, rule name, type, status, relative time), newest first. A "Clear" button empties the log.
+Open Chrome DevTools and select the **SpliceTap** panel. Because mocked/blocked/delayed/redirected requests never reach the real network stack (and so can't appear in the normal Network tab), the panel instead shows SpliceTap's own interception log: it polls the background service worker every 3 seconds and renders each applied rule (method, URL, rule name, type, status, relative time), newest first. Delays and redirects show the status the page finally received (and where a redirect went); chaos failures and skipped patches appear too, with a note saying why. Header and query-param rules are applied by Chrome's network layer and do not appear — check the Network tab for those. A "Clear" button empties the log.
 
 ## Technical Details
 
@@ -315,6 +318,10 @@ SpliceTap's single purpose is local API request mocking and modification for dev
 - `headers` / `queryparams` (declarativeNetRequest) rules **cannot** use `match.headers` or `match.graphql` conditions — the network layer can't express them, so the editor rejects those combinations.
 - **Firefox** support is out of scope for this release.
 - Headers a page adds by patching `XMLHttpRequest.prototype.send` are not visible to `match.headers`.
+- A mocked **3xx** is followed for `fetch` (honouring `redirect: 'manual'` and `'error'`), but delivered as-is to XHR.
+- A mocked cross-origin `no-cors` fetch is readable, where a real one would be opaque.
+- URL redaction matches parameter names that *contain* words such as `key` or `code`, so harmless names like `keyword` are redacted too.
+- On pages whose CSP restricts Trusted Types policy names, a mocked `responseType: 'document'` holds the response as plain text and the page records one policy violation.
 
 ## Data Management
 

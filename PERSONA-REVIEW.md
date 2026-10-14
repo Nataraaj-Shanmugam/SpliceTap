@@ -24,7 +24,34 @@ How to read the status column:
 Where several personas found the same thing independently, every source ID is listed. Three
 personas hit the top bug (PER-8) from different directions.
 
-No code was changed in this pass. This document is the finding; fixes are a separate step.
+No code was changed in the review itself. The findings below are kept as written; this status
+section records what has changed since.
+
+## Fix status — updated 14 October 2026
+
+| Status | Count | Items |
+|---|---|---|
+| **Fixed** | 77 | Every High item. Every security, data-integrity and accessibility item. All of PER-1–19, 21–41, 43–46, 48–56, 62, 67–89. |
+| **Partly fixed** (limit documented in README) | 7 | PER-20 (data: frames: a request made while the frame's own HTML is still parsing can beat the state) · PER-42 (a mocked no-cors fetch stays readable; XHR doesn't follow mocked 3xx) · PER-47 (pages that restrict Trusted Types policy names get a plain-text document) · PER-59 (duplicates land below the original and "Move to top" exists; the shadowing warning is not built) · PER-60 (a capture-made rule is selected on the Rules tab; the editor hand-off is not built) · PER-61 (save toast and empty-state buttons; the whole-host prefill is unchanged) · PER-63 (an unsaved editor prompts before reload; drafts are not restored) |
+| **Not started** (enhancements, awaiting a go-ahead) | 5 | PER-57 (DevTools row → rule), PER-58 (per-tab popup status), PER-64 (key/value header editors), PER-65 (edit undo / history), PER-66 (response sequences) |
+
+How the fixes were made and checked:
+
+- **Grouped by file ownership**, so no two people edited the same file at once. Phase 1:
+  interceptor, background/DNR, schema/matcher, popup, editor/panel. Phase 2: XHR and fetch
+  fidelity, matcher hardening plus log display, and docs.
+- **Every fix carries a regression test** that fails without it.
+- **Merged on an integration branch and re-run there:** 759 unit tests, and the full headless
+  suite listed in README.
+- **The original reproduction probes were re-run** for every High item. Each one that reproduced
+  the bug now shows it fixed; the results are in the verification log kept with the review.
+- **What the fixes did not change:** header and query-param rules are still not counted per
+  request, because Chrome gives no per-request feedback for them (now documented rather than
+  claimed). The ReDoS guard is broader but still a heuristic.
+
+The nine items FINDINGS.md had recorded as fixed but which this review reopened — SEC-1, SEC-2,
+PROD-5, UX-2, UX-3, PERF-10, E2E-7, A11Y-4, A11Y-8 — are fixed again (PER-1, 2, 3, 87, 71, 77,
+37, 68, 85).
 
 ---
 
