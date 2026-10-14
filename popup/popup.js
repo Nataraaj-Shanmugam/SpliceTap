@@ -580,14 +580,13 @@ class SpliceTapPopup {
                             ${disabledChip}
                             ${notAppliedChip}
                             ${this.getRuleTypeBadgeHTML(rule)}
-                            ${this.getRuleScopeChipHTML(rule)}
                             ${this.getHitCountHTML(rule)}
                         </div>
                         <!-- PER-70: the outcome comes before the URL so a long
                              pattern is what gets truncated, and the full text
                              is in the title. -->
                         <div class="rule-details" title="${this.escapeHtml(this.getRuleDetailsTitle(rule))}">
-                            <span class="rule-method ${methodClass}">${safeMethod}</span><span class="rule-outcome">→ ${this.escapeHtml(this.getRuleSummaryText(rule))}</span> <span class="rule-url">${safeUrl}</span>${this.getRuleDestinationHTML(rule)}
+                            <span class="rule-method ${methodClass}">${safeMethod}</span><span class="rule-outcome">→ ${this.escapeHtml(this.getRuleSummaryText(rule))}</span> ${this.getRuleScopeChipHTML(rule)}<span class="rule-url">${safeUrl}</span>${this.getRuleDestinationHTML(rule)}
                         </div>
                     </div>
                     <div class="status-indicator" role="img" aria-label="${statusTooltip}" title="${statusTooltip}">${statusIcon}</div>
@@ -937,6 +936,10 @@ class SpliceTapPopup {
      * scripts, images and pages, and "Code" for a mock that runs JavaScript.
      * A code rule says so when Settings has code responses switched off, since
      * then it lets the request through instead of answering.
+     *
+     * They sit on the detail line, after the outcome. The name line already
+     * carries Disabled, the type and the hit count, and a fourth chip there
+     * squeezed the rule's name down to a letter.
      */
     getRuleScopeChipHTML(rule) {
         const type = rule.type || 'mock';

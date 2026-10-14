@@ -1248,6 +1248,8 @@ body.theme-light .set-note.is-warn {
    a code rule that Settings has switched off is dashed, the way a rule that
    has never matched is. */
 .rule-scope-chip {
+  display: inline-block;
+  margin-right: 4px;
   cursor: help;
 }
 
