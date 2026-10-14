@@ -273,6 +273,42 @@
         </div>
       </section>
 
+      <!-- F2: header, query-param and "all requests" rules are applied by
+           Chrome itself, so SpliceTap can only see them through the optional
+           webRequest permission. The switch asks for it (in the click, as
+           Chrome requires) and gives it back when switched off. -->
+      <section class="set-group" aria-labelledby="setLog">
+        <h2 class="set-label" id="setLog">Request log</h2>
+        <div class="set-row">
+          <label class="set-info" for="observeNetworkRules">
+            <span class="set-title">Show header, query-param and all-request rules in the log</span>
+            <span class="set-desc">Needs Chrome's optional "webRequest" permission, which SpliceTap asks for when you switch this on. It only reads requests; it never changes them.</span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="observeNetworkRules" aria-describedby="observeNote">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <p class="set-note" id="observeNote" hidden></p>
+      </section>
+
+      <!-- F4: code responses run the rule author's JavaScript inside the page
+           under test, so they are off until this is switched on. -->
+      <section class="set-group" aria-labelledby="setCode">
+        <h2 class="set-label" id="setCode">Code responses</h2>
+        <div class="set-row">
+          <label class="set-info" for="allowCodeResponses">
+            <span class="set-title">Allow code responses (runs your JavaScript inside the pages you test)</span>
+            <span class="set-desc">Off by default. While it is off, a mock rule set to Code lets the request through to the network.</span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="allowCodeResponses" aria-describedby="codeWarn">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <p class="set-note is-warn" id="codeWarn" hidden>Code rules now run JavaScript in matching pages. Only enable rules you wrote or trust.</p>
+      </section>
+
       <section class="set-group" aria-labelledby="setDebug">
         <h2 class="set-label" id="setDebug">Troubleshooting</h2>
         <div class="set-row">
