@@ -1467,8 +1467,13 @@ class SpliceTapBackground {
         this._observerCandidates = candidates;
         // While the stored state is still loading, stay attached to queue.
         if (this._observerPending) return;
-        for (const phase of OBSERVER_PHASES) {
-            this._setObserverListener(phase, candidates[phase].length > 0);
+        try {
+            for (const phase of OBSERVER_PHASES) {
+                this._setObserverListener(phase, candidates[phase].length > 0);
+            }
+        } catch (error) {
+            // The log is a view; never let it fail a rule or settings change.
+            console.error('SpliceTap: could not update the network observer:', error);
         }
     }
 
@@ -1476,8 +1481,13 @@ class SpliceTapBackground {
     _drainObserverPending() {
         const pending = this._observerPending || [];
         this._observerPending = null;
-        this._refreshNetworkObserver();
-        for (const [phase, details] of pending) this._observeRequest(phase, details);
+        // `ready` must resolve whatever happens here: every handler awaits it.
+        try {
+            this._refreshNetworkObserver();
+            for (const [phase, details] of pending) this._observeRequest(phase, details);
+        } catch (error) {
+            console.error('SpliceTap: could not replay network events:', error);
+        }
     }
 
     _observeRequest(phase, details) {
