@@ -167,6 +167,180 @@ describe('F1: appliesTo:"all" redirect and block rules in Chrome', () => {
         expect(await logFor('rdr-api')).toHaveLength(1);
     });
 
+    test('F2: webRequest is optional — not held at install, and the setting alone logs nothing', async () => {
+        expect(await h.extensionEval(() => chrome.permissions.contains({ permissions: ['webRequest'] }))).toBe(false);
+        const { settings } = await h.bg({ type: 'getRules' });
+        expect(settings.observeNetworkRules).toBe(false);
+        await h.bg({ type: 'settingsUpdated', settings: { ...settings, observeNetworkRules: true } });
+        try {
+            await h.saveRule({
+                id: 'hdr-off', name: 'Header', enabled: true, type: 'headers',
+                match: { url: '*/echo*', method: '*' },
+                headersMod: { request: [{ op: 'set', name: 'X-A', value: '1' }], response: [] }
+            });
+            expect((await pageFetch(page, '/echo')).body.headers['x-a']).toBe('1');
+            await sleep(300);
+            expect(await logFor('hdr-off')).toEqual([]);
+        } finally {
+            await h.bg({ type: 'settingsUpdated', settings: { ...settings, observeNetworkRules: false } });
+        }
+    });
+
+    test('ran without errors', () => {
+        expect(h.allErrors).toEqual([]);
+    });
+});
+
+/**
+ * A copy of the shipped extension whose manifest holds webRequest from
+ * install: Chrome's permission prompt cannot be accepted headless. Built
+ * from the packager's allowlist, so it is exactly what ships plus that one
+ * manifest change.
+ */
+function buildObserverCopy() {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const { buildAllowlist, ROOT } = require('../../scripts/package-extension');
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+    expect(manifest.optional_permissions).toEqual(['webRequest']);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'splicetap-f2-'));
+    for (const rel of buildAllowlist(manifest)) {
+        const to = path.join(dir, rel);
+        fs.mkdirSync(path.dirname(to), { recursive: true });
+        fs.copyFileSync(path.join(ROOT, rel), to);
+    }
+    manifest.permissions = manifest.permissions.concat('webRequest');
+    delete manifest.optional_permissions;
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    return { dir, remove: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
+describe('F2: the network observer logs rules Chrome applied', () => {
+    const NOTE = 'Seen on the network — Chrome applied this rule; SpliceTap matched it independently';
+    let copy;
+    let h;
+    let page;
+    let settings;
+
+    beforeAll(async () => {
+        copy = buildObserverCopy();
+        h = await launch({ extensionPath: copy.dir });
+    });
+    afterAll(async () => {
+        if (h) await h.close();
+        if (copy) copy.remove();
+    });
+
+    beforeEach(async () => {
+        await h.reset();
+        settings = (await h.bg({ type: 'getRules' })).settings;
+        await h.bg({ type: 'settingsUpdated', settings: { ...settings, observeNetworkRules: true } });
+        page = await h.openPage();
+    });
+    afterEach(async () => { if (page && !page.isClosed()) await page.close(); page = null; });
+
+    const logFor = async (ruleId) => (await h.bg({ type: 'getInterceptionLog' })).entries.filter((e) => e.ruleId === ruleId);
+    const hitsOf = async (ruleId) => ((await h.bg({ type: 'getRules' })).rules.find((r) => r.id === ruleId) || {}).hitCount || 0;
+
+    const headersRule = (overrides = {}) => ({
+        id: 'hdr', name: 'Add X-A', enabled: true, type: 'headers',
+        match: { url: '*/echo*', method: '*' },
+        headersMod: { request: [{ op: 'set', name: 'X-A', value: 'on' }], response: [] },
+        ...overrides
+    });
+
+    test('the copy really holds webRequest', async () => {
+        expect(await h.extensionEval(() => chrome.permissions.contains({ permissions: ['webRequest'] }))).toBe(true);
+    });
+
+    test('a headers rule shows up in the log with the note, and its hit count rises', async () => {
+        await h.saveRule(headersRule());
+        expect((await pageFetch(page, '/echo')).body.headers['x-a']).toBe('on');
+
+        const [entry] = await waitFor(async () => {
+            const entries = await logFor('hdr');
+            return entries.length ? entries : null;
+        }, { label: 'the headers rule in the log' });
+        expect(entry).toMatchObject({ kind: 'rule', ruleType: 'headers', method: 'GET', note: NOTE });
+        expect(entry.url).toBe(h.baseUrl + '/echo');
+        expect(typeof entry.tabId).toBe('number');
+        expect(await hitsOf('hdr')).toBe(1);
+
+        await pageFetch(page, '/echo?again=1');
+        await waitFor(async () => (await hitsOf('hdr')) === 2, { label: 'a second hit' });
+        expect(await logFor('hdr')).toHaveLength(2);
+    });
+
+    test('a response-header rule records the status Chrome saw', async () => {
+        await h.saveRule(headersRule({ headersMod: { request: [], response: [{ op: 'set', name: 'X-Injected', value: 'yes' }] } }));
+        await pageFetch(page, '/echo');
+        const [entry] = await waitFor(async () => {
+            const entries = await logFor('hdr');
+            return entries.length ? entries : null;
+        }, { label: 'the response-header rule in the log' });
+        expect(entry.finalStatus).toBe(200);
+    });
+
+    test('a query-param rule shows up once per request, though Chrome redirected it', async () => {
+        await h.saveRule({
+            id: 'qp', name: 'Add flag', enabled: true, type: 'queryparams',
+            match: { url: '*/api/qp*', method: '*' },
+            queryParams: { add: [{ key: 'flag', value: 'on' }], remove: [] }
+        });
+        await pageFetch(page, '/api/qp');
+        expect(h.requests.find((r) => r.path === '/api/qp').query).toBe('?flag=on');
+
+        const [entry] = await waitFor(async () => {
+            const entries = await logFor('qp');
+            return entries.length ? entries : null;
+        }, { label: 'the query-param rule in the log' });
+        expect(entry).toMatchObject({ ruleType: 'queryparams', note: NOTE, url: h.baseUrl + '/api/qp' });
+        await sleep(300);
+        expect(await logFor('qp')).toHaveLength(1);
+        expect(await hitsOf('qp')).toBe(1);
+    });
+
+    test('an all-request block is logged for the <img>; the fetch is logged by the interceptor only', async () => {
+        await h.saveRule({
+            id: 'blk', name: 'Block pixel', enabled: true, type: 'block', appliesTo: 'all',
+            match: { url: '*/assets/pixel.png*', method: '*' }
+        });
+        expect(await loadImage(page, '/assets/pixel.png?n=' + unique())).toBe(false);
+        expect((await pageFetch(page, '/assets/pixel.png?n=' + unique())).ok).toBe(false);
+
+        const entries = await waitFor(async () => {
+            const all = await logFor('blk');
+            return all.length >= 2 ? all : null;
+        }, { label: 'two log entries' });
+        await sleep(600);
+        const settled = await logFor('blk');
+        expect(settled).toHaveLength(2);
+        expect(settled.filter((e) => e.note === NOTE)).toHaveLength(1);
+        expect(entries.every((e) => e.ruleType === 'block')).toBe(true);
+        expect(await hitsOf('blk')).toBe(2);
+    });
+
+    test('logged URLs are redacted like the interceptor\'s', async () => {
+        await h.saveRule(headersRule());
+        await pageFetch(page, '/echo?access_token=LEAKME42&page=2');
+        const [entry] = await waitFor(async () => {
+            const all = await logFor('hdr');
+            return all.length ? all : null;
+        }, { label: 'the entry' });
+        expect(entry.url).toBe(h.baseUrl + '/echo?access_token=%5Bredacted%5D&page=2');
+    });
+
+    test('with the setting off, nothing is logged', async () => {
+        await h.bg({ type: 'settingsUpdated', settings: { ...settings, observeNetworkRules: false } });
+        await h.saveRule(headersRule());
+        expect((await pageFetch(page, '/echo')).body.headers['x-a']).toBe('on');
+        await sleep(300);
+        expect(await logFor('hdr')).toEqual([]);
+        expect(await hitsOf('hdr')).toBe(0);
+    });
+
     test('ran without errors', () => {
         expect(h.allErrors).toEqual([]);
     });
