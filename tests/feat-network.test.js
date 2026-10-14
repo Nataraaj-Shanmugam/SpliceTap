@@ -100,8 +100,8 @@ describe('F1: ruleToDnr compiles appliesTo:"all" redirect and block rules', () =
             headersMod: { request: [{ op: 'set', name: 'X', value: '1' }] }
         });
         for (const url of ['*/echo', '/api/*', 'a|b', '/\\/api\\/v\\d+/', 'example.com/x']) {
-            const { resourceTypes: a, ...networkCondition } = dnr.ruleToDnr(blockAll({ dnrRuleId: 1, match: { url, method: '*' } })).condition;
-            const { resourceTypes: b, ...headersCondition } = headers(url).condition;
+            const { resourceTypes: _a, ...networkCondition } = dnr.ruleToDnr(blockAll({ dnrRuleId: 1, match: { url, method: '*' } })).condition;
+            const { resourceTypes: _b, ...headersCondition } = headers(url).condition;
             expect(networkCondition).toEqual(headersCondition);
         }
     });
