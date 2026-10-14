@@ -679,6 +679,129 @@ describe('popup + panel (G4b)', () => {
         });
     });
 
+    // ---- panel rows: request-body entries and observed entries -----------------
+
+    describe('panel rendering', () => {
+        let panel;
+        afterEach(async () => { if (panel && !panel.isClosed()) await panel.close(); panel = null; });
+
+        const OBSERVED = 'Seen on the network — Chrome applied this rule; SpliceTap matched it independently';
+
+        async function seedLog() {
+            await h.reset();
+            // The log only accepts entries for rules that exist, and the stored
+            // type does not matter to it: the entry's own ruleType is what is shown.
+            for (const id of ['body', 'hdr', 'qp', 'blk', 'red', 'mk']) await h.saveRule(mock(id));
+            const t0 = Date.now();
+            const entry = (n, over) => ({ ts: t0 + n, url: `${h.baseUrl}/api/${over.ruleId}`, method: 'GET', kind: 'rule', ...over });
+            const response = await h.bg({
+                type: 'logInterceptionBatch',
+                entries: [
+                    entry(0, { ruleId: 'body', ruleName: 'Patch role', ruleType: 'requestBody', method: 'POST', note: 'Request body patched' }),
+                    entry(1, { ruleId: 'hdr', ruleName: 'Add header', ruleType: 'headers', note: OBSERVED }),
+                    entry(2, { ruleId: 'qp', ruleName: 'Strip param', ruleType: 'queryparams', finalStatus: 200, note: OBSERVED }),
+                    entry(3, { ruleId: 'blk', ruleName: 'Block script', ruleType: 'block', note: OBSERVED }),
+                    entry(4, { ruleId: 'red', ruleName: 'Swap script', ruleType: 'redirect', status: 302, redirectedTo: 'https://example.com/a.js', note: OBSERVED }),
+                    entry(5, { ruleId: 'mk', ruleName: 'Plain mock', ruleType: 'mock', status: 200 })
+                ]
+            });
+            expect(response.accepted).toBe(6);
+        }
+
+        async function openPanel(theme = 'dark') {
+            await setSettings({ theme });
+            panel = await h.browser.newPage();
+            panel.on('pageerror', (e) => h.record({ where: 'panel', text: 'pageerror: ' + e.message }));
+            panel.on('console', (m) => { if (m.type() === 'error') h.record({ where: 'panel', text: m.text() }); });
+            await panel.setViewport({ width: 900, height: 600 });
+            await panel.goto(h.extUrl('devtools/panel.html'), { waitUntil: 'load' });
+            await waitFor(async () => (await panel.$$('#requestItems [role="row"]')).length === 6, { label: 'six rows' });
+        }
+
+        const row = (name) => panel.evaluate((n) => {
+            const el = Array.from(document.querySelectorAll('#requestItems [role="row"]'))
+                .find((r) => r.querySelector('.rule-name').textContent === n);
+            const badge = el.querySelector('.rule-type-badge');
+            const note = el.querySelector('.request-note');
+            return {
+                badge: badge.textContent,
+                badgeType: badge.dataset.type,
+                status: el.querySelector('.request-status').textContent,
+                statusClass: el.querySelector('.request-status').className,
+                note: note ? note.textContent : null,
+                described: note ? el.querySelector('.url-toggle').getAttribute('aria-describedby') === note.id : null
+            };
+        }, name);
+
+        test('a request-body entry is labelled "Request body" and is not shown as pending', async () => {
+            await seedLog();
+            await openPanel();
+            expect(await row('Patch role')).toMatchObject({
+                badge: 'Request body',
+                badgeType: 'requestBody',
+                status: 'modified',
+                note: 'Request body patched',
+                described: true
+            });
+            expect((await row('Patch role')).statusClass).toMatch(/status-neutral/);
+        });
+
+        test('observer entries show their note, and "applied" rather than "pending" when no status exists', async () => {
+            await seedLog();
+            await openPanel();
+            expect(await row('Add header')).toMatchObject({ badge: 'headers', status: 'applied', note: OBSERVED, described: true });
+            expect((await row('Add header')).statusClass).toMatch(/status-neutral/);
+            // A request-side block with no status is blocked, and says so.
+            expect(await row('Block script')).toMatchObject({ badge: 'block', status: 'blocked', note: OBSERVED });
+            // A response-side rule carries Chrome's status code.
+            expect(await row('Strip param')).toMatchObject({ badge: 'queryparams', status: '200' });
+            // A redirect keeps its destination.
+            expect((await row('Swap script')).status).toMatch(/redirected via https:\/\/example\.com\/a\.js/);
+            // Interceptor entries are unchanged.
+            expect(await row('Plain mock')).toMatchObject({ badge: 'mock', status: '200', note: null });
+        });
+
+        test('the type filter has a "Request body" option that shows only those entries', async () => {
+            await seedLog();
+            await openPanel();
+            const options = await panel.$$eval('#filterType option', (els) => els.map((o) => [o.value, o.textContent.trim()]));
+            expect(options).toContainEqual(['requestBody', 'Request body']);
+
+            await panel.select('#filterType', 'requestBody');
+            await waitFor(async () => (await panel.$$('#requestItems [role="row"]')).length === 1, { label: 'one row' });
+            expect(await panel.$eval('#requestItems .rule-name', (el) => el.textContent)).toBe('Patch role');
+
+            await panel.select('#filterType', 'headers');
+            await waitFor(async () => (await panel.$eval('#requestItems .rule-name', (el) => el.textContent)) === 'Add header', { label: 'headers only' });
+        });
+
+        test('the live region announces a new request-body entry by its outcome', async () => {
+            await seedLog();
+            await openPanel();
+            await h.bg({ type: 'logInterceptionBatch', entries: [{ ts: Date.now(), url: `${h.baseUrl}/api/body?again=1`, method: 'POST', ruleId: 'body', ruleName: 'Patch role', ruleType: 'requestBody', kind: 'rule' }] });
+            // The panel polls every 3 s.
+            await waitFor(async () => /New request logged: POST .* — modified \(Patch role\)/.test(await panel.$eval('#logAnnouncer', (el) => el.textContent)), { timeout: 8000, label: 'announcement' });
+        });
+
+        test.each(['dark', 'light'])('the panel has no WCAG A/AA violations with these rows (%s theme)', async (theme) => {
+            await seedLog();
+            await openPanel(theme);
+            await waitFor(() => panel.evaluate((t) => document.body.classList.contains('theme-' + t), theme), { label: 'the theme applied' });
+            await sleep(500);
+            expect(await auditA11y(panel)).toEqual([]);
+        });
+
+        test('in forced colours the new badge keeps its outline', async () => {
+            await seedLog();
+            await openPanel();
+            const cdp = await panel.createCDPSession();
+            await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'forced-colors', value: 'active' }] });
+            await sleep(200);
+            const border = await panel.$eval('.rule-type-badge[data-type="requestBody"]', (el) => window.getComputedStyle(el).borderTopWidth);
+            expect(border).toBe('1px');
+        });
+    });
+
     test('ran without errors', () => {
         expect(h.allErrors).toEqual([]);
     });

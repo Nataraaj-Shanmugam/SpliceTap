@@ -581,7 +581,7 @@
             color: var(--text-muted);
         }
 
-        /* Six per-type hues, identical to popup/popup.css so a rule type
+        /* Per-type hues, identical to popup/popup.css so a rule type
            reads the same on every surface. */
         .rule-type-badge[data-type="mock"] { background: rgba(47, 125, 250, 0.16); color: #8ab6ff; }
         .rule-type-badge[data-type="block"] { background: rgba(239, 68, 68, 0.16); color: #fca5a5; }
@@ -589,6 +589,7 @@
         .rule-type-badge[data-type="redirect"] { background: rgba(2, 132, 199, 0.18); color: #7dd3fc; }
         .rule-type-badge[data-type="headers"] { background: rgba(34, 197, 94, 0.16); color: #6ee7a0; }
         .rule-type-badge[data-type="queryparams"] { background: rgba(167, 139, 250, 0.16); color: #c9a2fb; }
+        .rule-type-badge[data-type="requestBody"] { background: rgba(244, 114, 182, 0.16); color: #f9a8d4; }
         .rule-type-badge[data-type="chaos"] { background: rgba(217, 70, 239, 0.16); color: #f0abfc; }
 
         .timestamp {
@@ -775,6 +776,7 @@
         body.theme-light .rule-type-badge[data-type="redirect"] { background: rgba(2, 132, 199, 0.12); color: #0369a1; }
         body.theme-light .rule-type-badge[data-type="headers"] { background: rgba(21, 128, 61, 0.12); color: #166534; }
         body.theme-light .rule-type-badge[data-type="queryparams"] { background: rgba(124, 58, 237, 0.12); color: #6d28d9; }
+        body.theme-light .rule-type-badge[data-type="requestBody"] { background: rgba(190, 24, 93, 0.10); color: #9d174d; }
         body.theme-light .rule-type-badge[data-type="chaos"] { background: rgba(192, 38, 211, 0.12); color: #86198f; }
 
         body.theme-light .pause-btn,
@@ -913,6 +915,7 @@
                     <option value="redirect">Redirect</option>
                     <option value="headers">Headers</option>
                     <option value="queryparams">Query params</option>
+                    <option value="requestBody">Request body</option>
                     <option value="chaos">Chaos</option>
                 </select>
             </div>

@@ -119,6 +119,22 @@
         return entry.kind === 'chaos' ? 'chaos' : (entry.ruleType || 'mock');
     }
 
+    // F3: the badge says what a person would say; every other type reads as
+    // its own key ("mock", "headers"). Display only — filtering and the badge's
+    // data-type use the key.
+    const TYPE_LABELS = { requestBody: 'Request body' };
+
+    function typeLabel(type) {
+        return Object.prototype.hasOwnProperty.call(TYPE_LABELS, type) ? TYPE_LABELS[type] : type;
+    }
+
+    // F2: header, query-param and all-request rules are applied by Chrome, not
+    // by SpliceTap, so their entries come from the network observer with a note
+    // that says so (not from the interceptor, which would set a status).
+    function isObserved(entry) {
+        return typeof entry.note === 'string' && entry.note.indexOf('Seen on the network') === 0;
+    }
+
     // Maps a status to a CSS class + label. A status is: 0 for block, null for
     // a delay that had not settled when it was logged, 302 for a redirect
     // (synthetic: no response was ever a 302), 'failed' for a request that
@@ -170,7 +186,22 @@
             const shown = entry.finalStatus === undefined ? 'redirected' : String(entry.finalStatus);
             return { cls: 'status-neutral', text: '→ ' + shown + via, detail: true };
         }
-        const shown = statusInfo(entry.finalStatus !== undefined ? entry.finalStatus : entry.status);
+        const settled = entry.finalStatus !== undefined ? entry.finalStatus : entry.status;
+        const unsettled = settled === undefined || settled === null;
+        // F2: an observed entry that carries no status (a request-side rule,
+        // seen before any response) is not "pending" — nothing is waiting.
+        if (unsettled && isObserved(entry)) {
+            return type === 'block'
+                ? { cls: 'status-error', text: 'blocked', detail: false }
+                : { cls: 'status-neutral', text: 'applied', detail: false };
+        }
+        // F3: a request-body rule changes what is sent; the response is
+        // whatever the server then says, so with no status it is "modified",
+        // not a request that never settled.
+        if (unsettled && type === 'requestBody') {
+            return { cls: 'status-neutral', text: 'modified', detail: false };
+        }
+        const shown = statusInfo(settled);
         if (type === 'delay' && entry.finalStatus !== undefined && isCount(entry.elapsedMs)) {
             return { cls: shown.cls, text: shown.text + ' after ' + entry.elapsedMs + ' ms', detail: true };
         }
@@ -444,7 +475,7 @@
         const ruleTypeSpan = document.createElement('span');
         ruleTypeSpan.className = 'rule-type-badge';
         ruleTypeSpan.dataset.type = ruleType;
-        ruleTypeSpan.textContent = ruleType;
+        ruleTypeSpan.textContent = typeLabel(ruleType);
         ruleCell.appendChild(ruleNameSpan);
         ruleCell.appendChild(ruleTypeSpan);
         row.appendChild(ruleCell);
