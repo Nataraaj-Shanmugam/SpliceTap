@@ -731,11 +731,10 @@ describe('fix-interceptor-2: XHR and fetch fidelity in a real browser', () => {
         expect(hookLeaks.filter((leak) => leak.script === 'content/injected.js')).toEqual([]);
     });
 
-    // TODO(contract B, A2b): flip to `test` once the matcher half (src/matcher.js,
-    // src/placeholders.js, src/patch.js capturing their built-ins) is merged.
-    // Until then the shared modules still hand patterns to String.prototype,
-    // Map.prototype and Array.isArray, so this is expected to fail.
-    test.failing('contract B (with the A2b matcher half): no hook receives rule data at all', () => {
+    // Contract B, both halves: matcher.js, placeholders.js and patch.js now
+    // take their built-ins at load too, so no hook sees rule data from any
+    // SpliceTap script.
+    test('contract B: no hook the page installs receives rule data from any SpliceTap script', () => {
         expect(hookLeaks).not.toBeNull();
         expect(hookLeaks.filter((leak) => leak.script !== null)).toEqual([]);
     });
