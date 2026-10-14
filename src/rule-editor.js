@@ -744,9 +744,9 @@
                    rule can be saved either way. dir="ltr" and wrap="off" keep
                    the code a code listing on an RTL page too. -->
               <div class="tm-field" data-types="mock" id="tmCodeField">
-                <label for="tmCode">Response Code (JavaScript)</label>
+                <label for="tmCode">Response Code (JavaScript)${REQ}</label>
                 <div class="tm-note" id="tmCodeOffNote" hidden>Code responses are off &mdash; turn them on in SpliceTap Settings.</div>
-                <textarea id="tmCode" class="tm-code" rows="9" dir="ltr" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="return { status: 200, body: { id: 1 } };" aria-describedby="tmCodeHint tmCodeSecurity"></textarea>
+                <textarea id="tmCode" class="tm-code" rows="9" aria-required="true" dir="ltr" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="return { status: 200, body: { id: 1 } };" aria-describedby="tmCodeHint tmCodeSecurity"></textarea>
                 <span class="tm-hint" id="tmCodeHint">Body of an async function. <code>request</code> has url, method, headers, body, json. Return a body or {status, headers, body}.</span>
                 <span class="tm-hint" id="tmCodeSecurity">Runs inside the page you are testing.</span>
               </div>

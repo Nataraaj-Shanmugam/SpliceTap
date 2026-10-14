@@ -505,6 +505,9 @@ describe('F4: code responses', () => {
         expect(code.getAttribute('dir')).toBe('ltr');
         expect(code.classList.contains('tm-code')).toBe(true);
         expect(code.getAttribute('spellcheck')).toBe('false');
+        // the code is the one thing code mode needs: marked like the other required fields
+        expect(code.getAttribute('aria-required')).toBe('true');
+        expect(h.$('tmCodeField').querySelector('label .tm-req')).not.toBeNull();
         expect(h.$('tmCodeHint').textContent)
             .toBe('Body of an async function. request has url, method, headers, body, json. Return a body or {status, headers, body}.');
         expect(h.$('tmCodeHint').querySelector('code').textContent).toBe('request');
