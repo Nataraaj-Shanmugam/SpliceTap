@@ -90,6 +90,13 @@
     function listAddUnique(list, value) {
         if (!listIncludes(list, value)) listPush(list, value);
     }
+    function listOf(values) {
+        const list = newList();
+        for (let i = 0; i < values.length; i++) listPush(list, values[i]);
+        return list;
+    }
+    // B2-F7: a rule without a `match` block reads its conditions from here.
+    const EMPTY_MATCH = objectCreate(null);
     function nullProtoTable(entries) {
         const table = objectCreate(null);
         const keys = objectKeys(entries);
@@ -671,10 +678,158 @@
         return regexExec(regex, request.unparsed) !== null;
     }
 
+    // B2-F7: a host as compared: lowercase, without the trailing dot of a
+    // fully qualified name ('example.com.').
+    function normalizeHost(host) {
+        const lowered = stringToLowerCase(NativeString(host));
+        return stringEndsWith(lowered, '.') ? stringSlice(lowered, 0, -1) : lowered;
+    }
+
+    // B2-F7: does `host` fall under `domain` — the name itself or a
+    // subdomain of it, as DNR's initiatorDomains reads it.
+    function hostWithin(host, domain) {
+        const name = normalizeHost(domain);
+        if (name === '' || host === '') return false;
+        return host === name || stringEndsWith(host, '.' + name);
+    }
+
+    /**
+     * B2-F7: `match.pageDomains` against the host of the page (or frame) that
+     * makes the request. No list (or an empty one) is no condition. An
+     * unknown host — a caller that names no page — matches no list: the rule
+     * only runs on those pages, and nothing says this is one.
+     */
+    function matchPageDomains(pageHost, domains) {
+        if (!isArray(domains) || domains.length === 0) return true;
+        if (typeof pageHost !== 'string') return false;
+        const host = normalizeHost(pageHost);
+        for (let i = 0; i < domains.length; i++) {
+            if (typeof domains[i] === 'string' && hostWithin(host, domains[i])) return true;
+        }
+        return false;
+    }
+
+    // B2-F7: what a rule reaches when it has no `match.resourceTypes`.
+    const FETCH_XHR = 'fetch-xhr';
+    const RESOURCE_TYPES = listOf([FETCH_XHR, 'document', 'subdocument', 'script', 'stylesheet', 'image', 'font',
+        'media', 'websocket', 'ping', 'other']);
+    const API_RESOURCE_TYPES = listOf([FETCH_XHR, 'other']);
+    const PAGE_RESOURCE_TYPES = listOf([FETCH_XHR]);
+    const NETWORK_RULE_TYPES = new Set(['headers', 'queryparams']);
+
+    function isAllRequestsRule(rule) {
+        const type = own(rule, 'type') || 'mock';
+        return (type === 'block' || type === 'redirect') && own(rule, 'appliesTo') === 'all';
+    }
+
+    /**
+     * B2-F7: the resource types a rule applies to. Its own list when it has
+     * one; otherwise every type for an appliesTo:'all' block or redirect,
+     * fetch/XHR plus 'other' for headers and query-parameter rules, and
+     * fetch/XHR alone for everything the in-page interceptor runs.
+     */
+    function ruleResourceTypes(rule) {
+        const match = own(rule, 'match');
+        const listed = match && typeof match === 'object' ? own(match, 'resourceTypes') : undefined;
+        if (isArray(listed) && listed.length > 0) return listed;
+        if (isAllRequestsRule(rule)) return RESOURCE_TYPES;
+        return setHas(NETWORK_RULE_TYPES, own(rule, 'type')) ? API_RESOURCE_TYPES : PAGE_RESOURCE_TYPES;
+    }
+
+    function matchResourceType(rule, resourceType) {
+        return listIncludes(ruleResourceTypes(rule), resourceType || FETCH_XHR);
+    }
+
+    // B2-F7: the JSON request body, parsed once per request (see the
+    // GraphQL memo). `ok` is false for a body that is absent or not JSON.
+    function parsedBody(bodyText, memo) {
+        let parsed = memo ? own(memo, 'json') : undefined;
+        if (parsed) return parsed;
+        parsed = objectCreate(null);
+        parsed.ok = false;
+        if (typeof bodyText === 'string' && bodyText !== '') {
+            try {
+                parsed.value = jsonParse(bodyText);
+                parsed.ok = true;
+            } catch (error) {
+                // Not JSON: a payload condition never matches it.
+            }
+        }
+        if (memo) {
+            objectDefineProperty(memo, 'json', { __proto__: null, value: parsed, writable: true, enumerable: true, configurable: true });
+        }
+        return parsed;
+    }
+
+    /**
+     * B2-F7: the value at a dot path ('user.id', 'items.0.sku') in parsed
+     * JSON. Own properties only, so a key the body lacks never reaches a
+     * getter the page put on Object.prototype (the key is rule data).
+     * `found` is false when the path leaves the body.
+     */
+    function valueAtPath(value, path) {
+        const result = objectCreate(null);
+        result.found = false;
+        if (typeof path !== 'string' || path === '') return result;
+        const segments = splitOn(path, '.');
+        let current = value;
+        for (let i = 0; i < segments.length; i++) {
+            if (current === null || typeof current !== 'object' || !hasOwnProperty(current, segments[i])) return result;
+            current = current[segments[i]];
+        }
+        result.found = true;
+        result.value = current;
+        return result;
+    }
+
+    // B2-F7: String(value) for parsed JSON, without the toString and join
+    // lookups String() makes on an object or array (page-hookable).
+    function jsonValueText(value) {
+        if (value === null) return 'null';
+        if (typeof value !== 'object') return NativeString(value);
+        if (!isArray(value)) return '[object Object]';
+        let out = '';
+        for (let i = 0; i < value.length; i++) {
+            if (i > 0) out += ',';
+            const item = value[i];
+            if (item !== null && item !== undefined) out += jsonValueText(item);
+        }
+        return out;
+    }
+
+    function payloadCompare(actual, operator, expected) {
+        if (operator === 'equals') return actual === expected;
+        if (operator === 'contains') return stringIncludes(actual, expected);
+        return false;
+    }
+
+    /**
+     * B2-F7: `match.payload` ({ path, operator, value }) against the JSON
+     * request body: String(value at path) equals, or contains, `value`. A
+     * body that is absent or not JSON, or lacks the path, never matches.
+     * Absent payload -> true. `memo` as for matchGraphQL.
+     */
+    function matchPayload(bodyText, payload, memo) {
+        if (!payload || typeof payload !== 'object') return true;
+        const body = parsedBody(bodyText, memo);
+        if (!body.ok) return false;
+        const at = valueAtPath(body.value, own(payload, 'path'));
+        if (!at.found) return false;
+        const expected = own(payload, 'value');
+        return payloadCompare(jsonValueText(at.value), own(payload, 'operator'),
+            expected === undefined || expected === null ? '' : NativeString(expected));
+    }
+
     /**
      * Find the first enabled, interceptor-handled rule (array order) whose
      * url + method + headers + graphql conditions all match. Method '*'
      * matches any method.
+     *
+     * B2-F7: and whose page domains, resource types and payload condition
+     * match too. The request may carry `pageHost` (the requesting frame's
+     * host), `resourceType` (default 'fetch-xhr') and `altUrl`, the URL as
+     * the page wrote it: a rule matches if either URL form does (PER-8), in
+     * one scan.
      */
     function findMatchingRule(rules, request) {
         return findFirstMatch(rules, request, false);
@@ -693,7 +848,16 @@
     // `requestBodyPass`: requestBody rules only (F3), else the main-pass types.
     function findFirstMatch(rules, request, requestBodyPass) {
         if (!isArray(rules)) return null;
-        const { url, method, headers, bodyText } = request || {};
+        const record = request && typeof request === 'object' ? request : objectCreate(null);
+        const url = own(record, 'url');
+        const method = own(record, 'method');
+        const headers = own(record, 'headers');
+        const bodyText = own(record, 'bodyText');
+        // B2-F7: see findMatchingRule.
+        const pageHost = own(record, 'pageHost');
+        const resourceType = own(record, 'resourceType') || FETCH_XHR;
+        const rawAltUrl = own(record, 'altUrl');
+        const altUrl = typeof rawAltUrl === 'string' && rawAltUrl !== url ? rawAltUrl : null;
 
         // PER-36: keep every pattern of this rule set cached (see the cache).
         patternCacheMax = mathMax(PATTERN_CACHE_MIN, rules.length);
@@ -704,6 +868,7 @@
         const requestMethod = stringToUpperCase(NativeString(method || ''));
 
         // PER-38: filled by the first GraphQL rule that gets this far.
+        // B2-F7: and the parsed body, by the first payload rule.
         const graphqlMemo = objectCreate(null);
 
         // PER-2: an index loop (for...of asks the rule list for its iterator)
@@ -716,13 +881,17 @@
             const type = own(rule, 'type') || 'mock';
             if (requestBodyPass ? type !== REQUEST_BODY_TYPE : !setHas(INTERCEPTOR_TYPES, type)) continue;
 
-            const match = own(rule, 'match') || {};
+            const match = own(rule, 'match') || EMPTY_MATCH;
             const ruleMethod = stringToUpperCase(own(match, 'method') || '*');
             if (ruleMethod !== '*' && requestMethod !== ruleMethod) continue;
 
-            if (!matchUrl(url, own(match, 'url'))) continue;
+            const pattern = own(match, 'url');
+            if (!matchUrl(url, pattern) && !(altUrl !== null && matchUrl(altUrl, pattern))) continue;
+            if (!matchPageDomains(pageHost, own(match, 'pageDomains'))) continue;
+            if (!matchResourceType(rule, resourceType)) continue;
             if (!matchHeaders(headers, own(match, 'headers'))) continue;
             if (!matchGraphQL(bodyText, own(match, 'graphql'), url, graphqlMemo)) continue;
+            if (!matchPayload(bodyText, own(match, 'payload'), graphqlMemo)) continue;
 
             return rule;
         }
@@ -733,7 +902,10 @@
     // isCatastrophicRegex is exported so the save-time validator and the
     // redirect path guard against the same thing this matcher does, rather
     // than each re-deriving (or, as before, omitting) the check.
-    const api = { matchUrl, matchHeaders, matchGraphQL, findMatchingRule, findMatchingRequestBodyRule, isCatastrophicRegex };
+    const api = {
+        matchUrl, matchHeaders, matchGraphQL, findMatchingRule, findMatchingRequestBodyRule, isCatastrophicRegex,
+        matchPageDomains, matchPayload // B2-F7
+    };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;

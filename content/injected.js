@@ -93,6 +93,24 @@
     const customEventDetail = (Object.getOwnPropertyDescriptor(CustomEvent.prototype, 'detail') || {}).get;
     const consoleLog = console.log;
 
+    // B2-F7: the host of the page or frame making the requests, for a rule's
+    // `match.pageDomains`. Read once, here, before any page script runs; a
+    // document's host cannot change. An about:blank or srcdoc frame (or a
+    // blob: document) has no host of its own: it has its creator's origin,
+    // and so its creator's host — as its relay has its creator's rules.
+    const PAGE_HOST = (() => {
+        try {
+            const loc = window.location;
+            const host = loc && typeof loc.hostname === 'string' ? loc.hostname : '';
+            if (host) return host;
+            const origin = window.origin;
+            if (typeof origin === 'string' && origin !== '' && origin !== 'null') return new NativeURL(origin).hostname;
+            return loc && typeof loc.href === 'string' ? new NativeURL(loc.href).hostname : '';
+        } catch (e) {
+            return '';
+        }
+    })();
+
     const hasOwn = (object, key) => reflectApply(hasOwnProperty, object, [key]);
     const indexOf = (text, search) => reflectApply(stringIndexOf, text, [search]);
     const slice = (text, start, end) => reflectApply(stringSlice, text, [start, end]);
@@ -231,7 +249,8 @@
         _anyRuleUsesHeaders: false,
         _anyRuleUsesGraphQL: false,
         _hasRedirectRules: false,
-        _hasRequestBodyRules: false // F3
+        _hasRequestBodyRules: false, // F3
+        _anyRuleUsesPayload: false // B2-F7
     };
 
     // Helper: Logging with debug mode check
@@ -584,33 +603,29 @@
      * a host-scoped or full-URL pattern miss every relative call, which is
      * how most single-page apps call their own API.
      *
-     * Two scans keep findMatchingRule's first-match order exactly: the winner
-     * is whichever of the two hits comes first in the rule list.
+     * One scan, in which a rule matches if either URL form does, keeps
+     * findMatchingRule's first-match order exactly. (B2-F7: this was two
+     * scans, one per form, merged by list position. Equivalent, but a rule's
+     * call counter, PER-66, must see each call once.)
      *
      * `finder` (optional) is findMatchingRequestBodyRule for the F3 pass.
      */
     function findRule(request, rawUrl, finder) {
         const find = finder || findMatchingRule;
-        const rules = tmState.rules;
-        const hit = find(rules, matchRequest(request.url, request));
-        if (rawUrl === request.url) return hit;
-
-        const rawHit = find(rules, matchRequest(rawUrl, request));
-        if (!hit || !rawHit || hit === rawHit) return hit || rawHit;
-        for (let i = 0; i < rules.length; i++) {
-            if (rules[i] === hit) return hit;
-            if (rules[i] === rawHit) return rawHit;
-        }
-        return hit;
+        return find(tmState.rules, matchRequest(request, rawUrl));
     }
 
     // Contract B: the request record the matcher reads, with no prototype.
-    function matchRequest(url, request) {
+    // B2-F7: with the frame's host, and fetch/XHR as the resource type.
+    function matchRequest(request, rawUrl) {
         const record = objectCreate(null);
-        record.url = url;
+        record.url = request.url;
+        record.altUrl = rawUrl;
         record.method = request.method;
         record.headers = request.headers;
         record.bodyText = request.bodyText;
+        record.pageHost = PAGE_HOST;
+        record.resourceType = 'fetch-xhr';
         return record;
     }
 
@@ -627,8 +642,9 @@
             // F3: request-body rules are their own pass, not a contender.
             if (!rule || !rule.enabled || rule.type === 'requestBody') continue;
             const match = rule.match || EMPTY_RECORD;
+            // B2-F7: a payload condition needs the body as well.
             const conditional = (match.headers && objectKeys(match.headers).length > 0) ||
-                (match.graphql && match.graphql.operationName);
+                (match.graphql && match.graphql.operationName) || match.payload;
             if (!conditional) continue;
             const ruleMethod = upper(String(match.method || '*'));
             if (ruleMethod !== '*' && ruleMethod !== method) continue;
@@ -1644,11 +1660,12 @@
 
             // 3. Body text: only read it if some enabled rule needs graphql
             //    matching (perf: avoid consuming/reading the body otherwise).
+            //    B2-F7: or has a payload condition.
             let bodyText = null;
-            if (tmState._anyRuleUsesGraphQL) {
+            if (tmState._anyRuleUsesGraphQL || tmState._anyRuleUsesPayload) {
                 bodyText = await readBodyText(resource, config, isRequestObj);
                 if (bodyText === null) {
-                    log('A GraphQL-matching rule is configured but this request body could not be read as text', { url, method });
+                    log('A rule matches on the request body, but this request body could not be read as text', { url, method });
                 }
             }
 
@@ -1672,7 +1689,9 @@
                         config = args[1];
                         isRequestObj = false;
                         if (tmState._anyRuleUsesHeaders) headers = collectRequestHeaders(resource, config, false);
-                        if (tmState._anyRuleUsesGraphQL) bodyText = await readBodyText(resource, config, false);
+                        if (tmState._anyRuleUsesGraphQL || tmState._anyRuleUsesPayload) {
+                            bodyText = await readBodyText(resource, config, false);
+                        }
                     }
                 }
             }
@@ -2951,12 +2970,14 @@
         let usesGraphQL = false;
         let hasRedirect = false;
         let hasRequestBody = false;
+        let usesPayload = false;
         const synced = tmState.rules;
         for (let i = 0; i < synced.length; i++) {
             const r = synced[i];
             if (!r || !r.enabled) continue;
             if (r.match && r.match.headers && objectKeys(r.match.headers).length > 0) usesHeaders = true;
             if (r.match && r.match.graphql && r.match.graphql.operationName) usesGraphQL = true;
+            if (r.match && r.match.payload) usesPayload = true; // B2-F7
             if ((r.type || 'mock') === 'redirect') hasRedirect = true;
             if (r.type === 'requestBody') hasRequestBody = true;
         }
@@ -2964,6 +2985,7 @@
         tmState._anyRuleUsesGraphQL = usesGraphQL;
         tmState._hasRedirectRules = hasRedirect;
         tmState._hasRequestBodyRules = hasRequestBody && typeof findMatchingRequestBodyRule === 'function';
+        tmState._anyRuleUsesPayload = usesPayload;
 
         if (tmState.settings.debugMode) {
             log('State synced:', {
@@ -3010,6 +3032,7 @@
         tmState._anyRuleUsesGraphQL = false;
         tmState._hasRedirectRules = false;
         tmState._hasRequestBodyRules = false;
+        tmState._anyRuleUsesPayload = false;
         document.removeEventListener(SYNC_STATE_EVENT, onSyncState, true);
         log('Extension context gone; interception stopped for this page');
     }
