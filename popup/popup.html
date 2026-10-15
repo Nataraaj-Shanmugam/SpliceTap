@@ -378,7 +378,11 @@
 
   <script src="../src/common.js"></script>
   <!-- B2-F6: the Requestly converter (another file; popup.js reads
-       window.SpliceTapImporters.requestly when it is time to import). -->
+       window.SpliceTapImporters.requestly when it is time to import). It
+       validates what it produces with the schema, so the matcher and the
+       schema load first, in this order. -->
+  <script src="../src/matcher.js"></script>
+  <script src="../src/rule-schema.js"></script>
   <script src="../src/importers/requestly.js"></script>
   <script src="popup-helpers.js"></script>
   <script src="popup.js"></script>

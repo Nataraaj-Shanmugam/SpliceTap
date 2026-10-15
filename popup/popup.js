@@ -572,16 +572,21 @@ class SpliceTapPopup {
         const queue = (this.rules || []).filter((r) => r && r.id && !cache.has(r.id)
             && !helpers.isRegexPattern(r.match && r.match.url));
 
-        const work = async () => {
-            while (queue.length && generation === this._shadowGeneration) {
+        const work = async (limit = Infinity) => {
+            for (let done = 0; done < limit && queue.length && generation === this._shadowGeneration && !this._shadowUnsupported; done++) {
                 const target = queue.shift();
                 const response = await this.sendMessage({ type: 'explainMatch', ruleId: target.id });
                 if (generation !== this._shadowGeneration || cache !== this._shadowCache) return;
+                // A background that does not know explainMatch (an older build)
+                // answers success:false once; stop asking rather than repeat it per rule.
+                if (!response || response.success === false) this._shadowUnsupported = true;
                 const usable = response && response.success && !response.needsUrl && Array.isArray(response.shadowedBy);
                 cache.set(target.id, usable ? response.shadowedBy : []);
                 this.applyShadowChip(target.id);
             }
         };
+        // The first question goes alone, so an unsupported background is found out after one call, not four.
+        await work(1);
         await Promise.all([work(), work(), work(), work()]);
     }
 
