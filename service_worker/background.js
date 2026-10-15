@@ -1448,9 +1448,9 @@ class SpliceTapBackground {
                     methods: condition.requestMethods ? new Set(condition.requestMethods) : null,
                     // B2-F7: the DNR rule's initiatorDomains (match.pageDomains).
                     domains: condition.initiatorDomains || null,
-                    queryTransform: action.redirect && action.redirect.transform
-                        ? action.redirect.transform.queryTransform
-                        : null
+                    // A query-param rule's transform (queryTransform, or
+                    // B2-F9's whole-query replacement).
+                    transform: action.redirect && action.redirect.transform ? action.redirect.transform : null
                 };
                 if (rule.type === 'headers') {
                     if (action.requestHeaders) candidates.sendHeaders.push(candidate);
@@ -1510,7 +1510,7 @@ class SpliceTapBackground {
             if (!observedUrlMatches(url, candidate.pattern)) continue;
             // Chrome skips a query transform that would not change the URL —
             // including on the request it just redirected.
-            if (candidate.queryTransform && !queryTransformChanges(url, candidate.queryTransform)) continue;
+            if (candidate.transform && !queryTransformChanges(url, candidate.transform)) continue;
 
             if (this._markObserved(details.requestId, candidate.rule.id) && this._logObserved(candidate.rule, phase, details)) {
                 logged++;
@@ -1608,18 +1608,25 @@ function hostOf(url) {
     }
 }
 
-/** F2: would Chrome's queryTransform change this URL? */
+/** F2: would Chrome's queryTransform (B2-F9: or query replacement) change this URL? */
 function queryTransformChanges(url, transform) {
+    if (typeof transform.query === 'string') {
+        // B2-F9: removeAll. The query as the URL spells it, '?' included.
+        const noFragment = String(url).split('#')[0];
+        const at = noFragment.indexOf('?');
+        return (at === -1 ? '' : noFragment.slice(at)) !== transform.query;
+    }
+    const queryTransform = transform.queryTransform || {};
     let params;
     try {
         params = new URL(url).searchParams;
     } catch (error) {
         return true;
     }
-    for (const key of transform.removeParams || []) {
+    for (const key of queryTransform.removeParams || []) {
         if (params.has(key)) return true;
     }
-    for (const param of transform.addOrReplaceParams || []) {
+    for (const param of queryTransform.addOrReplaceParams || []) {
         if (params.get(param.key) !== param.value) return true;
     }
     return false;

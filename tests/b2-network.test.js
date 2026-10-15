@@ -2,6 +2,7 @@
  * Batch 2, group G1 "network":
  *   B2-F7  — match.pageDomains / match.resourceTypes on the DNR layer and in
  *            the network observer;
+ *   B2-F9  — response-header append and queryParams.removeAll;
  *
  * Chrome's own behaviour is covered by tests/e2e/b2-network.e2e.test.js.
  */
@@ -254,5 +255,99 @@ describe('B2-F7: the observer follows the same resource types and page domains',
         const { send, webRequest } = await observing([headersRule()]);
         webRequest.onSendHeaders._emit(request({ initiator: undefined }));
         expect(await logOf(send)).toHaveLength(1);
+    });
+});
+
+// ---- B2-F9: response-header append and query "remove all" ------------------------
+
+describe('B2-F9: response-header append', () => {
+    test('maps to DNR\'s append operation on the response side', () => {
+        const out = dnr.ruleToDnr(headersRule({
+            headersMod: {
+                request: [],
+                response: [
+                    { op: 'append', name: 'X-Multi', value: 'a=1' },
+                    { op: 'set', name: 'X-Set', value: '2' },
+                    { op: 'remove', name: 'X-Gone' }
+                ]
+            }
+        }));
+        expect(out.action.responseHeaders).toEqual([
+            { header: 'X-Multi', operation: 'append', value: 'a=1' },
+            { header: 'X-Set', operation: 'set', value: '2' },
+            { header: 'X-Gone', operation: 'remove' }
+        ]);
+    });
+
+    test('is dropped on the request side, where Chrome 120 cannot append', () => {
+        const out = dnr.ruleToDnr(headersRule({
+            headersMod: { request: [{ op: 'append', name: 'X-A', value: '1' }, { op: 'set', name: 'X-B', value: '2' }] }
+        }));
+        expect(out.action.requestHeaders).toEqual([{ header: 'X-B', operation: 'set', value: '2' }]);
+    });
+
+    test('needs a string value, and never touches a forbidden header', () => {
+        const out = dnr.ruleToDnr(headersRule({
+            headersMod: {
+                request: [],
+                response: [
+                    { op: 'append', name: 'X-NoValue' },
+                    { op: 'append', name: 'Content-Security-Policy', value: 'default-src *' },
+                    { op: 'append', name: 'X-Ok', value: '' }
+                ]
+            }
+        }));
+        expect(out.action.responseHeaders).toEqual([{ header: 'X-Ok', operation: 'append', value: '' }]);
+    });
+
+    test('the observer logs an append rule from onHeadersReceived', async () => {
+        const { send, webRequest } = await observing([headersRule({
+            headersMod: { request: [], response: [{ op: 'append', name: 'X-Multi', value: 'b' }] }
+        })]);
+        expect(webRequest.onSendHeaders._listeners).toHaveLength(0);
+        webRequest.onHeadersReceived._emit(request({ statusCode: 200 }));
+        expect((await logOf(send)).map((e) => [e.ruleId, e.finalStatus])).toEqual([['hdr', 200]]);
+    });
+});
+
+describe('B2-F9: queryParams.removeAll', () => {
+    const removeAll = (queryParams) => dnr.ruleToDnr(queryRule({ queryParams })).action;
+
+    test('alone, the whole query is dropped: {query: ""}', () => {
+        expect(removeAll({ removeAll: true })).toEqual({ type: 'redirect', redirect: { transform: { query: '' } } });
+        // A remove list has nothing left to remove.
+        expect(removeAll({ removeAll: true, remove: ['a'], add: [] })).toEqual({ type: 'redirect', redirect: { transform: { query: '' } } });
+    });
+
+    test('with params to add, the query becomes exactly those, encoded', () => {
+        expect(removeAll({ removeAll: true, add: [{ key: 'flag', value: 'on' }, { key: 'q x', value: 'a&b=c/é' }] }).redirect.transform)
+            .toEqual({ query: '?flag=on&q%20x=a%26b%3Dc%2F%C3%A9' });
+    });
+
+    test('only a literal true counts; otherwise the add/remove transform is unchanged', () => {
+        for (const value of [false, 'true', 1, undefined]) {
+            expect(removeAll({ removeAll: value, add: [{ key: 'flag', value: 'on' }], remove: ['x'] }).redirect.transform).toEqual({
+                queryTransform: { addOrReplaceParams: [{ key: 'flag', value: 'on' }], removeParams: ['x'] }
+            });
+        }
+    });
+
+    test('the observer logs it only when the query would change', async () => {
+        const { send, webRequest } = await observing([queryRule({ queryParams: { removeAll: true } })]);
+        webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/echo' }));
+        webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/echo#frag?x=1' }));
+        expect(await logOf(send)).toHaveLength(0);
+        webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/echo?a=1' }));
+        webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/echo?' }));
+        expect(await logOf(send)).toHaveLength(2);
+    });
+
+    test('with adds, the observer logs it unless the query is already exactly those', async () => {
+        const { send, webRequest } = await observing([queryRule({ queryParams: { removeAll: true, add: [{ key: 'flag', value: 'on' }] } })]);
+        webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/echo?flag=on' }));
+        expect(await logOf(send)).toHaveLength(0);
+        webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/echo?flag=on&a=1' }));
+        webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/echo' }));
+        expect(await logOf(send)).toHaveLength(2);
     });
 });

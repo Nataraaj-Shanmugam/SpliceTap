@@ -261,16 +261,20 @@
         if (op.op === 'remove') {
             return { header: op.name, operation: 'remove' };
         }
-        return { header: op.name, operation: 'set', value: op.value };
+        // B2-F9: 'append' adds a value alongside any the server sent.
+        return { header: op.name, operation: op.op === 'append' ? 'append' : 'set', value: op.value };
     }
 
     // Anything but a well-formed set/remove is dropped rather than coerced:
     // an unknown op used to be mapped to 'set', and a 'set' without a value is
     // a rule Chrome rejects. The save boundary rejects both now; this keeps a
     // rule stored before that from reaching the browser malformed.
-    const isApplicableOp = (op) => op && typeof op.name === 'string' && op.name
+    // B2-F9: 'append' too, on the response side only — Chrome 120 cannot
+    // append request headers.
+    const isApplicableOp = (op, side) => op && typeof op.name === 'string' && op.name
         && !FORBIDDEN_HEADER_NAMES.has(op.name.toLowerCase())
-        && (op.op === 'remove' || (op.op === 'set' && typeof op.value === 'string'));
+        && (op.op === 'remove'
+            || ((op.op === 'set' || (op.op === 'append' && side === 'response')) && typeof op.value === 'string'));
 
     /**
      * Build the `action` object for a 'headers' rule: modifyHeaders with
@@ -284,8 +288,10 @@
         const mod = rule.headersMod || {};
         const action = { type: 'modifyHeaders' };
 
-        const requestHeaders = (Array.isArray(mod.request) ? mod.request : []).filter(isApplicableOp).map(mapHeaderOp);
-        const responseHeaders = (Array.isArray(mod.response) ? mod.response : []).filter(isApplicableOp).map(mapHeaderOp);
+        const requestHeaders = (Array.isArray(mod.request) ? mod.request : [])
+            .filter((op) => isApplicableOp(op, 'request')).map(mapHeaderOp);
+        const responseHeaders = (Array.isArray(mod.response) ? mod.response : [])
+            .filter((op) => isApplicableOp(op, 'response')).map(mapHeaderOp);
 
         if (requestHeaders.length > 0) action.requestHeaders = requestHeaders;
         if (responseHeaders.length > 0) action.responseHeaders = responseHeaders;
@@ -296,9 +302,21 @@
     /**
      * Build the `action` object for a 'queryparams' rule: a redirect action
      * with a queryTransform.
+     *
+     * B2-F9: removeAll replaces the whole query instead — '' drops it, and
+     * with params to add it becomes exactly those ('?k=v&…', encoded). The
+     * remove list has nothing left to remove then.
      */
     function buildQueryParamsAction(rule) {
         const qp = rule.queryParams || {};
+        if (qp.removeAll === true) {
+            const add = (Array.isArray(qp.add) ? qp.add : [])
+                .filter((p) => p && typeof p.key === 'string' && p.key && typeof p.value === 'string');
+            const query = add.length
+                ? '?' + add.map((p) => encodeURIComponent(p.key) + '=' + encodeURIComponent(p.value)).join('&')
+                : '';
+            return { type: 'redirect', redirect: { transform: { query } } };
+        }
         return {
             type: 'redirect',
             redirect: {
