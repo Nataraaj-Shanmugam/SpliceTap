@@ -165,6 +165,27 @@ describe('B2-F9: header append and query "remove all" in Chrome', () => {
         expect(h.requests.filter((r) => r.path === '/echo').map((r) => r.query)).toEqual(['']);
     });
 
+    test('B2-F10: explainMatch runs in the real worker — an example URL, the result and who shadows it', async () => {
+        const mock = (id, name) => ({
+            id, name, enabled: true, type: 'mock', match: { url: '*/api/*', method: '*' },
+            response: { statusCode: 200, headers: {}, body: {}, delay: 0 }
+        });
+        await h.saveRule(mock('first', 'Catch-all API'));
+        await h.saveRule(mock('second', 'Users'));
+        const response = await h.bg({ type: 'explainMatch', ruleId: 'second' });
+        expect(response).toMatchObject({
+            success: true,
+            url: 'https://example.testx/api/x',
+            network: false,
+            shadowedBy: [{ ruleId: 'first', ruleName: 'Catch-all API' }]
+        });
+        expect(response.result.matches).toBe(true);
+        expect(response.result.checks.find((c) => c.condition === 'url').ok).toBe(true);
+
+        const regex = await h.bg({ type: 'explainMatch', rule: { ...mock('r', 'Regex'), match: { url: '/\\/api\\//', method: '*' } } });
+        expect(regex).toMatchObject({ success: false, needsUrl: true });
+    });
+
     test('removeAll with params to add leaves exactly those, encoded', async () => {
         const saved = await h.saveRule({
             id: 'qp-only', name: 'Only these params', enabled: true, type: 'queryparams',

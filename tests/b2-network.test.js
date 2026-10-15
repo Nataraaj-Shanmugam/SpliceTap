@@ -3,6 +3,7 @@
  *   B2-F7  — match.pageDomains / match.resourceTypes on the DNR layer and in
  *            the network observer;
  *   B2-F9  — response-header append and queryParams.removeAll;
+ *   B2-F10 — the explainMatch message ("Try a URL" and shadowing);
  *
  * Chrome's own behaviour is covered by tests/e2e/b2-network.e2e.test.js.
  */
@@ -126,6 +127,15 @@ describe('B2-F7: match.resourceTypes on the DNR layer', () => {
         expect(dnr.ruleToDnr(withMatch(headersRule(), { resourceTypes: ['bogus'] }))).toBeNull();
         expect(dnr.ruleToDnr(withMatch(headersRule(), { resourceTypes: [] }))).toBeNull();
         expect(dnr.ruleToDnr(withMatch(headersRule(), { resourceTypes: ['__proto__', 'constructor'] }))).toBeNull();
+        // Absent is undefined only: null names no type, it does not mean "default".
+        expect(dnr.ruleToDnr(withMatch(headersRule(), { resourceTypes: null }))).toBeNull();
+        expect(dnr.ruleToDnr(withMatch(blockAll(), { resourceTypes: null }))).toBeNull();
+    });
+
+    test('a repeated or overlapping type is emitted once (Chrome refuses duplicates)', () => {
+        const out = dnr.ruleToDnr(withMatch(headersRule(), { resourceTypes: ['other', 'other', 'fetch-xhr', 'fetch-xhr'] }));
+        expect(out.condition.resourceTypes).toEqual(['xmlhttprequest', 'object', 'csp_report', 'webtransport', 'webbundle', 'other']);
+        expect(new Set(out.condition.resourceTypes).size).toBe(out.condition.resourceTypes.length);
     });
 });
 
@@ -153,6 +163,7 @@ describe('B2-F7: match.pageDomains on the DNR layer', () => {
         expect(dnr.ruleToDnr(withMatch(headersRule(), { pageDomains: [] }))).toBeNull();
         expect(dnr.ruleToDnr(withMatch(blockAll(), { pageDomains: ['', 7] }))).toBeNull();
         expect(dnr.ruleToDnr(withMatch(blockAll(), { pageDomains: 'example.com' }))).toBeNull();
+        expect(dnr.ruleToDnr(withMatch(headersRule(), { pageDomains: null }))).toBeNull();
     });
 
     test('the sync registers both conditions', async () => {
@@ -349,5 +360,251 @@ describe('B2-F9: queryParams.removeAll', () => {
         webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/echo?flag=on&a=1' }));
         webRequest.onBeforeRequest._emit(request({ url: 'http://h.test/echo' }));
         expect(await logOf(send)).toHaveLength(2);
+    });
+});
+
+// ---- B2-F10: explainMatch ------------------------------------------------------------
+
+const mock = (overrides = {}) => ({
+    id: 'm', name: 'Mock', type: 'mock', enabled: true,
+    match: { url: '*/api/*', method: '*' },
+    response: { statusCode: 200, headers: {}, body: {}, delay: 0 },
+    ...overrides
+});
+
+/**
+ * Run with the matcher's explainRuleMatch replaced (a stub recording what it
+ * was given), or removed (`null`: the background's own url+method fallback).
+ */
+async function withExplain(impl, fn) {
+    const matcher = globalThis.SpliceTapMatcher;
+    const had = Object.prototype.hasOwnProperty.call(matcher, 'explainRuleMatch');
+    const previous = matcher.explainRuleMatch;
+    if (impl === null) delete matcher.explainRuleMatch;
+    else matcher.explainRuleMatch = impl;
+    try {
+        return await fn();
+    } finally {
+        if (had) matcher.explainRuleMatch = previous;
+        else delete matcher.explainRuleMatch;
+    }
+}
+
+/** A stub explainRuleMatch: matches by URL pattern and method only, recording each call. */
+function recordingExplain() {
+    const calls = [];
+    const { matchUrl } = globalThis.SpliceTapMatcher;
+    const fn = (rule, req) => {
+        calls.push({ ruleId: rule.id, req });
+        const m = rule.match || {};
+        const methodOk = !m.method || m.method === '*' || m.method.toUpperCase() === req.method;
+        const ok = matchUrl(req.url, m.url) && methodOk;
+        return { matches: ok, checks: [{ condition: 'url', ok, detail: 'stub' }] };
+    };
+    fn.calls = calls;
+    return fn;
+}
+
+describe('B2-F10: explainMatch — who may ask', () => {
+    test('an extension page and the top frame\'s content script may; a subframe may not', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [mock()] } });
+        expect((await send({ type: 'explainMatch', ruleId: 'm' })).success).toBe(true);
+        expect((await send({ type: 'explainMatch', ruleId: 'm' }, { tab: { id: 1 }, frameId: 0, url: 'https://a.test/' })).success).toBe(true);
+        const sub = await send({ type: 'explainMatch', ruleId: 'm' }, { tab: { id: 1 }, frameId: 3, url: 'https://a.test/frame' });
+        expect(sub).toEqual({ success: false, error: 'This request is not available to web pages' });
+    });
+
+    test('an unknown rule id, or no rule at all, is an error', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [mock()] } });
+        expect(await send({ type: 'explainMatch', ruleId: 'nope' })).toEqual({ success: false, error: 'Rule not found' });
+        expect((await send({ type: 'explainMatch' })).success).toBe(false);
+        expect((await send({ type: 'explainMatch', rule: 'x' })).success).toBe(false);
+        expect((await send({ type: 'explainMatch', ruleId: 'm', url: 7 })).success).toBe(false);
+    });
+});
+
+describe('B2-F10: explainMatch — the URL tried', () => {
+    const tried = async (pattern, type = 'mock') => {
+        const { send } = await setup();
+        const rule = type === 'mock' ? mock({ match: { url: pattern, method: '*' } }) : headersRule({ match: { url: pattern, method: '*' } });
+        return withExplain(null, () => send({ type: 'explainMatch', rule }));
+    };
+
+    test.each([
+        ['*/api/*', 'https://example.testx/api/x'],
+        ['/api/users*', 'https://example.test/api/usersx'],
+        ['https://api.example.com/v1/*', 'https://api.example.com/v1/x'],
+        ['*://h.test/*', 'https://h.test/x'],
+        ['//cdn.test/*', 'https://cdn.test/x'],
+        ['/users/42', 'https://example.test/users/42'],
+        ['example.com/users', 'https://example.testexample.com/users'],
+        ['*.example.com/*', 'https://example.testx.example.com/x']
+    ])('%s is tried as %s, and the rule matches it', async (pattern, expected) => {
+        const response = await tried(pattern);
+        expect(response).toMatchObject({ success: true, url: expected, network: false });
+        expect(response.result.matches).toBe(true);
+    });
+
+    test('a scheme-less pattern anchored at its start matches no full URL, and the result says so', async () => {
+        const response = await tried('api.example.com/*');
+        expect(response).toMatchObject({ success: true, url: 'https://example.testapi.example.com/x' });
+        expect(response.result.matches).toBe(false);
+    });
+
+    test('for a network rule, a /path* pattern is judged from the path, as Chrome does', async () => {
+        const response = await tried('/echo*', 'headers');
+        expect(response).toMatchObject({ success: true, url: 'https://example.test/echox', network: true });
+        expect(response.result.matches).toBe(true);
+    });
+
+    test('a regex pattern needs a URL', async () => {
+        const response = await tried('/\\/api\\/(\\d+)/');
+        expect(response).toMatchObject({ success: false, needsUrl: true, shadowedBy: [], result: null });
+        expect(response.error).toMatch(/regex/);
+    });
+
+    test('a given relative URL resolves against the page, and is matched as the page wrote it', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [mock({ match: { url: '/api/*', method: '*' } })] } });
+        const response = await withExplain(null, () => send({ type: 'explainMatch', ruleId: 'm', url: '/api/users', pageUrl: 'https://shop.test/cart' }));
+        expect(response).toMatchObject({ success: true, url: 'https://shop.test/api/users' });
+        expect(response.result.matches).toBe(true);
+    });
+
+    test('a given absolute URL that does not match says so, condition by condition', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [mock({ match: { url: '*/api/*', method: 'POST' } })] } });
+        const response = await withExplain(null, () => send({ type: 'explainMatch', ruleId: 'm', url: 'https://x.test/other', method: 'get' }));
+        expect(response.result.matches).toBe(false);
+        expect(response.result.checks.map((c) => [c.condition, c.ok])).toEqual([['url', false], ['method', false]]);
+        expect(response.result.checks.every((c) => typeof c.detail === 'string' && c.detail.length > 0)).toBe(true);
+    });
+});
+
+describe('B2-F10: explainMatch — what the matcher is asked', () => {
+    test('calls the matcher\'s explainRuleMatch with the contract\'s request, and returns its answer', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [mock({ match: { url: '*/api/*', method: 'PUT' } })] } });
+        const answer = { matches: true, checks: [{ condition: 'url', ok: true, detail: 'From the matcher.' }] };
+        const calls = [];
+        const response = await withExplain((rule, req) => { calls.push([rule.id, req]); return answer; },
+            () => send({ type: 'explainMatch', ruleId: 'm', url: 'https://a.test/api/x', pageUrl: 'https://page.test/', resourceType: 'fetch-xhr', body: { a: 1 } }));
+        expect(response.result).toEqual(answer);
+        expect(calls).toEqual([['m', {
+            url: 'https://a.test/api/x', method: 'PUT', headers: {}, bodyText: '{"a":1}', pageHost: 'page.test', resourceType: 'fetch-xhr'
+        }]]);
+    });
+
+    test('a synthesised request carries the rule\'s own conditions', async () => {
+        const rule = mock({
+            match: {
+                url: '*/graphql*', method: 'POST', headers: { 'X-Tenant': 'acme' }, graphql: { operationName: 'GetUser' },
+                payload: { path: 'user.id', operator: 'equals', value: '42' }, pageDomains: ['App.example.com'], resourceTypes: ['fetch-xhr']
+            }
+        });
+        const { send } = await setup({ initial: { spliceTapRules: [rule] } });
+        const stub = recordingExplain();
+        await withExplain(stub, () => send({ type: 'explainMatch', ruleId: 'm' }));
+        const [{ req }] = stub.calls;
+        expect(req).toMatchObject({ method: 'POST', headers: { 'X-Tenant': 'acme' }, pageHost: 'app.example.com', resourceType: 'fetch-xhr' });
+        expect(JSON.parse(req.bodyText)).toEqual({ operationName: 'GetUser', user: { id: '42' } });
+    });
+
+    test('the page defaults to the request\'s own host, and the method to GET', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [mock()] } });
+        const stub = recordingExplain();
+        await withExplain(stub, () => send({ type: 'explainMatch', ruleId: 'm', url: 'https://api.test/api/x' }));
+        expect(stub.calls[0].req).toMatchObject({ pageHost: 'api.test', method: 'GET', resourceType: 'fetch-xhr', headers: {} });
+        expect(stub.calls[0].req.bodyText).toBeUndefined();
+    });
+
+    test('a payload path cannot reach Object.prototype', async () => {
+        const rule = mock({ match: { url: '*/api/*', method: 'POST', payload: { path: '__proto__.polluted', operator: 'equals', value: 'yes' } } });
+        const { send } = await setup({ initial: { spliceTapRules: [rule] } });
+        await withExplain(recordingExplain(), () => send({ type: 'explainMatch', ruleId: 'm' }));
+        expect({}.polluted).toBeUndefined();
+    });
+
+    test('a matcher that throws is reported, not a crash', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [mock()] } });
+        const response = await withExplain(() => { throw new Error('boom'); }, () => send({ type: 'explainMatch', ruleId: 'm' }));
+        expect(response.success).toBe(false);
+        expect(response.error).toMatch(/boom/);
+    });
+});
+
+describe('B2-F10: explainMatch — shadowedBy', () => {
+    const block = (overrides = {}) => ({ id: 'b', name: 'Block', type: 'block', enabled: true, match: { url: '*/api/*', method: '*' }, ...overrides });
+    const body = (overrides = {}) => ({
+        id: 'rb', name: 'Body', type: 'requestBody', enabled: true, match: { url: '*/api/*', method: 'POST' },
+        requestBody: { mode: 'static', body: {} }, ...overrides
+    });
+    const shadows = async (rules, message) => {
+        const { send } = await setup({ initial: { spliceTapRules: rules } });
+        const response = await withExplain(recordingExplain(), () => send({ type: 'explainMatch', ...message }));
+        return response.shadowedBy.map((s) => s.ruleId);
+    };
+
+    test('earlier enabled page rules that match, in stored order, with their names', async () => {
+        const { send } = await setup({
+            initial: {
+                spliceTapRules: [
+                    block({ id: 'b1', name: 'First' }),
+                    mock({ id: 'off', enabled: false }),
+                    mock({ id: 'other', match: { url: '*/elsewhere/*', method: '*' } }),
+                    block({ id: 'b2', name: 'Second', type: 'delay', delayMs: 10 }),
+                    mock({ id: 'target' }),
+                    mock({ id: 'later' })
+                ]
+            }
+        });
+        const response = await withExplain(recordingExplain(), () => send({ type: 'explainMatch', ruleId: 'target' }));
+        expect(response.shadowedBy).toEqual([{ ruleId: 'b1', ruleName: 'First' }, { ruleId: 'b2', ruleName: 'Second' }]);
+    });
+
+    test('an earlier rule whose method differs does not shadow', async () => {
+        expect(await shadows([mock({ id: 'post', match: { url: '*/api/*', method: 'POST' } }), mock({ id: 't' })], { ruleId: 't', method: 'GET' })).toEqual([]);
+    });
+
+    test('families do not mix: headers rules and request-body rules never shadow a mock', async () => {
+        expect(await shadows([headersRule({ match: { url: '*/api/*', method: '*' } }), body(), mock({ id: 't' })], { ruleId: 't' })).toEqual([]);
+    });
+
+    test('a request-body rule is shadowed only by an earlier request-body rule', async () => {
+        expect(await shadows([mock(), body({ id: 'rb1' }), body({ id: 't' })], { ruleId: 't' })).toEqual(['rb1']);
+    });
+
+    test('network rules shadow network rules', async () => {
+        const rules = [
+            queryRule({ match: { url: '*/echo*', method: '*' } }),
+            mock({ match: { url: '*/echo*', method: '*' } }),
+            headersRule({ id: 't' })
+        ];
+        const { send } = await setup({ initial: { spliceTapRules: rules } });
+        const response = await withExplain(recordingExplain(), () => send({ type: 'explainMatch', ruleId: 't' }));
+        expect(response).toMatchObject({ network: true, shadowedBy: [{ ruleId: 'qp', ruleName: 'Add flag' }] });
+    });
+
+    test('an all-request block is a page rule for fetch/XHR and a network rule for an image', async () => {
+        const rules = [
+            mock({ id: 'm1' }),
+            headersRule({ id: 'h1', match: { url: '*/api/*', method: '*', resourceTypes: ['image'] } }),
+            blockAll({ id: 't', match: { url: '*/api/*', method: '*' } })
+        ];
+        expect(await shadows(rules, { ruleId: 't' })).toEqual(['m1']);
+        expect(await shadows(rules, { ruleId: 't', resourceType: 'image' })).toEqual(['h1']);
+        // Limited to images, it never meets the interceptor at all.
+        const imageOnly = [mock({ id: 'm1' }), blockAll({ id: 't', match: { url: '*/api/*', method: '*', resourceTypes: ['image'] } })];
+        expect(await shadows(imageOnly, { ruleId: 't', resourceType: 'fetch-xhr' })).toEqual([]);
+    });
+
+    test('a rule not yet saved is judged as if saved last; an edited one at its stored place', async () => {
+        const rules = [mock({ id: 'a' }), mock({ id: 'b' }), mock({ id: 'c' })];
+        expect(await shadows(rules, { rule: mock({ id: undefined }) })).toEqual(['a', 'b', 'c']);
+        expect(await shadows(rules, { rule: mock({ id: 'b', name: 'Edited' }) })).toEqual(['a']);
+    });
+
+    test('works on the fallback matcher too', async () => {
+        const { send } = await setup({ initial: { spliceTapRules: [block({ id: 'b1' }), mock({ id: 't' })] } });
+        const response = await withExplain(null, () => send({ type: 'explainMatch', ruleId: 't' }));
+        expect(response.shadowedBy.map((s) => s.ruleId)).toEqual(['b1']);
+        expect(response.result.matches).toBe(true);
     });
 });

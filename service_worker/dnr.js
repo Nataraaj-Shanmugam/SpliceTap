@@ -59,8 +59,13 @@
      * rule then has nothing for DNR to do.
      */
     function dnrResourceTypes(match, networkRule) {
-        const wanted = match && match.resourceTypes;
-        if (!Array.isArray(wanted)) return (networkRule ? ALL_RESOURCE_TYPES : API_RESOURCE_TYPES).slice();
+        const wanted = match ? match.resourceTypes : undefined;
+        if (wanted === undefined) return (networkRule ? ALL_RESOURCE_TYPES : API_RESOURCE_TYPES).slice();
+        // Absent is undefined only, as the schema has it: null or any other
+        // non-list names no type, so the rule compiles to nothing.
+        if (!Array.isArray(wanted)) return [];
+        // A Set: 'other' expands to several, and Chrome refuses a repeated
+        // type (taking the whole batch with it).
         const chosen = new Set();
         for (const type of wanted) {
             if (typeof type !== 'string' || !Object.prototype.hasOwnProperty.call(RESOURCE_TYPE_MAP, type)) continue;
@@ -73,12 +78,13 @@
     /**
      * B2-F7: match.pageDomains -> initiatorDomains (the page or frame making
      * the request; a name covers its subdomains, as in DNR). Returns
-     * undefined when absent, and null when present but holding no usable
-     * name — compiling that without the condition would widen the rule.
+     * undefined when absent (undefined only, as the schema has it), and null
+     * when present but holding no usable name — null included — since
+     * compiling that without the condition would widen the rule.
      */
     function initiatorDomains(match) {
-        const domains = match && match.pageDomains;
-        if (domains === undefined || domains === null) return undefined;
+        const domains = match ? match.pageDomains : undefined;
+        if (domains === undefined) return undefined;
         if (!Array.isArray(domains)) return null;
         const names = [];
         for (const name of domains) {
