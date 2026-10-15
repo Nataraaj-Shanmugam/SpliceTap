@@ -218,13 +218,21 @@ class SpliceTapPopup {
     /**
      * PER-58: "This tab: N intercepted · last 5 s ago". The footer counter is
      * global and daily; this is the active tab's own log, which the background
-     * already filters when given a tabId. Refetched every few seconds while
-     * the popup is open so the age keeps moving.
+     * already filters when given a tabId. Fetched when the popup opens and on
+     * Refresh; in between only the age is re-worded (locally, with no message),
+     * because a timer that messaged the background would keep its service
+     * worker from ever idling out while the popup stays open.
      */
     startTabStatus() {
         this.refreshTabStatus();
         clearInterval(this._tabStatusTimer);
-        this._tabStatusTimer = setInterval(() => this.refreshTabStatus(), 5000);
+        this._tabStatusTimer = setInterval(() => this.renderTabStatus(), 5000);
+    }
+
+    renderTabStatus() {
+        const el = document.getElementById('tabStatus');
+        if (!el || el.hidden || !this.tabLogEntries) return;
+        el.textContent = window.SpliceTapPopupHelpers.tabStatusText(this.tabLogEntries, Date.now());
     }
 
     async refreshTabStatus() {
@@ -243,8 +251,8 @@ class SpliceTapPopup {
         const response = await this.sendMessage({ type: 'getInterceptionLog', tabId: tab.id });
         if (!response || !response.success) return; // keep what is showing
         this.tabLogEntries = Array.isArray(response.entries) ? response.entries : [];
-        el.textContent = window.SpliceTapPopupHelpers.tabStatusText(this.tabLogEntries, Date.now());
         el.hidden = false;
+        this.renderTabStatus();
     }
 
     /**
