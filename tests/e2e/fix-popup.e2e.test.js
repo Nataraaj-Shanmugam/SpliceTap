@@ -486,8 +486,17 @@ describe('fix: popup', () => {
     test('PER-60: creating a rule from a capture goes to the Rules tab and focuses the new rule', async () => {
         await openPopup([rule('existing')]);
         await seedCaptures();
+        // B2-PER-60: creating the rule now also hands it to the editor and closes the popup. Here
+        // the "active tab" is an editor that opens, and the popup's close is recorded, not obeyed,
+        // so the Rules-tab state below can still be read. (The hand-off itself is in b2-ui.e2e.test.js.)
+        await popup.evaluate(() => {
+            chrome.tabs.query = async () => [{ id: 4242, url: 'http://app.example.test/' }];
+            chrome.tabs.sendMessage = async () => ({ success: true });
+            window.close = () => { window.__closed = true; };
+        });
         await popup.click('[data-capture-action="patch"]');
         const created = await waitFor(async () => (await storedRules()).find((r) => r.id !== 'existing'), { label: 'rule created' });
+        await waitFor(() => popup.evaluate(() => window.__closed === true), { label: 'the hand-off to finish' });
 
         expect(await popup.$eval('#tabRules', (t) => t.getAttribute('aria-selected'))).toBe('true');
         expect(await popup.$eval('#paneRules', (p) => p.hidden)).toBe(false);

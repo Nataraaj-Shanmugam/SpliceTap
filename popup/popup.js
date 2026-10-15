@@ -2194,6 +2194,37 @@ class SpliceTapPopup {
         });
     }
 
+    /**
+     * PER-60: open the editor on the rule a capture just produced, on the active
+     * tab, with the captured body as a read-only reference. A tab with no content
+     * script (the "Receiving end does not exist" error, or a page that can't host
+     * one) gets the full editor in a new tab instead. The rule exists either way,
+     * so this never shows PER-32's reload notice: that would leave it unedited.
+     */
+    async handOffToEditor(rule, referenceBody) {
+        let opened = false;
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tab && typeof tab.id === 'number' && /^https?:/i.test(tab.url || '')) {
+                const response = await chrome.tabs.sendMessage(tab.id, {
+                    type: 'openRuleOverlay', mode: 'edit', rule, referenceBody
+                });
+                opened = !!(response && response.success);
+            }
+        } catch (error) {
+            opened = false; // no receiver: fall back below
+        }
+        if (!opened) {
+            try {
+                await chrome.tabs.create({ url: chrome.runtime.getURL(`options/options.html?editRule=${encodeURIComponent(rule.id)}`) });
+            } catch (error) {
+                console.warn('Could not open the editor for the new rule:', error);
+                return;
+            }
+        }
+        window.close();
+    }
+
     /** Path (no origin or query) of a captured URL, for button names. */
     capturePath(url) {
         try {
@@ -2308,6 +2339,8 @@ class SpliceTapPopup {
                     ? 'Patch rule created (off) — add the fields to change, then switch it on'
                     : 'Mock rule created (off) — switch it on when you are ready'
             );
+            // PER-60: and open it in the editor, with the captured response beside it.
+            await this.handOffToEditor(this.rules.find((r) => r.id === rule.id) || rule, capture.body);
         } catch (error) {
             console.error('Failed to create rule from capture:', error);
             this.showError('Could not create the rule');

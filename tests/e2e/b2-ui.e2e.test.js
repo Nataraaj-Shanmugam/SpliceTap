@@ -497,6 +497,117 @@ describe('batch 2: popup and DevTools panel', () => {
         });
     });
 
+    // ============================================================ PER-60 ===
+    describe('PER-60: capture to editor hand-off', () => {
+        const ed = require('./editor-driver');
+
+        /**
+         * The popup's view of the world: `tab` is the active tab (or null to leave Chrome's answer alone),
+         * sendMessage to it is recorded, and either passed through or refused as a tab with no content
+         * script would; chrome.tabs.create and window.close are recorded, not obeyed.
+         */
+        const handOffEnv = ({ tab, refuse }) => {
+            window.__sent = [];
+            window.__created = [];
+            window.__closed = 0;
+            window.close = () => { window.__closed++; };
+            if (tab) chrome.tabs.query = async () => [tab];
+            const send = chrome.tabs.sendMessage.bind(chrome.tabs);
+            chrome.tabs.sendMessage = async (id, message, ...rest) => {
+                window.__sent.push({ id, message });
+                if (refuse) throw new Error('Could not establish connection. Receiving end does not exist.');
+                return send(id, message, ...rest);
+            };
+            chrome.tabs.create = async (props) => { window.__created.push(props.url); return {}; };
+        };
+
+        /** A page on the test origin whose real response has been captured; returns its tab id. */
+        async function pageWithCapture() {
+            await h.reset();
+            await h.bg({ type: 'setCaptureArmed', armed: true });
+            page = await h.openPage();
+            await waitFor(async () => {
+                await pageFetch(page, '/api/readme-user');
+                return (await h.bg({ type: 'getCaptures' })).captures.length >= 1;
+            }, { label: 'a capture' });
+            await h.bg({ type: 'setCaptureArmed', armed: false });
+            return h.control.evaluate(async (url) => (await chrome.tabs.query({})).find((t) => t.url === url).id, page.url());
+        }
+
+        async function clickCapture(action) {
+            await popup.bringToFront();
+            await popup.reload({ waitUntil: 'load' });
+            await popup.click('#tabData');
+            await popup.waitForSelector(`[data-capture-action="${action}"]`);
+            await popup.click(`[data-capture-action="${action}"]`);
+        }
+        const sent = () => popup.evaluate(() => window.__sent);
+        const created = () => popup.evaluate(() => window.__created);
+
+        test.each(['mock', 'patch'])('%s: opens the editor on the active tab with the rule and the captured body, still switching to the Rules tab', async (action) => {
+            const tabId = await pageWithCapture();
+            await openPopup([], { reset: false, beforeLoad: handOffEnv, beforeLoadArg: { tab: { id: tabId, url: page.url(), active: true } } });
+            await clickCapture(action);
+
+            const stored = await waitFor(async () => (await storedRules())[0], { label: 'the new rule' });
+            await waitFor(async () => (await sent()).length === 1, { label: 'the hand-off message' });
+            const [{ id, message }] = await sent();
+            const body = (await h.bg({ type: 'getCaptures' })).captures[0].body;
+            expect(id).toBe(tabId);
+            expect(Object.keys(message).sort()).toEqual(['mode', 'referenceBody', 'rule', 'type']);
+            expect(message).toMatchObject({ type: 'openRuleOverlay', mode: 'edit', referenceBody: body });
+            expect(message.rule.id).toBe(stored.id);
+            expect(message.rule.response.mode).toBe(action === 'patch' ? 'patch' : 'static');
+
+            // The page's editor really opened, on the new rule, and nothing fell back.
+            await waitFor(() => ed.isOpen(page), { label: 'the editor on the page' });
+            expect(await created()).toEqual([]);
+            // Rules tab, as before, and the popup then closes.
+            expect(await popup.$eval('#tabRules', (t) => t.getAttribute('aria-selected'))).toBe('true');
+            await waitFor(() => popup.evaluate(() => window.__closed >= 1), { label: 'the popup to close' });
+        });
+
+        test('with no content script on the tab it falls back to options.html?editRule=<id>', async () => {
+            const tabId = await pageWithCapture();
+            await openPopup([], { reset: false, beforeLoad: handOffEnv, beforeLoadArg: { tab: { id: tabId, url: page.url(), active: true }, refuse: true } });
+            await clickCapture('mock');
+            const stored = await waitFor(async () => (await storedRules())[0], { label: 'the new rule' });
+            await waitFor(async () => (await created()).length === 1, { label: 'the fallback tab' });
+            expect(await created()).toEqual([h.extUrl(`options/options.html?editRule=${encodeURIComponent(stored.id)}`)]);
+            expect(await popup.$eval('#tabRules', (t) => t.getAttribute('aria-selected'))).toBe('true');
+            // No "Reload this tab" banner: the rule was made, and it needs editing.
+            expect(await popup.$('#reloadNotice')).toBeNull();
+        });
+
+        test('on a tab that cannot host a content script it goes straight to the options page', async () => {
+            const tabId = await pageWithCapture();
+            await openPopup([], { reset: false, beforeLoad: handOffEnv, beforeLoadArg: { tab: { id: tabId, url: 'chrome://newtab/', active: true } } });
+            await clickCapture('mock');
+            const stored = await waitFor(async () => (await storedRules())[0], { label: 'the new rule' });
+            await waitFor(async () => (await created()).length === 1, { label: 'the fallback tab' });
+            expect(await sent()).toEqual([]);
+            expect((await created())[0]).toContain(`options/options.html?editRule=${encodeURIComponent(stored.id)}`);
+        });
+
+        test('a refused save hands nothing off', async () => {
+            const tabId = await pageWithCapture();
+            await openPopup([], { reset: false, beforeLoad: handOffEnv, beforeLoadArg: { tab: { id: tabId, url: page.url(), active: true } } });
+            await popup.bringToFront();
+            await popup.reload({ waitUntil: 'load' });
+            await popup.click('#tabData');
+            await popup.waitForSelector('[data-capture-action="mock"]');
+            await popup.evaluate(() => {
+                const p = window.spliceTapPopup;
+                const original = p.sendMessage.bind(p);
+                p.sendMessage = async (m) => (m && m.type === 'saveRule' ? { success: false, error: 'nope' } : original(m));
+            });
+            await popup.click('[data-capture-action="mock"]');
+            await waitFor(async () => (await toastTexts()).some((t) => /nope/.test(t)), { label: 'the refusal' });
+            expect(await sent()).toEqual([]);
+            expect(await created()).toEqual([]);
+        });
+    });
+
     test('ran without errors', async () => {
         await openPopup([rule('a')]);
         // Until the importer group merges, popup.html's <script src="../src/importers/requestly.js"> 404s on
