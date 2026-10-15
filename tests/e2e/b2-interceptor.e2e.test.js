@@ -232,6 +232,56 @@ describe('b2-interceptor: in-page targeting, patch status and call filters', () 
         });
     });
 
+    // --- PER-66: call filters -----------------------------------------------
+
+    describe('PER-66: call filters', () => {
+        const fail = (id, url, callFilter) => mock(id, url, { callFilter },
+            { statusCode: 500, statusText: 'Internal Server Error', body: { failed: true } });
+
+        test('fail once, then succeed: a 500 mock with first:1 gives [500, 200], on fetch and on XHR', async () => {
+            await setRules([fail('once', '*/api/flaky*', { mode: 'first', n: 1 }), fail('once-xhr', '*/api/xflaky*', { mode: 'first', n: 1 })]);
+            await open('/page');
+            const fetched = [(await pageFetch(page, '/api/flaky')).status, (await pageFetch(page, '/api/flaky')).status];
+            const xhr = [(await pageXHR(page, '/api/xflaky')).status, (await pageXHR(page, '/api/xflaky')).status];
+            expect(fetched).toEqual([500, 200]);
+            expect(xhr).toEqual([500, 200]);
+            expect(pageErrors()).toEqual([]);
+        });
+
+        test('every:2 gives real, mock, real, mock', async () => {
+            await setRules([mock('even', '*/api/even*', { callFilter: { mode: 'every', n: 2 } })]);
+            await open('/page');
+            const seen = [];
+            for (let i = 0; i < 4; i++) {
+                const r = i % 2 ? await pageXHR(page, '/api/even') : await pageFetch(page, '/api/even');
+                seen.push(r.marker === 'true' ? 'mock' : 'real');
+            }
+            expect(seen).toEqual(['real', 'mock', 'real', 'mock']);
+        });
+
+        test('after:1 on a request-body rule rewrites from the second call on', async () => {
+            await setRules([{
+                id: 'rb', name: 'rb', enabled: true, type: 'requestBody',
+                match: { url: '*/graphql*', method: '*', callFilter: { mode: 'after', n: 1 } },
+                requestBody: { mode: 'static', body: 'rewritten' }
+            }]);
+            await open('/page');
+            const first = await pageFetch(page, '/graphql', { method: 'POST', body: 'original' });
+            const second = await pageFetch(page, '/graphql', { method: 'POST', body: 'original' });
+            expect([first.body.received, second.body.received]).toEqual(['original', 'rewritten']);
+        });
+
+        test('reloading the page starts the count again', async () => {
+            await setRules([fail('once', '*/api/flaky*', { mode: 'first', n: 1 })]);
+            await open('/page');
+            expect((await pageFetch(page, '/api/flaky')).status).toBe(500);
+            await page.reload({ waitUntil: 'load' });
+            await waitFor(async () => (await pageFetch(page, '/api/control')).marker === 'true', { label: 'rules after reload' });
+            expect((await pageFetch(page, '/api/flaky')).status).toBe(500);
+            expect((await pageFetch(page, '/api/flaky')).status).toBe(200);
+        });
+    });
+
     test('ran without errors', () => {
         expect(h.allErrors).toEqual([]);
     });

@@ -845,6 +845,40 @@
         return findFirstMatch(rules, request, true);
     }
 
+    /**
+     * PER-66: `match.callFilter` ({ mode: 'first'|'after'|'every', n }) —
+     * does this call, the rule's n-th matching one, qualify? `first` applies
+     * to calls 1..n, `after` skips them, `every` applies to n, 2n, 3n… A
+     * missing or malformed filter always qualifies.
+     */
+    function callQualifies(filter, nth) {
+        if (!filter || typeof filter !== 'object') return true;
+        const n = own(filter, 'n');
+        if (typeof n !== 'number' || !(n >= 1)) return true;
+        const mode = own(filter, 'mode');
+        if (mode === 'first') return nth <= n;
+        if (mode === 'after') return nth > n;
+        if (mode === 'every') return nth % n === 0;
+        return true;
+    }
+
+    /**
+     * PER-66: record one more matching call for a rule with a call filter, in
+     * the caller's counter store (a null-prototype object, keyed by rule id),
+     * and say whether it qualifies. Only a caller that passes `callCounts`
+     * counts; one that does not (the service worker, a pre-scan) judges a
+     * filtered rule by its conditions alone. A call that does not qualify
+     * falls through to later rules.
+     */
+    function countCall(callCounts, rule, index, filter) {
+        if (!filter || typeof filter !== 'object') return true;
+        const id = own(rule, 'id');
+        const key = typeof id === 'string' ? 'id:' + id : 'index:' + index;
+        const nth = (callCounts[key] || 0) + 1;
+        callCounts[key] = nth;
+        return callQualifies(filter, nth);
+    }
+
     // `requestBodyPass`: requestBody rules only (F3), else the main-pass types.
     function findFirstMatch(rules, request, requestBodyPass) {
         if (!isArray(rules)) return null;
@@ -858,6 +892,9 @@
         const resourceType = own(record, 'resourceType') || FETCH_XHR;
         const rawAltUrl = own(record, 'altUrl');
         const altUrl = typeof rawAltUrl === 'string' && rawAltUrl !== url ? rawAltUrl : null;
+        // PER-66: see countCall.
+        const rawCounts = own(record, 'callCounts');
+        const callCounts = rawCounts && typeof rawCounts === 'object' ? rawCounts : null;
 
         // PER-36: keep every pattern of this rule set cached (see the cache).
         patternCacheMax = mathMax(PATTERN_CACHE_MIN, rules.length);
@@ -892,6 +929,8 @@
             if (!matchHeaders(headers, own(match, 'headers'))) continue;
             if (!matchGraphQL(bodyText, own(match, 'graphql'), url, graphqlMemo)) continue;
             if (!matchPayload(bodyText, own(match, 'payload'), graphqlMemo)) continue;
+            // PER-66: counted only here, once every condition holds.
+            if (callCounts !== null && !countCall(callCounts, rule, i, own(match, 'callFilter'))) continue;
 
             return rule;
         }

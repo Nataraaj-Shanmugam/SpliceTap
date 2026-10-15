@@ -536,3 +536,153 @@ describe('B2-F10: explainRuleMatch', () => {
         expect(explainRuleMatch(null, null).matches).toBe(false);
     });
 });
+
+// ---------------------------------------------------------------------------
+// PER-66: call filters
+
+describe('PER-66: match.callFilter in the matcher', () => {
+    const filtered = (id, mode, n, match = {}) => mockRule(id, { callFilter: { mode, n }, ...match });
+    /** Which rule (id, or null) answers each of `calls` requests with one shared counter store. */
+    function run(rules, calls, request = req()) {
+        const callCounts = Object.create(null);
+        const out = [];
+        for (let i = 0; i < calls; i++) {
+            const hit = findMatchingRule(rules, { ...request, callCounts });
+            out.push(hit ? hit.id : null);
+        }
+        return { out, callCounts };
+    }
+
+    test('first n, after n, every n', () => {
+        expect(run([filtered('f', 'first', 2)], 4).out).toEqual(['f', 'f', null, null]);
+        expect(run([filtered('a', 'after', 2)], 4).out).toEqual([null, null, 'a', 'a']);
+        expect(run([filtered('e', 'every', 3)], 7).out).toEqual([null, null, 'e', null, null, 'e', null]);
+    });
+
+    test('a call that does not qualify falls through to later rules', () => {
+        expect(run([filtered('once', 'first', 1), mockRule('rest')], 3).out).toEqual(['once', 'rest', 'rest']);
+    });
+
+    test('counts are per rule id and only for calls that meet every condition', () => {
+        const rules = [filtered('f', 'first', 1, { url: '*/api/x*' })];
+        const callCounts = Object.create(null);
+        expect(findMatchingRule(rules, req({ url: 'https://example.test/other', callCounts }))).toBeNull();
+        expect(callCounts).toEqual({});
+        expect(findMatchingRule(rules, req({ callCounts }))).toBe(rules[0]);
+        expect(findMatchingRule(rules, req({ callCounts }))).toBeNull();
+        expect({ ...callCounts }).toEqual({ 'id:f': 2 });
+    });
+
+    test('rules below the winner are not counted', () => {
+        const { callCounts } = run([mockRule('top'), filtered('below', 'first', 1)], 3);
+        expect({ ...callCounts }).toEqual({});
+    });
+
+    test('without a counter store (the service worker, a look-ahead) the filter is not applied', () => {
+        const rule = filtered('f', 'after', 5);
+        expect(findMatchingRule([rule], req())).toBe(rule);
+        expect(findMatchingRule([rule], req())).toBe(rule);
+    });
+
+    test('a malformed filter always qualifies', () => {
+        for (const callFilter of [{ mode: 'first' }, { mode: 'first', n: 0 }, { mode: 'sometimes', n: 1 }, 'first']) {
+            expect(run([mockRule('m', { callFilter })], 3).out).toEqual(['m', 'm', 'm']);
+        }
+    });
+
+    test('requestBody rules count in their own pass', () => {
+        const body = { ...filtered('rb', 'first', 1), type: 'requestBody' };
+        const callCounts = Object.create(null);
+        expect(findMatchingRequestBodyRule([body], req({ callCounts }))).toBe(body);
+        expect(findMatchingRequestBodyRule([body], req({ callCounts }))).toBeNull();
+    });
+});
+
+describe('PER-66: call filters in the interceptor', () => {
+    const fail500 = (match = {}) => mockRule('fail', { callFilter: { mode: 'first', n: 1 }, ...match },
+        { statusCode: 500, statusText: 'Internal Server Error', body: { failed: true } });
+
+    test('fetch: "fail once, then succeed" gives [500, 200]', async () => {
+        const h = withRules([fail500()]);
+        const statuses = [];
+        for (let i = 0; i < 3; i++) statuses.push((await pageFetch(h, 'https://example.test/api/x')).status);
+        expect(statuses).toEqual([500, 200, 200]);
+    });
+
+    test('fetch: every:2 gives real, mock, real, mock — counted once per call, relative URL included', async () => {
+        const h = withRules([mockRule('even', { url: '/api/x*', callFilter: { mode: 'every', n: 2 } })]);
+        const seen = [];
+        for (let i = 0; i < 4; i++) seen.push((await pageFetch(h, '/api/x')).marker === 'true' ? 'mock' : 'real');
+        expect(seen).toEqual(['real', 'mock', 'real', 'mock']);
+    });
+
+    test('XHR: fail once, then succeed; every:2 alternates', async () => {
+        const once = withRules([fail500()]);
+        expect([(await sendXHR(once)).status, (await sendXHR(once)).status]).toEqual([500, 200]);
+        const even = withRules([mockRule('even', { callFilter: { mode: 'every', n: 2 } })]);
+        const seen = [];
+        for (let i = 0; i < 4; i++) seen.push((await sendXHR(even)).marker === 'true' ? 'mock' : 'real');
+        expect(seen).toEqual(['real', 'mock', 'real', 'mock']);
+    });
+
+    test('fetch and XHR share one count per rule', async () => {
+        const h = withRules([fail500()]);
+        expect((await sendXHR(h)).status).toBe(500);
+        expect((await pageFetch(h, 'https://example.test/api/x')).status).toBe(200);
+    });
+
+    test('XHR: a call-filtered redirect is decided at send(), and counted once', async () => {
+        const h = withRules([{
+            id: 'r', name: 'r', enabled: true, type: 'redirect',
+            match: { url: '*/api/*', method: '*', callFilter: { mode: 'first', n: 1 } },
+            redirect: { destination: 'https://example.test/elsewhere' }
+        }]);
+        await sendXHR(h);
+        await sendXHR(h);
+        expect(h.xhrCalls.map((c) => c.url)).toEqual(['https://example.test/elsewhere', 'https://example.test/api/x']);
+    });
+
+    test('XHR: a call-filtered mock above a redirect hands later calls to the redirect', async () => {
+        const h = withRules([
+            fail500(),
+            { id: 'r', name: 'r', enabled: true, type: 'redirect', match: { url: '*/api/*', method: '*' }, redirect: { destination: 'https://example.test/elsewhere' } }
+        ]);
+        expect((await sendXHR(h)).status).toBe(500);
+        await sendXHR(h);
+        expect(h.xhrCalls.map((c) => c.url)).toEqual(['https://example.test/elsewhere']);
+    });
+
+    test('requestBody: a filtered body rule rewrites only the calls it qualifies for', async () => {
+        const h = withRules([{
+            id: 'rb', name: 'rb', enabled: true, type: 'requestBody',
+            match: { url: '*/api/*', method: '*', callFilter: { mode: 'after', n: 1 } },
+            requestBody: { mode: 'static', body: 'rewritten' }
+        }]);
+        await pageFetch(h, 'https://example.test/api/x', { method: 'POST', body: 'one' });
+        await pageFetch(h, 'https://example.test/api/x', { method: 'POST', body: 'two' });
+        await sendXHR(h, { body: 'three' });
+        const fetched = await Promise.all(h.passthroughCalls.map(([resource, init]) => new Request(resource, init).text()));
+        expect(fetched).toEqual(['one', 'rewritten']);
+        expect(h.xhrCalls.map((c) => c.body)).toEqual(['rewritten']);
+    });
+
+    test('a changed rule set resets the counts; a settings-only or hit-count sync does not', async () => {
+        const rule = fail500();
+        const h = withRules([rule]);
+        expect((await pageFetch(h, 'https://example.test/api/x')).status).toBe(500);
+        h.syncState({ rules: [{ ...rule, hitCount: 7 }], settings: { debugMode: false } });
+        expect((await pageFetch(h, 'https://example.test/api/x')).status).toBe(200);
+        h.syncState({ rules: [{ ...rule, name: 'renamed' }] });
+        expect((await pageFetch(h, 'https://example.test/api/x')).status).toBe(500);
+        expect((await pageFetch(h, 'https://example.test/api/x')).status).toBe(200);
+        h.syncState({ rules: [rule, mockRule('other', { url: '*/other*' })] });
+        expect((await pageFetch(h, 'https://example.test/api/x')).status).toBe(500);
+    });
+
+    test('the counts are not on the page (contract B)', async () => {
+        const h = withRules([fail500()]);
+        const before = Object.getOwnPropertyNames(h.window).sort();
+        await pageFetch(h, 'https://example.test/api/x');
+        expect(Object.getOwnPropertyNames(h.window).sort()).toEqual(before);
+    });
+});

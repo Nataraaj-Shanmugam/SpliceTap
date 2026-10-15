@@ -254,6 +254,11 @@
         _anyRuleUsesPayload: false // B2-F7
     };
 
+    // PER-66: how many matching calls each rule with a call filter has seen,
+    // keyed by rule id, for this page's lifetime. Reset whenever the rule
+    // set changes (onSyncState). In this closure only: never on the page.
+    let callCounts = objectCreate(null);
+
     // Helper: Logging with debug mode check
     function log(msg, ...args) {
         if (tmState.settings?.debugMode) {
@@ -610,15 +615,20 @@
      * call counter, PER-66, must see each call once.)
      *
      * `finder` (optional) is findMatchingRequestBodyRule for the F3 pass.
+     *
+     * PER-66: `counted` makes this scan the call's deciding one, which
+     * counts the call for every call-filtered rule it reaches. Each request
+     * has exactly one deciding scan per pass; XHR open()'s look-ahead is not
+     * one.
      */
-    function findRule(request, rawUrl, finder) {
+    function findRule(request, rawUrl, finder, counted) {
         const find = finder || findMatchingRule;
-        return find(tmState.rules, matchRequest(request, rawUrl));
+        return find(tmState.rules, matchRequest(request, rawUrl, counted));
     }
 
     // Contract B: the request record the matcher reads, with no prototype.
     // B2-F7: with the frame's host, and fetch/XHR as the resource type.
-    function matchRequest(request, rawUrl) {
+    function matchRequest(request, rawUrl, counted) {
         const record = objectCreate(null);
         record.url = request.url;
         record.altUrl = rawUrl;
@@ -627,7 +637,14 @@
         record.bodyText = request.bodyText;
         record.pageHost = PAGE_HOST;
         record.resourceType = 'fetch-xhr';
+        if (counted) record.callCounts = callCounts; // PER-66
         return record;
+    }
+
+    /** PER-66: does this rule only apply to some of its calls? */
+    function hasCallFilter(rule) {
+        const match = rule && rule.match;
+        return !!(match && match.callFilter && typeof match.callFilter === 'object');
     }
 
     /**
@@ -643,9 +660,10 @@
             // F3: request-body rules are their own pass, not a contender.
             if (!rule || !rule.enabled || rule.type === 'requestBody') continue;
             const match = rule.match || EMPTY_RECORD;
-            // B2-F7: a payload condition needs the body as well.
+            // B2-F7: a payload condition needs the body as well. PER-66: and
+            // a call filter is decided by send()'s counted scan.
             const conditional = (match.headers && objectKeys(match.headers).length > 0) ||
-                (match.graphql && match.graphql.operationName) || match.payload;
+                (match.graphql && match.graphql.operationName) || match.payload || hasCallFilter(rule);
             if (!conditional) continue;
             const ruleMethod = upper(String(match.method || '*'));
             if (ruleMethod !== '*' && ruleMethod !== method) continue;
@@ -1705,7 +1723,7 @@
             let bodyRule = null;
             let bodyNote = null;
             if (tmState._hasRequestBodyRules && method !== 'GET' && method !== 'HEAD' && !(config && config[REDIRECT_HOPS])) {
-                const candidate = findRule({ url, method, headers, bodyText }, rawUrl, findMatchingRequestBodyRule);
+                const candidate = findRule({ url, method, headers, bodyText }, rawUrl, findMatchingRequestBodyRule, true);
                 const rewritten = candidate && relayAlive()
                     ? await rewriteFetchBody(candidate, resource, config, isRequestObj, url, method)
                     : null;
@@ -1737,8 +1755,8 @@
         async function fetchMainPass(args, context) {
             const { startedAt, resource, config, isRequestObj, rawUrl, url, method, signal, headers, bodyText } = context;
 
-            // 4. Find matching rule
-            const rule = findRule({ url, method, headers, bodyText }, rawUrl);
+            // 4. Find matching rule (the counted scan, PER-66)
+            const rule = findRule({ url, method, headers, bodyText }, rawUrl, null, true);
             if (!rule || !relayAlive()) {
                 // Nothing to apply — but this is exactly the response worth
                 // capturing, since a rule for it does not exist yet.
@@ -2662,7 +2680,9 @@
                     url: requestAbsUrl, method: requestMethod, headers: EMPTY_HEADERS, bodyText: null
                 }, requestUrl);
 
-                if (first && (first.type || 'mock') === 'redirect' &&
+                // PER-66: a call-filtered redirect is decided by send(),
+                // which counts the call.
+                if (first && (first.type || 'mock') === 'redirect' && !hasCallFilter(first) &&
                     !conditionalRuleAhead(first, requestAbsUrl, requestUrl, requestMethod) &&
                     relayAlive()) {
                     const newUrl = computeRedirectUrl(requestAbsUrl, first, requestUrl);
@@ -2761,7 +2781,7 @@
             if (tmState._hasRequestBodyRules && requestMethod !== 'GET' && requestMethod !== 'HEAD') {
                 const bodyRule = findRule({
                     url: sourceAbsUrl, method: requestMethod, headers: requestHeaders, bodyText: xhrBodyText(body)
-                }, sourceUrl, findMatchingRequestBodyRule);
+                }, sourceUrl, findMatchingRequestBodyRule, true);
                 const rewritten = bodyRule && relayAlive()
                     ? rewriteRequestBody(bodyRule, body, { __proto__: null, url: sourceAbsUrl, method: requestMethod })
                     : null;
@@ -2799,7 +2819,7 @@
                 method: requestMethod,
                 headers: requestHeaders,
                 bodyText
-            }, requestUrl);
+            }, requestUrl, null, true); // the counted scan (PER-66)
 
             if (!rule || !relayAlive()) {
                 // No rule applies, so this response is a capture candidate.
@@ -2998,8 +3018,12 @@
         // iterator for the matcher's for...of.
         const rules = ownValue(payload, 'rules');
         const settings = ownValue(payload, 'settings');
+        const previousRules = tmState.rules;
         tmState.active = ownValue(payload, 'active') !== false;
         tmState.rules = toNullProto(isArray(rules) ? rules : [], true);
+        // PER-66: a changed rule set starts every call count again. A sync
+        // for anything else (a setting, capture, a hit count) keeps them.
+        if (!sameRuleSet(previousRules, tmState.rules)) callCounts = objectCreate(null);
         tmState.settings = settings && typeof settings === 'object' ? toNullProto(settings, true) : objectCreate(null);
 
         // Recompute derived flags once per sync rather than per request.
@@ -3033,6 +3057,38 @@
                 settings: tmState.settings
             });
         }
+    }
+
+    /**
+     * PER-66: the same data, compared through own enumerable keys only (the
+     * synced copies are null-prototype). Recursion is bounded by the copy's
+     * own depth limit.
+     */
+    function sameData(a, b, ignoreKey) {
+        if (a === b) return true;
+        if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+        if (isArray(a) !== isArray(b)) return false;
+        const keysA = objectKeys(a);
+        const keysB = objectKeys(b);
+        let countA = 0;
+        let countB = 0;
+        for (let i = 0; i < keysB.length; i++) if (keysB[i] !== ignoreKey) countB++;
+        for (let i = 0; i < keysA.length; i++) {
+            const key = keysA[i];
+            if (key === ignoreKey) continue;
+            countA++;
+            if (!hasOwn(b, key) || !sameData(a[key], b[key])) return false;
+        }
+        return countA === countB;
+    }
+
+    /** PER-66: the same rules, in the same order, hit counts aside. */
+    function sameRuleSet(previous, next) {
+        if (!isArray(previous) || !isArray(next) || previous.length !== next.length) return false;
+        for (let i = 0; i < next.length; i++) {
+            if (!sameData(previous[i], next[i], 'hitCount')) return false;
+        }
+        return true;
     }
 
     // One-shot handshake: the relay hands over this frame's nonce, we bind the
@@ -3072,6 +3128,7 @@
         tmState._hasRedirectRules = false;
         tmState._hasRequestBodyRules = false;
         tmState._anyRuleUsesPayload = false;
+        callCounts = objectCreate(null);
         document.removeEventListener(SYNC_STATE_EVENT, onSyncState, true);
         log('Extension context gone; interception stopped for this page');
     }
