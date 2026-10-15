@@ -363,3 +363,176 @@ describe('B2-F8: response.patchStatus', () => {
         expect(r).toEqual(expect.objectContaining({ status: 201, statusText: 'Made it', body: { origin: true, patched: true } }));
     });
 });
+
+// ---------------------------------------------------------------------------
+// F10: explainRuleMatch
+
+describe('B2-F10: explainRuleMatch', () => {
+    const { explainRuleMatch } = matcher;
+    const rule = (match = {}, extra = {}) => ({ id: 'r', type: 'mock', enabled: true, match: { url: '*/api/*', method: '*', ...match }, ...extra });
+    const tryUrl = (overrides = {}) => ({ url: 'https://example.test/api/x', method: 'GET', headers: {}, bodyText: null, ...overrides });
+
+    /** The single check for `condition`. */
+    function only(result, condition) {
+        const found = result.checks.filter((c) => c.condition === condition);
+        expect(found).toHaveLength(1);
+        expect(typeof found[0].detail).toBe('string');
+        expect(found[0].detail).toMatch(/^[A-Z].*\.$/); // a sentence
+        return found[0];
+    }
+
+    test('a plain rule is checked on url and method only, and matches', () => {
+        const result = explainRuleMatch(rule(), tryUrl());
+        expect(result.matches).toBe(true);
+        expect(result.checks.map((c) => c.condition)).toEqual(['url', 'method']);
+        expect(only(result, 'url')).toEqual({ condition: 'url', ok: true, detail: 'The URL matches the wildcard pattern "*/api/*".' });
+        expect(only(result, 'method')).toEqual({ condition: 'method', ok: true, detail: 'Any method matches.' });
+    });
+
+    describe('url', () => {
+        test('wildcard, substring and regex patterns, passing and failing', () => {
+            expect(only(explainRuleMatch(rule({ url: '*/nope/*' }), tryUrl()), 'url'))
+                .toEqual({ condition: 'url', ok: false, detail: 'The URL does not match the wildcard pattern "*/nope/*".' });
+            expect(only(explainRuleMatch(rule({ url: 'api/x' }), tryUrl()), 'url'))
+                .toEqual({ condition: 'url', ok: true, detail: 'The URL contains "api/x".' });
+            expect(only(explainRuleMatch(rule({ url: 'api/y' }), tryUrl()), 'url'))
+                .toEqual({ condition: 'url', ok: false, detail: 'The URL does not contain "api/y".' });
+            expect(only(explainRuleMatch(rule({ url: '/\\/api\\/x$/' }), tryUrl()), 'url'))
+                .toEqual({ condition: 'url', ok: true, detail: 'The URL matches the regular expression /\\/api\\/x$/.' });
+            expect(only(explainRuleMatch(rule({ url: '/\\/api\\/y$/' }), tryUrl()), 'url'))
+                .toEqual({ condition: 'url', ok: false, detail: 'The URL does not match the regular expression /\\/api\\/y$/.' });
+        });
+
+        test('a pattern written for the relative URL matches the path, and says so', () => {
+            const ok = only(explainRuleMatch(rule({ url: '/api/x*' }), tryUrl({ url: 'https://example.test/api/x?q=1' })), 'url');
+            expect(ok.ok).toBe(true);
+            expect(ok.detail).toBe('The URL as a relative path ("/api/x?q=1") matches the wildcard pattern "/api/x*", as when the page calls it that way.');
+            expect(only(explainRuleMatch(rule({ url: '/api/y*' }), tryUrl()), 'url').ok).toBe(false);
+            expect(only(explainRuleMatch(rule({ url: '/api/x*' }), tryUrl({ url: 'https://h.test/z', rawUrl: '/api/x' })), 'url').ok).toBe(true);
+        });
+
+        test('no pattern, an unusable regex, or no URL never matches', () => {
+            expect(only(explainRuleMatch(rule({ url: undefined }), tryUrl()), 'url'))
+                .toEqual({ condition: 'url', ok: false, detail: 'This rule has no URL pattern, so it matches nothing.' });
+            expect(only(explainRuleMatch(rule({ url: '/(unclosed/' }), tryUrl()), 'url').detail)
+                .toMatch(/^The pattern \/\(unclosed\/ is not a usable regular expression/);
+            expect(only(explainRuleMatch(rule(), tryUrl({ url: '' })), 'url'))
+                .toEqual({ condition: 'url', ok: false, detail: 'No URL was given to test.' });
+            expect(explainRuleMatch({}, tryUrl()).matches).toBe(false);
+        });
+    });
+
+    test('method: any, equal (case-insensitive) and different; no method given is GET', () => {
+        expect(only(explainRuleMatch(rule({ method: 'post' }), tryUrl({ method: 'POST' })), 'method'))
+            .toEqual({ condition: 'method', ok: true, detail: 'The method is POST.' });
+        const wrong = explainRuleMatch(rule({ method: 'POST' }), tryUrl({ method: undefined }));
+        expect(wrong.matches).toBe(false);
+        expect(only(wrong, 'method')).toEqual({ condition: 'method', ok: false, detail: 'The rule needs POST, but this request is GET.' });
+    });
+
+    test('headers: all match, one matches, missing, wrong value', () => {
+        const two = rule({ headers: { 'X-Env': 'stag', 'X-Team': 'web' } });
+        expect(only(explainRuleMatch(two, tryUrl({ headers: { 'x-env': 'staging', 'X-TEAM': 'web-a' } })), 'headers'))
+            .toEqual({ condition: 'headers', ok: true, detail: 'All 2 header conditions match.' });
+        expect(only(explainRuleMatch(rule({ headers: { 'X-Env': 'stag' } }), tryUrl({ headers: { 'x-env': 'STAGING' } })), 'headers'))
+            .toEqual({ condition: 'headers', ok: true, detail: 'The "X-Env" header contains "stag".' });
+        expect(only(explainRuleMatch(two, tryUrl({ headers: { 'x-env': 'staging' } })), 'headers'))
+            .toEqual({ condition: 'headers', ok: false, detail: 'The request has no "X-Team" header.' });
+        expect(only(explainRuleMatch(two, tryUrl({ headers: { 'x-env': 'prod', 'x-team': 'web' } })), 'headers'))
+            .toEqual({ condition: 'headers', ok: false, detail: 'The "X-Env" header does not contain "stag".' });
+        expect(explainRuleMatch(rule({ headers: {} }), tryUrl()).checks.map((c) => c.condition)).toEqual(['url', 'method']);
+    });
+
+    test('graphql: named operation, another operation, none, no body', () => {
+        const gql = rule({ graphql: { operationName: 'GetUser' } });
+        expect(only(explainRuleMatch(gql, tryUrl({ bodyText: '{"query":"query GetUser { me { id } }"}' })), 'graphql'))
+            .toEqual({ condition: 'graphql', ok: true, detail: 'The GraphQL operation is "GetUser".' });
+        expect(only(explainRuleMatch(gql, tryUrl({ url: 'https://example.test/api/x?operationName=GetUser' })), 'graphql').ok).toBe(true);
+        expect(only(explainRuleMatch(gql, tryUrl({ bodyText: '{"operationName":"ListUsers"}' })), 'graphql'))
+            .toEqual({ condition: 'graphql', ok: false, detail: 'The GraphQL operation is "ListUsers", not "GetUser".' });
+        expect(only(explainRuleMatch(gql, tryUrl({ bodyText: '{"query":"{ me { id } }"}' })), 'graphql'))
+            .toEqual({ condition: 'graphql', ok: false, detail: 'The request names no GraphQL operation; the rule needs "GetUser".' });
+        expect(only(explainRuleMatch(gql, tryUrl()), 'graphql'))
+            .toEqual({ condition: 'graphql', ok: false, detail: 'No request body was given, so the GraphQL operation "GetUser" cannot be found.' });
+    });
+
+    test('pageDomains: the domain, a subdomain, another site, no host, no page', () => {
+        const scoped = rule({ pageDomains: ['example.com', 'example.org'] });
+        expect(only(explainRuleMatch(scoped, tryUrl({ pageHost: 'example.com' })), 'pageDomains'))
+            .toEqual({ condition: 'pageDomains', ok: true, detail: 'The page is on example.com.' });
+        expect(only(explainRuleMatch(scoped, tryUrl({ pageHost: 'App.Example.org' })), 'pageDomains'))
+            .toEqual({ condition: 'pageDomains', ok: true, detail: 'The page is on app.example.org, within example.org.' });
+        expect(only(explainRuleMatch(scoped, tryUrl({ pageHost: 'other.test' })), 'pageDomains'))
+            .toEqual({ condition: 'pageDomains', ok: false, detail: 'The page is on other.test, not on example.com or example.org.' });
+        expect(only(explainRuleMatch(scoped, tryUrl({ pageHost: '' })), 'pageDomains'))
+            .toEqual({ condition: 'pageDomains', ok: false, detail: 'The page has no host name; this rule only runs on pages on example.com or example.org.' });
+        expect(only(explainRuleMatch(scoped, tryUrl()), 'pageDomains'))
+            .toEqual({ condition: 'pageDomains', ok: false, detail: 'No page was given; this rule only runs on pages on example.com or example.org.' });
+        const many = rule({ pageDomains: ['a.test', 'b.test', 'c.test', 'd.test', 'e.test', 'f.test', 'g.test'] });
+        expect(only(explainRuleMatch(many, tryUrl({ pageHost: 'z.test' })), 'pageDomains').detail)
+            .toBe('The page is on z.test, not on a.test, b.test, c.test, d.test, e.test or 2 more.');
+    });
+
+    test('resourceTypes: listed or defaulted by rule kind, passing and failing', () => {
+        const all = (resourceTypes) => rule(resourceTypes ? { resourceTypes } : {}, { type: 'block', appliesTo: 'all' });
+        expect(only(explainRuleMatch(all(['script', 'image']), tryUrl({ resourceType: 'image' })), 'resourceTypes'))
+            .toEqual({ condition: 'resourceTypes', ok: true, detail: 'The rule covers images.' });
+        expect(only(explainRuleMatch(all(['script', 'image']), tryUrl()), 'resourceTypes'))
+            .toEqual({ condition: 'resourceTypes', ok: false, detail: 'The rule covers scripts or images, not fetch/XHR calls.' });
+        expect(only(explainRuleMatch(all(), tryUrl({ resourceType: 'font' })), 'resourceTypes'))
+            .toEqual({ condition: 'resourceTypes', ok: true, detail: 'This rule applies to every kind of request.' });
+        expect(only(explainRuleMatch(rule(), tryUrl({ resourceType: 'document' })), 'resourceTypes'))
+            .toEqual({ condition: 'resourceTypes', ok: false, detail: 'The rule covers fetch/XHR calls, not pages.' });
+        expect(only(explainRuleMatch(rule({}, { type: 'headers' }), tryUrl({ resourceType: 'other' })), 'resourceTypes'))
+            .toEqual({ condition: 'resourceTypes', ok: true, detail: 'The rule covers other requests.' });
+        expect(only(explainRuleMatch(rule({}, { type: 'queryparams' }), tryUrl({ resourceType: 'websocket' })), 'resourceTypes'))
+            .toEqual({ condition: 'resourceTypes', ok: false, detail: 'The rule covers fetch/XHR calls or other requests, not WebSockets.' });
+    });
+
+    test('payload: equals and contains, passing and failing; no body, not JSON, missing path, unknown operator', () => {
+        const eq = rule({ payload: { path: 'user.id', operator: 'equals', value: '42' } });
+        const has = rule({ payload: { path: 'user.name', operator: 'contains', value: 'Ada' } });
+        const body = (user) => JSON.stringify({ user });
+        expect(only(explainRuleMatch(eq, tryUrl({ bodyText: body({ id: 42 }) })), 'payload'))
+            .toEqual({ condition: 'payload', ok: true, detail: 'The body\'s user.id is "42".' });
+        expect(only(explainRuleMatch(eq, tryUrl({ bodyText: body({ id: 7 }) })), 'payload'))
+            .toEqual({ condition: 'payload', ok: false, detail: 'The body\'s user.id is "7", not "42".' });
+        expect(only(explainRuleMatch(has, tryUrl({ bodyText: body({ name: 'Ada L' }) })), 'payload'))
+            .toEqual({ condition: 'payload', ok: true, detail: 'The body\'s user.name ("Ada L") contains "Ada".' });
+        expect(only(explainRuleMatch(has, tryUrl({ bodyText: body({ name: 'Bob' }) })), 'payload'))
+            .toEqual({ condition: 'payload', ok: false, detail: 'The body\'s user.name ("Bob") does not contain "Ada".' });
+        expect(only(explainRuleMatch(eq, tryUrl()), 'payload'))
+            .toEqual({ condition: 'payload', ok: false, detail: 'No request body was given; the rule needs user.id to equal "42".' });
+        expect(only(explainRuleMatch(eq, tryUrl({ bodyText: 'id=42' })), 'payload'))
+            .toEqual({ condition: 'payload', ok: false, detail: 'The request body is not JSON, so the payload condition cannot match.' });
+        expect(only(explainRuleMatch(eq, tryUrl({ bodyText: body({}) })), 'payload'))
+            .toEqual({ condition: 'payload', ok: false, detail: 'The body has no "user.id".' });
+        expect(only(explainRuleMatch(rule({ payload: { path: 'a', operator: 'regex', value: 'x' } }), tryUrl({ bodyText: '{"a":"x"}' })), 'payload'))
+            .toEqual({ condition: 'payload', ok: false, detail: 'The payload operator "regex" is not one SpliceTap knows.' });
+    });
+
+    test('matches only when every check passes, and agrees with findMatchingRule', () => {
+        const full = rule({
+            url: '*/api/*', method: 'POST', headers: { 'X-Env': 'stag' }, pageDomains: ['example.test'],
+            payload: { path: 'a', operator: 'equals', value: '1' }
+        });
+        const good = tryUrl({ method: 'POST', headers: { 'x-env': 'staging' }, pageHost: 'example.test', bodyText: '{"a":1}' });
+        expect(explainRuleMatch(full, good).matches).toBe(true);
+        expect(findMatchingRule([full], good)).toBe(full);
+        for (const bad of [{ method: 'GET' }, { headers: {} }, { pageHost: 'other.test' }, { bodyText: '{"a":2}' }, { url: 'https://example.test/x' }]) {
+            const request = { ...good, ...bad };
+            expect(explainRuleMatch(full, request).matches).toBe(false);
+            expect(findMatchingRule([full], request)).toBeNull();
+        }
+    });
+
+    test('long values are shortened in details; null-prototype rules work', () => {
+        const long = 'x'.repeat(100);
+        const detail = only(explainRuleMatch(rule({ url: long }), tryUrl()), 'url').detail;
+        expect(detail.length).toBeLessThan(100);
+        expect(detail).toContain('…');
+        const bare = Object.assign(Object.create(null), { match: Object.assign(Object.create(null), { url: '*/api/*' }) });
+        expect(explainRuleMatch(bare, tryUrl()).matches).toBe(true);
+        expect(explainRuleMatch(null, null).matches).toBe(false);
+    });
+});
