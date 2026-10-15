@@ -252,6 +252,9 @@
 
     const hasLineBreak = (v) => /[\r\n]/.test(v);
 
+    // B2-F9: "set" and "append" both put `value` on the wire; "remove" doesn't.
+    const addsValue = (op) => !!op && (op.op === 'set' || op.op === 'append');
+
     /**
      * Header operations for a 'headers' rule. Every op must be complete,
      * because Chrome validates a whole updateDynamicRules batch at once: one
@@ -282,8 +285,17 @@
                     errors.push(`${where}: must be an object like {"op": "set", "name": "X-Example", "value": "1"}`);
                     return;
                 }
-                if (op.op !== 'set' && op.op !== 'remove') {
-                    errors.push(`${where}: "op" must be "set" or "remove"`);
+                // B2-F9: "append" adds a value beside the existing one and is
+                // response-side only — Chrome 120's declarativeNetRequest
+                // cannot append to a request header. The refusal keeps the
+                // `"op" must be "set" or "remove"` wording request-side
+                // callers already match on.
+                if (op.op === 'append' && side === 'request') {
+                    errors.push(`${where}: "op" must be "set" or "remove" — "append" works on response headers only, because Chrome cannot append to a request header. Use "set" to replace the value.`);
+                } else if (op.op !== 'set' && op.op !== 'remove' && op.op !== 'append') {
+                    errors.push(side === 'request'
+                        ? `${where}: "op" must be "set" or "remove"`
+                        : `${where}: "op" must be "set", "append" or "remove"`);
                 }
                 const nameError = validateHeaderName(op.name, where);
                 if (nameError) errors.push(nameError);
@@ -294,9 +306,9 @@
                     }
                     seen.add(key);
                 }
-                if (op.op === 'set') {
+                if (op.op === 'set' || op.op === 'append') {
                     if (typeof op.value !== 'string') {
-                        errors.push(`${where}: a "set" operation needs a string "value"`);
+                        errors.push(`${where}: ${op.op === 'append' ? 'an "append"' : 'a "set"'} operation needs a string "value"`);
                     } else if (hasLineBreak(op.value)) {
                         errors.push(`${where}: header values cannot contain line breaks`);
                     } else if (ABOVE_LATIN1_RE.test(op.value)) {
@@ -316,10 +328,10 @@
             // Browsers reject a wildcard origin combined with credentials at
             // fetch time anyway; say so at save time instead of shipping a
             // rule that can never work.
-            if (name === 'access-control-allow-origin' && op.op === 'set' && String(op.value).trim() === '*') {
+            if (name === 'access-control-allow-origin' && addsValue(op) && String(op.value).trim() === '*') {
                 const credentials = allOps.some((o) => o !== op && o && typeof o.name === 'string'
                     && o.name.toLowerCase() === 'access-control-allow-credentials'
-                    && o.op === 'set' && String(o.value).trim().toLowerCase() === 'true');
+                    && addsValue(o) && String(o.value).trim().toLowerCase() === 'true');
                 if (credentials) {
                     errors.push('Access-Control-Allow-Origin: * cannot be combined with Access-Control-Allow-Credentials: true.');
                 }
@@ -335,7 +347,7 @@
         if (urlPattern !== undefined) {
             const credentials = responseOps.some((o) => o && typeof o.name === 'string'
                 && o.name.toLowerCase() === 'access-control-allow-credentials'
-                && o.op === 'set' && String(o.value).trim().toLowerCase() === 'true');
+                && addsValue(o) && String(o.value).trim().toLowerCase() === 'true');
             if (credentials && !patternNamesHost(urlPattern)) {
                 errors.push('Access-Control-Allow-Credentials: true needs a URL pattern that names a host, such as "https://api.example.com/*" or "http://localhost:3000/*". A pattern like "*/api/*" would send credentialed CORS headers to every site it matches.');
             }
@@ -378,8 +390,14 @@
             errors.push('Every parameter to remove must be a non-empty name');
         }
 
-        if (errors.length === 0 && add.length === 0 && remove.length === 0) {
-            errors.push('At least one query parameter to add or remove is required');
+        // B2-F9: "remove all" strips every parameter, so it is a change on its
+        // own. The message opens "Query parameters", the words the editor maps.
+        if (queryParams.removeAll !== undefined && typeof queryParams.removeAll !== 'boolean') {
+            errors.push('Query parameters: "removeAll" must be true or false');
+        }
+
+        if (errors.length === 0 && add.length === 0 && remove.length === 0 && queryParams.removeAll !== true) {
+            errors.push('At least one query parameter to add or remove, or "remove all", is required');
         }
         return { valid: errors.length === 0, errors };
     }

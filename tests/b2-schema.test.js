@@ -320,3 +320,126 @@ describe('B2-F8 response.patchStatus', () => {
         expect(joined(mock({}, { mode: 'static', patchStatus: 503 }))).not.toMatch(/status code/i);
     });
 });
+
+// -- F9 -----------------------------------------------------------------
+
+describe('B2-F9 headers op "append"', () => {
+    const res = (...response) => headers({}, { request: [], response });
+    const req = (...request) => headers({}, { request, response: [] });
+
+    test('is accepted on a response header', () => {
+        expect(S.validateRule(res({ op: 'append', name: 'Link', value: '</a.css>; rel=preload' }))).toEqual({ valid: true, errors: [] });
+        expect(S.validateRule(res({ op: 'append', name: 'X-A', value: '' }))).toEqual({ valid: true, errors: [] });
+    });
+
+    test('mixes with set and remove on the response side', () => {
+        const rule = res(
+            { op: 'set', name: 'X-Set', value: '1' },
+            { op: 'append', name: 'X-Append', value: '2' },
+            { op: 'remove', name: 'X-Remove' }
+        );
+        expect(S.validateRule(rule)).toEqual({ valid: true, errors: [] });
+    });
+
+    test('is refused on a request header, with a message that opens "Request header #n"', () => {
+        const rule = req({ op: 'set', name: 'X-Ok', value: '1' }, { op: 'append', name: 'X-A', value: '1' });
+        expect(isValid(rule)).toBe(false);
+        expect(errorsOf(rule)).toHaveLength(1);
+        expect(errorsOf(rule)[0]).toMatch(/^Request header #2: "op" must be "set" or "remove" — "append" works on response headers only/);
+        expect(errorsOf(rule)[0]).toMatch(/Chrome cannot append to a request header/);
+    });
+
+    test('an unknown op still lists the right choices for each side', () => {
+        expect(joined(req({ op: 'bogus', name: 'X-A', value: '1' }))).toMatch(/^Request header #1: "op" must be "set" or "remove"$/);
+        expect(joined(res({ op: 'bogus', name: 'X-A', value: '1' }))).toMatch(/^Response header #1: "op" must be "set", "append" or "remove"$/);
+        expect(joined(res({ name: 'X-A', value: '1' }))).toMatch(/^Response header #1: "op" must be "set", "append" or "remove"$/);
+    });
+
+    test('needs a string value, no line breaks and nothing above Latin-1, like "set"', () => {
+        expect(joined(res({ op: 'append', name: 'X-A' }))).toMatch(/^Response header #1: an "append" operation needs a string "value"/);
+        expect(joined(res({ op: 'append', name: 'X-A', value: 1 }))).toMatch(/needs a string "value"/);
+        expect(joined(res({ op: 'append', name: 'X-A', value: '1\r\nX-Evil: 1' }))).toMatch(/^Response header #1: header values cannot contain line breaks/);
+        expect(joined(res({ op: 'append', name: 'X-A', value: 'caf–' }))).toMatch(/^Response header #1: the header value contains characters above U\+00FF/);
+        expect(joined(res({ op: 'set', name: 'X-A' }))).toMatch(/a "set" operation needs a string "value"/);
+    });
+
+    test('needs a valid, non-forbidden header name', () => {
+        expect(joined(res({ op: 'append', name: 'X A', value: '1' }))).toMatch(/^Response header #1: "X A" is not a valid header name/);
+        expect(joined(res({ op: 'append', name: 'Content-Security-Policy', value: "default-src 'self'" }))).toMatch(/security-sensitive/);
+        expect(joined(res({ op: 'append', name: 'Set-Cookie', value: 'a=b' }))).toMatch(/security-sensitive/);
+    });
+
+    test('the one-operation-per-name rule counts an append too', () => {
+        const rule = res({ op: 'set', name: 'X-A', value: '1' }, { op: 'append', name: 'x-a', value: '2' });
+        expect(joined(rule)).toMatch(/^Response header #2: "x-a" appears twice in the response headers/);
+    });
+
+    test('the same name on both sides is fine', () => {
+        const rule = headers({}, { request: [{ op: 'set', name: 'X-A', value: '1' }], response: [{ op: 'append', name: 'X-A', value: '2' }] });
+        expect(S.validateRule(rule)).toEqual({ valid: true, errors: [] });
+    });
+
+    test('an appended wildcard origin still cannot be combined with credentials', () => {
+        const rule = res(
+            { op: 'append', name: 'Access-Control-Allow-Origin', value: '*' },
+            { op: 'append', name: 'Access-Control-Allow-Credentials', value: 'true' }
+        );
+        expect(joined(rule)).toMatch(/Access-Control-Allow-Origin: \* cannot be combined with Access-Control-Allow-Credentials: true/);
+    });
+
+    test('an appended credentials header still needs a URL pattern that names a host', () => {
+        const rule = headers({ url: '*/api/*' }, { request: [], response: [{ op: 'append', name: 'Access-Control-Allow-Credentials', value: 'true' }] });
+        expect(joined(rule)).toMatch(/^Access-Control-Allow-Credentials: true needs a URL pattern that names a host/);
+        const scoped = headers({ url: 'https://api.example.com/*' }, { request: [], response: [{ op: 'append', name: 'Access-Control-Allow-Credentials', value: 'true' }] });
+        expect(isValid(scoped)).toBe(true);
+    });
+
+    test('the standalone headers validator applies the same side rule', () => {
+        expect(S.validateHeadersMod({ response: [{ op: 'append', name: 'X-A', value: '1' }] }).valid).toBe(true);
+        expect(S.validateHeadersMod({ request: [{ op: 'append', name: 'X-A', value: '1' }] }).valid).toBe(false);
+    });
+});
+
+describe('B2-F9 queryParams.removeAll', () => {
+    test('a rule with removeAll and nothing else is valid', () => {
+        expect(S.validateRule(queryparams({}, { removeAll: true }))).toEqual({ valid: true, errors: [] });
+        expect(S.validateRule(queryparams({}, { removeAll: true, add: [], remove: [] }))).toEqual({ valid: true, errors: [] });
+    });
+
+    test('removeAll with adds is valid (the DNR layer keeps only the added parameters)', () => {
+        expect(isValid(queryparams({}, { removeAll: true, add: [{ key: 'k', value: 'v' }] }))).toBe(true);
+    });
+
+    test('removeAll with a remove list is tolerated, since remove-all already covers it', () => {
+        expect(isValid(queryparams({}, { removeAll: true, remove: ['a'] }))).toBe(true);
+    });
+
+    test('removeAll false does not count as a change', () => {
+        const rule = queryparams({}, { removeAll: false });
+        expect(isValid(rule)).toBe(false);
+        expect(joined(rule)).toMatch(/^At least one query parameter to add or remove, or "remove all", is required$/);
+        expect(isValid(queryparams({}, { removeAll: false, remove: ['a'] }))).toBe(true);
+    });
+
+    test('an empty queryParams object is still refused', () => {
+        expect(joined(queryparams({}, {}))).toMatch(/^At least one query parameter/);
+        expect(joined(queryparams({}, { add: [], remove: [] }))).toMatch(/^At least one query parameter/);
+    });
+
+    test.each([['"true"', 'true'], ['1', 1], ['0', 0], ['null', null], ['an object', {}], ['an array', []]])(
+        'refuses removeAll set to %s, with a message that opens "Query parameters"', (label, removeAll) => {
+            const rule = queryparams({}, { removeAll, add: [{ key: 'k', value: 'v' }] });
+            expect(isValid(rule)).toBe(false);
+            expect(errorsOf(rule)).toEqual(['Query parameters: "removeAll" must be true or false']);
+        }
+    );
+
+    test('a non-boolean removeAll does not also report "at least one"', () => {
+        expect(errorsOf(queryparams({}, { removeAll: 'yes' }))).toEqual(['Query parameters: "removeAll" must be true or false']);
+    });
+
+    test('the standalone validator agrees', () => {
+        expect(S.validateQueryParams({ removeAll: true })).toEqual({ valid: true, errors: [] });
+        expect(S.validateQueryParams({ removeAll: 'x' }).valid).toBe(false);
+    });
+});
