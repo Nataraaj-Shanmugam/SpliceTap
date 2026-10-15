@@ -123,13 +123,23 @@
     }
 
     // CQ-10: limits come from the one shared definition (src/common.js).
+    const FALLBACK_LIMITS = {
+        STATUS_MIN: 200, STATUS_MAX: 599,
+        DELAY_MIN: 0, DELAY_MAX: 30000,
+        DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000,
+        CODE_MAX: 20000, // F4
+        // B2-F7 / PER-66: the same numbers src/common.js carries
+        PAGE_DOMAINS_MAX: 20,
+        PAYLOAD_PATH_MAX: 200,
+        PAYLOAD_VALUE_MAX: 1000,
+        CALL_FILTER_N_MIN: 1,
+        CALL_FILTER_N_MAX: 1000
+    };
+
     function L() {
-        return (global.SpliceTapCommon && global.SpliceTapCommon.LIMITS) || {
-            STATUS_MIN: 200, STATUS_MAX: 599,
-            DELAY_MIN: 0, DELAY_MAX: 30000,
-            DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000,
-            CODE_MAX: 20000 // F4
-        };
+        // The shared definition wins; the fallback fills in whatever it does not
+        // (yet) carry, so a limit missing from an older common.js is not undefined.
+        return Object.assign({}, FALLBACK_LIMITS, (global.SpliceTapCommon && global.SpliceTapCommon.LIMITS) || {});
     }
 
     function newRuleId() {
