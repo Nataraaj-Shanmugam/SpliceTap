@@ -3,10 +3,17 @@
  *   B2-F7 — match.pageDomains (initiatorDomains) and match.resourceTypes on
  *           the DNR layer;
  *   B2-F9 — response-header append and queryParams.removeAll, through /echo;
+ *   B2-F10 / PER-63 — explainMatch and editor drafts in the real worker;
+ *   Reach — what an appliesTo:'all' block does to sendBeacon, WebSocket and
+ *           EventSource (observed outcomes, pinned).
  */
 
+/* global navigator, WebSocket, EventSource -- used inside page.evaluate */
+
+const { createHash } = require('crypto');
+const http = require('http');
 const dnr = require('../../service_worker/dnr');
-const { launch, pageFetch } = require('./harness');
+const { launch, pageFetch, sleep } = require('./harness');
 
 // Tests that need the schema group's (G3) validation of the new fields: the
 // save boundary refuses them until it merges.
@@ -217,6 +224,150 @@ describe('B2-F9: header append and query "remove all" in Chrome', () => {
     });
 
     test('ran without errors', () => {
+        expect(h.allErrors).toEqual([]);
+    });
+});
+
+/**
+ * A probe server for the transports the harness server does not speak: a
+ * beacon sink, a server-sent event stream and a WebSocket endpoint (a bare
+ * RFC 6455 handshake plus one text frame — enough to tell "connected" from
+ * "refused"). It records every request that reaches it.
+ */
+function startReachServer() {
+    const hits = [];
+    const server = http.createServer((req, res) => {
+        const { pathname, searchParams } = new URL(req.url, 'http://probe');
+        hits.push({ kind: 'http', path: pathname, method: req.method, query: Object.fromEntries(searchParams) });
+        if (pathname === '/page') {
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end('<!doctype html><html><head><meta charset="utf-8"><title>Reach</title></head><body>reach</body></html>');
+        } else if (pathname.startsWith('/reach/sse')) {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+            res.write('data: hello\n\n');
+            setTimeout(() => res.end(), 200);
+        } else if (pathname.startsWith('/reach/beacon')) {
+            req.resume();
+            req.on('end', () => { res.writeHead(204); res.end(); });
+        } else {
+            res.writeHead(404);
+            res.end();
+        }
+    });
+    server.on('upgrade', (req, socket) => {
+        const { pathname } = new URL(req.url, 'http://probe');
+        hits.push({ kind: 'upgrade', path: pathname });
+        const accept = createHash('sha1')
+            .update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+        socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
+            'Sec-WebSocket-Accept: ' + accept + '\r\n\r\n');
+        socket.write(Buffer.concat([Buffer.from([0x81, 5]), Buffer.from('hello')]));
+        socket.on('error', () => undefined);
+        setTimeout(() => socket.destroy(), 500);
+    });
+    return new Promise((resolve) => {
+        server.listen(0, () => resolve({ server, hits, base: `127.0.0.1:${server.address().port}` }));
+    });
+}
+
+/** What the page sees of each transport, and what the server received. */
+async function reachAll(page, probe) {
+    probe.hits.length = 0;
+    const seen = await page.evaluate(async (base) => {
+        const n = Math.random().toString(36).slice(2);
+        const settle = (start) => new Promise((resolve) => {
+            const timer = setTimeout(() => resolve('timeout'), 3000);
+            start((outcome) => { clearTimeout(timer); resolve(outcome); });
+        });
+        const beaconQueued = navigator.sendBeacon(`http://${base}/reach/beacon?n=${n}`, 'payload');
+        const ws = await settle((done) => {
+            const socket = new WebSocket(`ws://${base}/reach/ws?n=${n}`);
+            socket.onmessage = (e) => { done('message:' + e.data); socket.close(); };
+            socket.onerror = () => done('error');
+        });
+        const sse = await settle((done) => {
+            const source = new EventSource(`http://${base}/reach/sse?n=${n}`);
+            source.onmessage = (e) => { done('message:' + e.data); source.close(); };
+            source.onerror = () => { done('error'); source.close(); };
+        });
+        return { beaconQueued, ws, sse };
+    }, probe.base);
+    await sleep(800); // the beacon is sent after the call returns
+    const reached = (kind, path) => probe.hits.some((x) => x.kind === kind && x.path === path);
+    return {
+        ...seen,
+        serverGotBeacon: reached('http', '/reach/beacon'),
+        serverGotWebSocket: reached('upgrade', '/reach/ws'),
+        serverGotEventSource: reached('http', '/reach/sse')
+    };
+}
+
+describe('Reach: does an all-request block stop sendBeacon, WebSocket and EventSource?', () => {
+    let h;
+    let probe;
+    let page;
+
+    beforeAll(async () => {
+        h = await launch();
+        probe = await startReachServer();
+    });
+    afterAll(async () => {
+        if (h) await h.close();
+        if (probe) await new Promise((resolve) => probe.server.close(resolve));
+    });
+
+    beforeEach(async () => {
+        await h.reset();
+        page = await h.browser.newPage();
+        await page.goto(`http://${probe.base}/page`, { waitUntil: 'load' });
+    });
+    afterEach(async () => { if (page && !page.isClosed()) await page.close(); page = null; });
+
+    test('with no rule, all three reach the server (the probe works)', async () => {
+        const outcome = await reachAll(page, probe);
+        expect(outcome).toEqual({
+            beaconQueued: true, ws: 'message:hello', sse: 'message:hello',
+            serverGotBeacon: true, serverGotWebSocket: true, serverGotEventSource: true
+        });
+    });
+
+    test('an appliesTo:"all" block stops sendBeacon and WebSocket, but NOT EventSource (observed, pinned)', async () => {
+        const saved = await h.saveRule({
+            id: 'blk-reach', name: 'Block reach', enabled: true, type: 'block', appliesTo: 'all',
+            match: { url: '*/reach/*', method: '*' }
+        });
+        expect(saved.dnrWarning).toBeUndefined();
+        const outcome = await reachAll(page, probe);
+        // Observed in Chrome for Testing (this suite's browser):
+        //  - sendBeacon is a 'ping' request: DNR blocks it. The call still
+        //    returns true — the beacon is queued, then refused off-page.
+        //  - WebSocket is a 'websocket' request: DNR blocks the handshake and
+        //    the page sees an error event.
+        //  - EventSource is NOT blocked. Chrome classifies it as
+        //    xmlhttprequest (next test), which the DNR rule leaves to the
+        //    interceptor (F1: no request handled twice) — and the interceptor
+        //    patches fetch and XHR only, not EventSource. A docs-visible gap.
+        expect(outcome).toEqual({
+            beaconQueued: true, ws: 'error', sse: 'message:hello',
+            serverGotBeacon: false, serverGotWebSocket: false, serverGotEventSource: true
+        });
+    });
+
+    test('EventSource is an xmlhttprequest to Chrome: a fetch-xhr-only query rule rewrites it', async () => {
+        await h.saveRule({
+            id: 'qp-sse', name: 'Tag XHR', enabled: true, type: 'queryparams',
+            match: { url: '*/reach/sse*', method: '*', resourceTypes: ['fetch-xhr'] },
+            queryParams: { add: [{ key: 'tagged', value: 'xhr' }], remove: [] }
+        });
+        const outcome = await reachAll(page, probe);
+        expect(outcome.sse).toBe('message:hello');
+        const sse = probe.hits.filter((x) => x.path === '/reach/sse');
+        expect(sse.map((x) => x.query.tagged)).toEqual(['xhr']);
+    });
+
+    test('ran without errors in the extension', () => {
+        // The probe page is not watched: the blocked WebSocket's console
+        // error there is the outcome under test.
         expect(h.allErrors).toEqual([]);
     });
 });
