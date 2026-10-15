@@ -60,6 +60,9 @@ const editor = window.SpliceTapRuleEditor.create({
     // so the shadow root can be open (which also lets accessibility tooling
     // audit the editor here).
     shadowMode: 'open',
+    // PER-63: drafts of an unsaved rule are kept under this key (an extension
+    // page has no tab of its own to the background's way of thinking).
+    draftKey: 'options',
     onClose({ saved, rule }) {
         if (saved) {
             setStatus(`Saved "${rule && rule.name}". You can close this tab, or create another rule.`, 'success');

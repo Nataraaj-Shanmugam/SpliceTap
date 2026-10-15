@@ -4,7 +4,7 @@
  * Opens the rule editor over the user's current tab when the popup (or the
  * context menu, or the keyboard shortcut) asks for it:
  *
- *   { type: 'openRuleOverlay', mode: 'new' | 'edit', rule?, prefillUrl? }
+ *   { type: 'openRuleOverlay', mode: 'new' | 'edit', rule?, prefillUrl?, referenceBody? }
  *
  * The editor itself is src/rule-editor.js — the same module the options page
  * mounts as its fallback, so the two can no longer drift apart (R1 / CQ-1;
@@ -129,7 +129,7 @@
                     }
                 });
             }
-            editor.open({ rule: request.rule || null, prefillUrl: request.prefillUrl });
+            editor.open({ rule: request.rule || null, prefillUrl: request.prefillUrl, referenceBody: request.referenceBody }); // PER-60
             sendResponse({ success: true });
         } catch (error) {
             console.error('SpliceTap: failed to open the rule editor', error);

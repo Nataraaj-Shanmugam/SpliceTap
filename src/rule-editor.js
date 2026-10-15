@@ -33,6 +33,11 @@
     const HOST_ID = 'splicetap-rule-overlay-host';
     const HINT_SEEN_KEY = 'tmOverlayHintSeen'; // U-13: one-time first-run tip
 
+    // PER-60: the most of a captured response the panel shows (the capture
+    // itself is already capped well below this; a stray huge string is not
+    // worth a huge textarea).
+    const REFERENCE_MAX = 100000;
+
     const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD', '*'];
 
     const RULE_TYPES = [
@@ -67,14 +72,79 @@
         requestBody: 'requestBody'
     };
 
+    // B2-F7: the resource types a rule can be limited to, in the order shown.
+    // The values are the schema's (src/rule-schema.js); the labels are the
+    // words a person would use for each.
+    const RESOURCE_TYPES = [
+        ['fetch-xhr', 'Fetch / XHR'],
+        ['document', 'Pages'],
+        ['subdocument', 'Frames'],
+        ['script', 'Scripts'],
+        ['stylesheet', 'Stylesheets'],
+        ['image', 'Images'],
+        ['font', 'Fonts'],
+        ['media', 'Audio and video'],
+        ['websocket', 'WebSockets'],
+        ['ping', 'Pings'],
+        ['other', 'Other']
+    ];
+
+    // B2-F7 / PER-66: the match fields that exist only for some rule shapes.
+    // Resource types: headers and queryparams, and block/redirect that apply
+    // to all requests. Payload and call filters need the in-page interceptor,
+    // so they are the mock/delay/requestBody types and page-scoped
+    // block/redirect. A field that does not apply is removed on save rather
+    // than left as a value the schema refuses and the person cannot see.
+    const IN_PAGE_ONLY_TYPES = ['mock', 'delay', 'requestBody'];
+
+    function resourceTypesApply(type, appliesAll) {
+        return type === 'headers' || type === 'queryparams'
+            || (APPLIES_TO_TYPES.includes(type) && !!appliesAll);
+    }
+
+    function inPageFiltersApply(type, appliesAll) {
+        return IN_PAGE_ONLY_TYPES.includes(type)
+            || (APPLIES_TO_TYPES.includes(type) && !appliesAll);
+    }
+
+    /**
+     * B2-F7: the page domains typed into the field. Comma-, space- or
+     * line-separated; hostnames are case-insensitive, and the schema wants
+     * them lowercase, so that much is done here. Anything else wrong with one
+     * (a scheme, a path, a port) is left for the schema to name.
+     * @returns {string[]} unique, in the order typed
+     */
+    function parseDomains(text) {
+        const seen = new Set();
+        const out = [];
+        for (const part of String(text === undefined || text === null ? '' : text).split(/[\s,;]+/)) {
+            const host = part.trim().toLowerCase();
+            if (host && !seen.has(host)) {
+                seen.add(host);
+                out.push(host);
+            }
+        }
+        return out;
+    }
+
     // CQ-10: limits come from the one shared definition (src/common.js).
+    const FALLBACK_LIMITS = {
+        STATUS_MIN: 200, STATUS_MAX: 599,
+        DELAY_MIN: 0, DELAY_MAX: 30000,
+        DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000,
+        CODE_MAX: 20000, // F4
+        // B2-F7 / PER-66: the same numbers src/common.js carries
+        PAGE_DOMAINS_MAX: 20,
+        PAYLOAD_PATH_MAX: 200,
+        PAYLOAD_VALUE_MAX: 1000,
+        CALL_FILTER_N_MIN: 1,
+        CALL_FILTER_N_MAX: 1000
+    };
+
     function L() {
-        return (global.SpliceTapCommon && global.SpliceTapCommon.LIMITS) || {
-            STATUS_MIN: 200, STATUS_MAX: 599,
-            DELAY_MIN: 0, DELAY_MAX: 30000,
-            DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000,
-            CODE_MAX: 20000 // F4
-        };
+        // The shared definition wins; the fallback fills in whatever it does not
+        // (yet) carry, so a limit missing from an older common.js is not undefined.
+        return Object.assign({}, FALLBACK_LIMITS, (global.SpliceTapCommon && global.SpliceTapCommon.LIMITS) || {});
     }
 
     function newRuleId() {
@@ -113,6 +183,23 @@
 
         if (/^Rule name/i.test(m)) return 'tmName';
         if (/^Unknown rule type/i.test(m)) return 'tmType';
+        // B2-F7 / F8 / F9 / PER-66: the schema opens each of these messages with
+        // the name of the field it is about ("Page domains…", "Resource types…").
+        if (/^Page domains/i.test(m)) return 'tmPageDomains';
+        if (/^Resource types/i.test(m)) return 'tmResourceTypes';
+        // A payload filter is three inputs: name the one a message points at,
+        // and the first when it is about the filter as a whole.
+        if (/^Payload filter operator/i.test(m)) return 'tmPayloadOp';
+        if (/^Payload filter value/i.test(m)) return 'tmPayloadValue';
+        if (/^Payload filter/i.test(m)) return 'tmPayloadPath';
+        // Before the general "status code" rule below: "Patch status code …"
+        // is about the override, not the mock's own Status Code field.
+        if (/^Patch status/i.test(m)) return 'tmPatchStatus';
+        // A call filter is a mode and a number. A message about the number says
+        // so up front ("Call filter n …") or by asking for a whole number; one
+        // about the filter as a whole goes to its first control, the mode.
+        if (/^Call filter/i.test(m)) return /^Call filter (n|number|count)\b|whole number|between 1/i.test(m) ? 'tmCallN' : 'tmCallMode';
+        if (/^Query parameters/i.test(m)) return /remove\s?all/i.test(m) ? 'tmQpRemoveAll' : 'tmQpAdd';
         // F1: the all-requests checkbox is what these two are about — a stray
         // appliesTo, and "all requests" combined with a header/GraphQL
         // condition (which only fetch/XHR can be checked against).
@@ -322,6 +409,26 @@
             border: 1px solid rgba(47, 125, 250, 0.3);
         }
         .tm-hintbar[hidden] { display: none; }
+
+        /* PER-63: the restore offer. Like the hint bar, but with buttons, whose
+           own em sizes must not compound inside a smaller parent (PER-73): the
+           bar sets no font size, its text does. */
+        .tm-draftbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px 12px;
+            margin: 12px 16px 0;
+            padding: 9px 11px;
+            border-radius: 9px;
+            background: rgba(47, 125, 250, 0.12);
+            color: #e7eefb;
+            border: 1px solid rgba(47, 125, 250, 0.3);
+        }
+        .tm-draftbar[hidden] { display: none; }
+        .tm-draftbar-text { flex: 1; min-width: 12em; font-size: 0.75em; line-height: 1.45; }
+        .tm-draftbar-actions { display: inline-flex; gap: 8px; }
         .tm-hintbar-text { flex: 1; min-width: 0; }
         .tm-hintbar-x {
             width: 24px; height: 24px;
@@ -444,6 +551,81 @@
         .tm-field-err { font-size: 0.6875em; color: #f87171; line-height: 1.45; }
         .tm-field [aria-invalid="true"] { border-color: #f87171 !important; }
 
+        /* B2-F7: the title of a group of controls (a row of inputs, a set of
+           checkboxes). A <span>, because a <label> must point at one control;
+           the group's role and aria-labelledby carry it to assistive tech.
+           Same micro-label scale as .tm-field > label. */
+        .tm-glabel {
+            font-size: 0.625em;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            line-height: 1.35;
+            color: #8b9ab3;
+        }
+        .tm-checks { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+        /* Inputs inside a group sit in a row of their own; the group's hint
+           follows, so they need less room below than a field of their own. */
+        .tm-subrow .tm-field { margin-bottom: 4px; }
+
+        /* B2-F10: "Try a URL". The result region has no font size of its own
+           (its children carry theirs), so the amber .tm-note inside it is not
+           shrunk twice — em compounds (PER-73). */
+        .tm-try-actions { display: flex; align-items: center; gap: 10px; }
+        .tm-try-result { display: flex; flex-direction: column; gap: 6px; }
+        .tm-try-result:empty { display: none; }
+        .tm-try-sum, .tm-try-net { font-size: 0.75em; line-height: 1.45; }
+        .tm-try-sum { font-weight: 600; }
+        .tm-try-list {
+            list-style: none;
+            display: flex; flex-direction: column; gap: 3px;
+            font-size: 0.75em; line-height: 1.45;
+        }
+        .tm-try-list li { display: flex; gap: 8px; align-items: baseline; }
+        .tm-try-mark { flex-shrink: 0; width: 1em; font-weight: 700; text-align: center; }
+        .tm-try-ok { color: #6ee7a0; }
+        .tm-try-no { color: #f87171; }
+        /* Visually hidden, still read: the glyph alone must not carry pass/fail. */
+        .tm-sr {
+            position: absolute;
+            width: 1px; height: 1px;
+            margin: -1px; padding: 0;
+            overflow: hidden;
+            clip: rect(0 0 0 0);
+            white-space: nowrap;
+            border: 0;
+        }
+        .tm-more summary {
+            font-size: 0.6875em;
+            color: #8b9ab3;
+            cursor: pointer;
+            padding: 2px 0;
+            border-radius: 4px;
+        }
+        .tm-more summary:focus-visible { outline: 2px solid #2f7dfa; outline-offset: 2px; }
+        .tm-more[open] summary { margin-bottom: 8px; }
+
+        /* PER-60: the captured-response panel's toggle is a text button, not a
+           boxed one; the caret is CSS (decoration), the state is aria-expanded. */
+        .tm-ref-toggle {
+            align-self: flex-start;
+            display: inline-flex; align-items: center; gap: 6px;
+            background: transparent; border: none; cursor: pointer;
+            padding: 2px 4px; margin-left: -4px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 0.625em; font-weight: 600;
+            letter-spacing: 0.08em; text-transform: uppercase; line-height: 1.35;
+            color: #8b9ab3;
+        }
+        .tm-ref-toggle:hover { color: #e7eefb; }
+        .tm-ref-toggle:focus-visible { outline: 2px solid #2f7dfa; outline-offset: 2px; }
+        .tm-ref-caret::before { content: '\\25BE'; }
+        .tm-ref-toggle[aria-expanded="false"] .tm-ref-caret::before { content: '\\25B8'; }
+        .tm-ref-region { display: flex; flex-direction: column; gap: 5px; }
+        .tm-ref-region[hidden] { display: none; }
+        .tm-field textarea.tm-code[readonly] { cursor: text; }
+
         .tm-check {
             display: flex; align-items: center; gap: 8px;
             min-height: 24px;
@@ -524,7 +706,8 @@
         .tm-light .tm-head { border-bottom-color: #eef1f6; }
         .tm-light .tm-foot { border-top-color: #eef1f6; }
         .tm-light .tm-title { color: #101828; }
-        .tm-light .tm-field > label:not(.tm-check) { color: #5d6a80; }
+        .tm-light .tm-field > label:not(.tm-check),
+        .tm-light .tm-glabel { color: #5d6a80; }
         .tm-light .tm-hint,
         .tm-light .tm-legend { color: #5d6a80; }
         .tm-light .tm-note {
@@ -534,6 +717,11 @@
         }
         .tm-light .tm-req,
         .tm-light .tm-field-err { color: #b91c1c; }
+        .tm-light .tm-try-ok { color: #15803d; }
+        .tm-light .tm-try-no { color: #b91c1c; }
+        .tm-light .tm-more summary { color: #5d6a80; }
+        .tm-light .tm-ref-toggle { color: #5d6a80; }
+        .tm-light .tm-ref-toggle:hover { color: #101828; }
         .tm-light .tm-field [aria-invalid="true"] { border-color: #b91c1c !important; }
         .tm-light .tm-check { color: #101828; }
         .tm-light .tm-x { color: #5d6a80; }
@@ -547,6 +735,11 @@
         .tm-light .tm-field input::placeholder,
         .tm-light .tm-field textarea::placeholder { color: #667383; }
         .tm-light .tm-hintbar {
+            background: rgba(30, 99, 245, 0.07);
+            color: #101828;
+            border-color: rgba(30, 99, 245, 0.22);
+        }
+        .tm-light .tm-draftbar {
             background: rgba(30, 99, 245, 0.07);
             color: #101828;
             border-color: rgba(30, 99, 245, 0.22);
@@ -583,6 +776,7 @@
             .tm-error,
             .tm-note,
             .tm-hintbar,
+            .tm-draftbar,
             .tm-btn,
             .tm-field input[type="text"],
             .tm-field input[type="number"],
@@ -606,6 +800,20 @@
             || [];
         const templateOptions = ['<option value="">Blank rule</option>']
             .concat(templates.map((t) => `<option value="${t.id}" title="${t.description}">${t.label}</option>`))
+            .join('');
+
+        // B2-F10: the "Try a URL" selects. An empty method means the rule's own;
+        // an empty type leaves the resource type unsaid.
+        const tryMethodOptions = ['<option value="">Rule\'s method</option>']
+            .concat(METHODS.filter((m) => m !== '*').map((m) => `<option value="${m}">${m}</option>`))
+            .join('');
+        const tryTypeOptions = ['<option value="">Not specified</option>']
+            .concat(RESOURCE_TYPES.map(([v, l]) => `<option value="${v}">${l}</option>`))
+            .join('');
+
+        // B2-F7: one labelled checkbox per resource type.
+        const resourceTypeBoxes = RESOURCE_TYPES
+            .map(([v, l]) => `<label class="tm-check"><input type="checkbox" id="tmRt_${v}" data-group="tmResourceTypes" value="${v}"> ${l}</label>`)
             .join('');
 
         // PER-77: the marker is decoration for sighted users; aria-required
@@ -644,6 +852,18 @@
             <div class="tm-hintbar" id="tmHintBar" hidden>
               <span class="tm-hintbar-text">SpliceTap opens this editor over your current page. Press Esc or click outside to close it.</span>
               <button type="button" class="tm-hintbar-x" id="tmHintClose" aria-label="Dismiss tip">&times;</button>
+            </div>
+
+            <!-- PER-63: offered when the editor opens and a draft of an unsaved
+                 rule was kept (the page was reloaded, say). The text goes into
+                 the live region a moment after the bar is shown, as the toast
+                 does, so a screen reader says it. -->
+            <div class="tm-draftbar" id="tmDraftBar" role="group" aria-labelledby="tmDraftText" hidden>
+              <span class="tm-draftbar-text" id="tmDraftText" role="status" aria-live="polite"></span>
+              <span class="tm-draftbar-actions">
+                <button type="button" class="tm-btn tm-btn-primary" id="tmDraftRestore">Restore</button>
+                <button type="button" class="tm-btn tm-btn-secondary" id="tmDraftDiscard">Discard</button>
+              </span>
             </div>
 
             <div class="tm-body">
@@ -689,6 +909,14 @@
                 </div>
               </div>
 
+              <!-- B2-F7: limit the rule to requests made by certain sites. Any
+                   rule type; one or several hostnames, subdomains included. -->
+              <div class="tm-field">
+                <label for="tmPageDomains">Only on these sites (optional)</label>
+                <textarea id="tmPageDomains" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" placeholder="example.com, app.example.com" aria-describedby="tmPageDomainsHint"></textarea>
+                <span class="tm-hint" id="tmPageDomainsHint">Separate with commas or new lines (up to ${L().PAGE_DOMAINS_MAX}). A site includes its subdomains. Leave empty to apply on every site. Judged by the page that makes the request, not the URL it asks for.</span>
+              </div>
+
               <!-- mock -->
               <div class="tm-row" data-types="mock">
                 <div class="tm-field" id="tmStatusField">
@@ -723,9 +951,69 @@
                 <textarea id="tmMatchHeaders" rows="2" placeholder='{"x-api-key": "abc"}'></textarea>
               </div>
 
+              <!-- B2-F7: match on a value in the request's JSON body. In the
+                   page only, so it is shown where a rule can be handled there
+                   (applyTypeVisibility decides: not for "all requests"). -->
+              <div class="tm-field" data-types="mock block delay redirect requestBody" id="tmPayloadField" role="group" aria-labelledby="tmPayloadLegend">
+                <span class="tm-glabel" id="tmPayloadLegend">Only when the request body has (optional)</span>
+                <div class="tm-row tm-subrow">
+                  <div class="tm-field" style="flex:2">
+                    <label for="tmPayloadPath">JSON path</label>
+                    <input type="text" id="tmPayloadPath" maxlength="${L().PAYLOAD_PATH_MAX}" placeholder="user.id or items.0.sku" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" aria-describedby="tmPayloadHint">
+                  </div>
+                  <div class="tm-field" style="flex:1">
+                    <label for="tmPayloadOp">Comparison</label>
+                    <select id="tmPayloadOp" aria-describedby="tmPayloadHint">
+                      <option value="equals">equals</option>
+                      <option value="contains">contains</option>
+                    </select>
+                  </div>
+                  <div class="tm-field" style="flex:2">
+                    <label for="tmPayloadValue">Value</label>
+                    <input type="text" id="tmPayloadValue" maxlength="${L().PAYLOAD_VALUE_MAX}" placeholder="42" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" aria-describedby="tmPayloadHint">
+                  </div>
+                </div>
+                <span class="tm-hint" id="tmPayloadHint">Compared as text against the value at that dot path in a JSON request body. A request whose body is not JSON never matches.</span>
+              </div>
+
+              <!-- PER-66: apply the rule to some of the matching calls only.
+                   Same availability as the payload filter. -->
+              <div class="tm-field" data-types="mock block delay redirect requestBody" id="tmCallField" role="group" aria-labelledby="tmCallLegend">
+                <span class="tm-glabel" id="tmCallLegend">Which calls (optional)</span>
+                <div class="tm-row tm-subrow">
+                  <div class="tm-field" style="flex:2">
+                    <label for="tmCallMode">Apply to</label>
+                    <select id="tmCallMode" aria-describedby="tmCallHint">
+                      <option value="">Every matching call</option>
+                      <option value="first">Only the first N calls</option>
+                      <option value="after">Every call after the first N</option>
+                      <option value="every">Every Nth call</option>
+                    </select>
+                  </div>
+                  <div class="tm-field" style="flex:1" id="tmCallNField">
+                    <label for="tmCallN">N (${L().CALL_FILTER_N_MIN}&ndash;${L().CALL_FILTER_N_MAX})</label>
+                    <input type="number" id="tmCallN" value="3" min="${L().CALL_FILTER_N_MIN}" max="${L().CALL_FILTER_N_MAX}" aria-describedby="tmCallHint">
+                  </div>
+                </div>
+                <span class="tm-hint" id="tmCallHint">Counted per page, from when it loads; the count starts again when the page reloads or your rules change. Calls the rule skips go on to later rules.</span>
+              </div>
+
               <div class="tm-field" data-types="mock" id="tmResHeadersField">
                 <label for="tmResHeaders">Response Headers (JSON)</label>
                 <textarea id="tmResHeaders" rows="2">{"Content-Type": "application/json"}</textarea>
+              </div>
+
+              <!-- PER-60: the response a capture recorded, to copy from while
+                   writing the body or patch. Read-only and collapsible; shown
+                   only when the editor was opened with a referenceBody
+                   (inline display:none until then: the field's own display
+                   rule outranks [hidden]). -->
+              <div class="tm-field" data-types="mock" id="tmRefField" style="display:none">
+                <button type="button" class="tm-ref-toggle" id="tmRefToggle" aria-expanded="true" aria-controls="tmRefRegion"><span class="tm-ref-caret" aria-hidden="true"></span>Captured response</button>
+                <div id="tmRefRegion" class="tm-ref-region">
+                  <textarea id="tmRefBody" class="tm-code" rows="8" readonly dir="ltr" wrap="off" spellcheck="false" aria-labelledby="tmRefToggle" aria-describedby="tmRefHint"></textarea>
+                  <span class="tm-hint" id="tmRefHint">Read-only: what the page received when it was captured. Select and copy from it.</span>
+                </div>
               </div>
 
               <div class="tm-field" data-types="mock" id="tmBodyField">
@@ -737,6 +1025,14 @@
                 <label for="tmPatch">Response Patch (JSON Merge Patch)</label>
                 <textarea id="tmPatch" rows="7" placeholder='{"data": null}' aria-describedby="tmPatchHint"></textarea>
                 <span class="tm-hint" id="tmPatchHint">Merged into the real response (RFC 7386). null deletes a key.</span>
+              </div>
+
+              <!-- B2-F8: patch mode keeps the real response's status; this
+                   replaces it, and the real body is still patched. -->
+              <div class="tm-field" data-types="mock" id="tmPatchStatusField">
+                <label for="tmPatchStatus">Status override (optional)</label>
+                <input type="number" id="tmPatchStatus" min="${L().STATUS_MIN}" max="${L().STATUS_MAX}" placeholder="keep the real status" aria-describedby="tmPatchStatusHint">
+                <span class="tm-hint" id="tmPatchStatusHint">The page gets this status (${L().STATUS_MIN}&ndash;${L().STATUS_MAX}) with the patched real body. Leave empty to keep the real one.</span>
               </div>
 
               <!-- F4: a code response. The gate note is shown only once the
@@ -795,17 +1091,33 @@
                 <span class="tm-hint" id="tmAppliesAllHint">fetch/XHR are handled in the page; everything else by Chrome's network layer.</span>
               </div>
 
+              <!-- B2-F7: which resource types the network layer applies the
+                   rule to. Shown where that is valid: headers and query
+                   rules, and block/redirect once "all requests" is ticked
+                   (applyTypeVisibility). None ticked means the default. -->
+              <div class="tm-field" data-types="block redirect headers queryparams" id="tmResourceTypes" role="group" aria-labelledby="tmResourceTypesLabel">
+                <span class="tm-glabel" id="tmResourceTypesLabel">Only these resource types (optional)</span>
+                <div class="tm-checks">${resourceTypeBoxes}</div>
+                <span class="tm-hint" id="tmResourceTypesHint">Leave all unticked for the default: every type for block and redirect, fetch/XHR and other for header and query rules. Fetch / XHR is also handled in the page for block and redirect.</span>
+              </div>
+
               <!-- headers -->
               <div class="tm-field" data-types="headers">
                 <label for="tmHdrReq">Request Headers (JSON array of {op, name, value})</label>
-                <textarea id="tmHdrReq" rows="3" placeholder='[{"op":"set","name":"User-Agent","value":"MyAgent/1.0"}]'></textarea>
+                <textarea id="tmHdrReq" rows="3" placeholder='[{"op":"set","name":"User-Agent","value":"MyAgent/1.0"}]' aria-describedby="tmHdrReqHint"></textarea>
+                <span class="tm-hint" id="tmHdrReqHint">op is set or remove. (append is for response headers only.)</span>
               </div>
               <div class="tm-field" data-types="headers">
                 <label for="tmHdrRes">Response Headers (JSON array of {op, name, value})</label>
-                <textarea id="tmHdrRes" rows="3" placeholder='[{"op":"set","name":"Access-Control-Allow-Origin","value":"*"}]'></textarea>
+                <textarea id="tmHdrRes" rows="3" placeholder='[{"op":"set","name":"Access-Control-Allow-Origin","value":"*"}]' aria-describedby="tmHdrResHint"></textarea>
+                <span class="tm-hint" id="tmHdrResHint">op is set, remove or append. append adds your value next to any the server sent, instead of replacing them: <code>{"op":"append","name":"Set-Cookie","value":"a=1"}</code>.</span>
               </div>
 
               <!-- queryparams -->
+              <div class="tm-field" data-types="queryparams">
+                <label class="tm-check"><input type="checkbox" id="tmQpRemoveAll" aria-describedby="tmQpRemoveAllHint"> Remove all query parameters</label>
+                <span class="tm-hint" id="tmQpRemoveAllHint">Strips the whole query string from matching requests. Parameters added below are then the only ones sent.</span>
+              </div>
               <div class="tm-field" data-types="queryparams">
                 <label for="tmQpAdd">Add Query Params (JSON array of {key, value})</label>
                 <textarea id="tmQpAdd" rows="2" placeholder='[{"key":"debug","value":"1"}]'></textarea>
@@ -813,6 +1125,44 @@
               <div class="tm-field" data-types="queryparams">
                 <label for="tmQpRemove">Remove Query Params (comma-separated)</label>
                 <input type="text" id="tmQpRemove" placeholder="token, session_id">
+              </div>
+
+              <!-- B2-F10 / PER-59: ask the background whether this rule, as the
+                   form describes it now (saved or not), would handle a given
+                   request, and whether an earlier rule would get there first. -->
+              <div class="tm-field" id="tmTry" role="group" aria-labelledby="tmTryLegend">
+                <span class="tm-glabel" id="tmTryLegend">Try a URL</span>
+                <div class="tm-row tm-subrow">
+                  <div class="tm-field" style="flex:3">
+                    <label for="tmTryUrl">URL to test (optional)</label>
+                    <input type="text" id="tmTryUrl" placeholder="https://example.com/api/users/1" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" aria-describedby="tmTryHint">
+                  </div>
+                  <div class="tm-field" style="flex:1">
+                    <label for="tmTryMethod">Method</label>
+                    <select id="tmTryMethod" aria-describedby="tmTryHint">${tryMethodOptions}</select>
+                  </div>
+                </div>
+                <details class="tm-more">
+                  <summary>More about the request</summary>
+                  <div class="tm-field">
+                    <label for="tmTryPage">Made by the page (URL)</label>
+                    <input type="text" id="tmTryPage" placeholder="https://app.example.com/dashboard" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr">
+                  </div>
+                  <div class="tm-field">
+                    <label for="tmTryType">Resource type</label>
+                    <select id="tmTryType">${tryTypeOptions}</select>
+                  </div>
+                  <div class="tm-field">
+                    <label for="tmTryBody">Request body</label>
+                    <textarea id="tmTryBody" rows="2" spellcheck="false" dir="ltr" placeholder='{"user": {"id": 42}}'></textarea>
+                  </div>
+                </details>
+                <div class="tm-try-actions">
+                  <button type="button" class="tm-btn tm-btn-secondary" id="tmTryCheck">Check</button>
+                </div>
+                <span class="tm-hint" id="tmTryHint">Leave the URL empty to try one made up from the pattern. Nothing is sent to the network.</span>
+                <!-- Polite live region: it exists (empty) before its text does, so a screen reader says the result. -->
+                <div class="tm-try-result" id="tmTryResult" role="status" aria-live="polite"></div>
               </div>
 
               <div class="tm-field">
@@ -837,6 +1187,9 @@
      *        script a click on Save (S-1). An extension page has no hostile
      *        script to defend against, so it may use 'open'.
      * @param {Element} [options.mountPoint=document.documentElement]
+     * @param {string|number} [options.draftKey] PER-63: how the background keys this
+     *        editor's draft when the caller is an extension page ("options"); a
+     *        content script is keyed by its tab and passes nothing.
      * @param {function({saved: boolean, rule?: object})} [options.onClose]
      */
     function create(options = {}) {
@@ -853,7 +1206,6 @@
         // next non-Escape input rather than for a fixed 4 s that nobody was told about.
         let closeArmed = false;
         let closeWarningShown = false;    // PER-84: the unsaved-changes message is what's in the error box
-        let unloadGuarded = false;        // PER-63: a beforeunload handler is registered
         let settings = null;              // F4: the extension settings, once read; null until then
 
         const $ = (id) => shadow && shadow.getElementById(id);
@@ -870,33 +1222,98 @@
             tmReqMode: 'tmReqModeHint',
             tmReqBody: 'tmReqBodyHint',
             tmReqPatch: 'tmReqPatchHint',
-            tmCode: 'tmCodeHint tmCodeSecurity'
+            tmCode: 'tmCodeHint tmCodeSecurity',
+            // B2-F7 / F8 / F9 / PER-66
+            tmPageDomains: 'tmPageDomainsHint',
+            tmResourceTypes: 'tmResourceTypesHint',
+            tmPayloadPath: 'tmPayloadHint',
+            tmPayloadOp: 'tmPayloadHint',
+            tmPayloadValue: 'tmPayloadHint',
+            tmPatchStatus: 'tmPatchStatusHint',
+            tmCallMode: 'tmCallHint',
+            tmCallN: 'tmCallHint',
+            tmQpRemoveAll: 'tmQpRemoveAllHint',
+            tmHdrReq: 'tmHdrReqHint',
+            tmHdrRes: 'tmHdrResHint'
         };
 
-        /**
-         * PER-63: a dev-server reload used to throw away a half-written rule
-         * with no warning. While the form is dirty, ask the browser to prompt
-         * before the page unloads. Restoring the draft after a reload would
-         * need storage that the page cannot read and this module does not own
-         * (a per-tab storage.session mirror in the background); until then the
-         * prompt is the safeguard. The draft is never written anywhere.
-         */
-        function onBeforeUnload(e) {
-            if (!formDirty) return;
-            e.preventDefault();
-            e.returnValue = '';
+        // ---- restorable drafts (PER-63) ------------------------------------
+        // A dev-server reload used to throw away a half-written rule, and a
+        // beforeunload prompt was the only safeguard. Now the form is mirrored
+        // to the background while it is dirty (debounced), kept per tab in
+        // chrome.storage.session — somewhere the page cannot read — and offered
+        // back the next time the editor opens. The prompt is gone: a reload
+        // loses nothing. The draft ends with the editor: saved, discarded or
+        // closed.
+
+        const DRAFT_DEBOUNCE_MS = 800;
+        // Controls that are not part of the rule: a template pick is a one-off,
+        // "Try a URL" is scratch input, the captured response is a reference.
+        const DRAFT_SKIP = /^(tmTemplate|tmTry|tmRefBody)/;
+
+        let draftTimer = null;
+        let draftChain = Promise.resolve(); // draft messages go out in the order they were made
+        let draftMayExist = false;          // one was saved, or one was offered: a clear is worth sending
+        let pendingDraft = null;            // an offered draft that has been neither restored nor discarded
+        let openSeq = 0;                    // which open() an answer from the background belongs to
+        let saving = false;
+
+        // An extension page may be asked for under an explicit key; a content
+        // script is keyed by its tab, which the background knows from the sender.
+        const draftMessage = (message) => (options.draftKey !== undefined
+            ? Object.assign(message, { tabId: options.draftKey })
+            : message);
+
+        function queueDraftMessage(message) {
+            draftChain = draftChain
+                .then(() => send(draftMessage(message)))
+                .catch(() => {}); // a draft is a convenience; never let one break the editor
+            return draftChain;
         }
 
-        function guardUnload(on) {
-            if (on === unloadGuarded) return;
-            unloadGuarded = on;
-            if (on) window.addEventListener('beforeunload', onBeforeUnload);
-            else window.removeEventListener('beforeunload', onBeforeUnload);
+        /** The form as plain data: each control's value by id, and the rule being edited. */
+        function captureDraft() {
+            const values = {};
+            shadow.querySelectorAll('input, select, textarea').forEach((el) => {
+                if (!el.id || DRAFT_SKIP.test(el.id)) return;
+                values[el.id] = el.type === 'checkbox' ? el.checked : el.value;
+            });
+            return { v: 1, name: values.tmName || '', editingRule, values };
+        }
+
+        function flushDraft() {
+            clearTimeout(draftTimer);
+            draftTimer = null;
+            if (!shadow || !formDirty || saving) return;
+            draftMayExist = true;
+            queueDraftMessage({ type: 'saveEditorDraft', draft: captureDraft() });
+        }
+
+        function scheduleDraft() {
+            clearTimeout(draftTimer);
+            draftTimer = setTimeout(flushDraft, DRAFT_DEBOUNCE_MS);
+        }
+
+        /** The draft's work is over: stop the timer, and remove it if one may be stored. */
+        function endDraft() {
+            clearTimeout(draftTimer);
+            draftTimer = null;
+            pendingDraft = null;
+            openSeq++; // an answer to a getEditorDraft still in flight is stale
+            if (draftMayExist) {
+                draftMayExist = false;
+                queueDraftMessage({ type: 'clearEditorDraft' });
+            }
+        }
+
+        // A reload can come within the debounce window; hand over what there is.
+        function onPageHide() {
+            if (draftTimer !== null) flushDraft();
         }
 
         function markDirty() {
             formDirty = true;
-            guardUnload(true);
+            scheduleDraft();
         }
 
         function mountPoint() {
@@ -939,7 +1356,28 @@
             $('tmType').addEventListener('change', () => applyTypeVisibility());
             $('tmMode').addEventListener('change', () => applyTypeVisibility());
             $('tmReqMode').addEventListener('change', () => applyTypeVisibility());
+            // B2-F7 / PER-66: ticking "all requests" decides which of the
+            // resource-type, payload and call-filter fields can apply; the
+            // call filter's number only matters once a mode is chosen.
+            $('tmAppliesAll').addEventListener('change', () => applyTypeVisibility());
+            $('tmCallMode').addEventListener('change', () => applyTypeVisibility());
             $('tmHintClose').addEventListener('click', dismissHint);
+            // PER-63: answer the offer of a kept draft.
+            $('tmDraftRestore').addEventListener('click', () => { if (pendingDraft) restoreDraft(pendingDraft); });
+            $('tmDraftDiscard').addEventListener('click', discardDraft);
+            window.addEventListener('pagehide', onPageHide);
+            // PER-60: collapse / expand the captured response.
+            $('tmRefToggle').addEventListener('click', () => {
+                setReferenceOpen($('tmRefToggle').getAttribute('aria-expanded') !== 'true');
+            });
+            // B2-F10: not a trusted-click matter like Save: it changes nothing.
+            $('tmTryCheck').addEventListener('click', tryUrl);
+            $('tmTryUrl').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    tryUrl();
+                }
+            });
 
             // Close on backdrop click (but not when clicking inside the panel).
             shadow.querySelector('.tm-backdrop').addEventListener('click', (e) => {
@@ -950,10 +1388,19 @@
             // dismissal can be told apart from a deliberate one.
             const panel = shadow.querySelector('.tm-panel');
             const onEdit = (e) => {
+                // B2-F10: what is typed into "Try a URL" is not part of the rule.
+                if (e.target && e.target.closest && e.target.closest('#tmTry')) return;
+                // PER-63: starting on something else answers the offer — "no" —
+                // and the first draft saved after this replaces the old one.
+                if (pendingDraft && !(e.target.closest && e.target.closest('#tmDraftBar'))) hideDraftOffer();
                 markDirty();
                 disarmClose();
                 // PER-77: editing a field answers its error.
-                if (e.target && e.target.id) clearFieldError(e.target.id);
+                // (A checkbox in a group answers its group's error.)
+                if (e.target) {
+                    const answered = (e.target.dataset && e.target.dataset.group) || e.target.id;
+                    if (answered) clearFieldError(answered);
+                }
             };
             panel.addEventListener('input', onEdit, true);
             panel.addEventListener('change', onEdit, true);
@@ -1089,6 +1536,8 @@
                 // (Inline style: the field's own display rule outranks [hidden].)
                 $('tmStatusField').style.display = patch || code ? 'none' : '';
                 $('tmResHeadersField').style.display = code ? 'none' : '';
+                // B2-F8: the one place patch mode can change the status.
+                $('tmPatchStatusField').classList.toggle('tm-visible', patch);
             }
             if (type === 'requestBody') {
                 const patch = $('tmReqMode').value === 'patch';
@@ -1108,6 +1557,16 @@
                 }
             }
             if (bodyless && (method.value === 'GET' || method.value === 'HEAD')) method.value = '*';
+
+            // B2-F7 / PER-66: what "all requests" switches on and off. Resource
+            // types are for the network layer; the payload and call filters
+            // need the page's interceptor, so they go the other way.
+            const appliesAll = APPLIES_TO_TYPES.includes(type) && $('tmAppliesAll').checked;
+            $('tmResourceTypes').classList.toggle('tm-visible', resourceTypesApply(type, appliesAll));
+            const inPage = inPageFiltersApply(type, appliesAll);
+            $('tmPayloadField').classList.toggle('tm-visible', inPage);
+            $('tmCallField').classList.toggle('tm-visible', inPage);
+            $('tmCallNField').style.display = $('tmCallMode').value ? '' : 'none';
 
             // Hints that exist only in some states are linked only then.
             linkDescriptions(method);
@@ -1153,50 +1612,63 @@
          * rule; F4: the code-responses-are-off note), and its error if it has
          * one.
          */
-        function linkDescriptions(el) {
+        /**
+         * B2-F7: the control that carries aria-invalid, the description and
+         * focus for a field id. Almost always the element itself; a group of
+         * checkboxes is not one widget that can be invalid, so its first box
+         * stands for it (and takes the focus).
+         */
+        function controlFor(id) {
+            const el = $(id);
+            if (el && el.getAttribute('role') === 'group') return el.querySelector('input, select, textarea');
+            return el;
+        }
+
+        function linkDescriptions(el, id = el && el.id) {
             if (!el) return;
             const ids = [];
-            if (el.id === 'tmCode') {
+            if (id === 'tmCode') {
                 const note = $('tmCodeOffNote');
                 if (note && !note.hidden) ids.push('tmCodeOffNote');
             }
-            if (FIELD_HINTS[el.id]) ids.push(FIELD_HINTS[el.id]);
-            if (el.id === 'tmMethod' && $('tmType').value === 'requestBody') ids.push('tmReqModeHint');
-            const err = $(el.id + 'Err');
+            if (FIELD_HINTS[id]) ids.push(FIELD_HINTS[id]);
+            if (id === 'tmMethod' && $('tmType').value === 'requestBody') ids.push('tmReqModeHint');
+            const err = $(id + 'Err');
             if (err) ids.push(err.id);
             if (ids.length) el.setAttribute('aria-describedby', ids.join(' '));
             else el.removeAttribute('aria-describedby');
         }
 
         function clearFieldError(id) {
-            const el = $(id);
+            const el = controlFor(id);
             if (!el) return;
             el.removeAttribute('aria-invalid');
             const err = $(id + 'Err');
             if (err) err.remove();
-            linkDescriptions(el);
+            linkDescriptions(el, id);
         }
 
         function clearFieldErrors() {
             if (!shadow) return;
-            shadow.querySelectorAll('[aria-invalid]').forEach((el) => clearFieldError(el.id));
+            shadow.querySelectorAll('[aria-invalid]').forEach((el) => clearFieldError((el.dataset && el.dataset.group) || el.id));
         }
 
         function setFieldError(id, message) {
-            const el = $(id);
+            const el = controlFor(id);
             if (!el || el.offsetParent === null) return false; // hidden: the user could never reach it
             let err = $(id + 'Err');
             if (!err) {
                 err = document.createElement('span');
                 err.id = id + 'Err';
                 err.className = 'tm-field-err';
-                el.closest('.tm-field').appendChild(err);
+                // A group is its own .tm-field; a lone control sits in one.
+                ($(id).closest('.tm-field') || $(id)).appendChild(err);
                 err.textContent = message;
             } else {
                 err.textContent += ' · ' + message;
             }
             el.setAttribute('aria-invalid', 'true');
-            linkDescriptions(el);
+            linkDescriptions(el, id);
             return true;
         }
 
@@ -1253,6 +1725,18 @@
             $('tmMethod').value = match.method || '*';
             $('tmUrl').value = match.url || prefillUrl || '';
 
+            // B2-F7 / PER-66: the match fields added in batch 2.
+            $('tmPageDomains').value = Array.isArray(match.pageDomains) ? match.pageDomains.join('\n') : '';
+            const storedTypes = Array.isArray(match.resourceTypes) ? match.resourceTypes : [];
+            for (const [value] of RESOURCE_TYPES) $('tmRt_' + value).checked = storedTypes.includes(value);
+            const payload = match.payload || {};
+            $('tmPayloadPath').value = typeof payload.path === 'string' ? payload.path : '';
+            $('tmPayloadOp').value = payload.operator === 'contains' ? 'contains' : 'equals';
+            $('tmPayloadValue').value = typeof payload.value === 'string' ? payload.value : '';
+            const callFilter = match.callFilter || {};
+            $('tmCallMode').value = ['first', 'after', 'every'].includes(callFilter.mode) ? callFilter.mode : '';
+            $('tmCallN').value = Number.isInteger(callFilter.n) ? callFilter.n : 3;
+
             const res = r.response || {};
             $('tmStatus').value = res.statusCode || 200;
             $('tmDelay').value = res.delay || 0;
@@ -1265,6 +1749,7 @@
                 ? ''
                 : (typeof res.body === 'string' ? res.body : JSON.stringify(res.body, null, 2));
             $('tmPatch').value = res.patch ? JSON.stringify(res.patch, null, 2) : '';
+            $('tmPatchStatus').value = Number.isInteger(res.patchStatus) ? res.patchStatus : ''; // B2-F8
             $('tmCode').value = typeof res.code === 'string' ? res.code : '';
 
             // F3
@@ -1288,6 +1773,11 @@
             const qp = r.queryParams || {};
             $('tmQpAdd').value = qp.add && qp.add.length ? JSON.stringify(qp.add, null, 2) : '';
             $('tmQpRemove').value = (qp.remove || []).join(', ');
+            $('tmQpRemoveAll').checked = qp.removeAll === true; // B2-F9
+
+            // B2-F10: a fresh "Try a URL" for every rule opened.
+            for (const id of ['tmTryUrl', 'tmTryPage', 'tmTryBody', 'tmTryMethod', 'tmTryType']) $(id).value = '';
+            showTryResult([]);
 
             applyTypeVisibility();
         }
@@ -1328,6 +1818,10 @@
             match.url = $('tmUrl').value.trim();
             delete match.headers;
             delete match.graphql;
+            delete match.pageDomains;
+            delete match.resourceTypes;
+            delete match.payload;
+            delete match.callFilter;
 
             if (CONDITION_TYPES.includes(type)) {
                 const matchHeaders = parseJson('tmMatchHeaders', 'Match Request Headers', null, problems);
@@ -1336,6 +1830,38 @@
                 }
                 const op = $('tmGraphql').value.trim();
                 if (op) match.graphql = { operationName: op };
+            }
+
+            // B2-F7: which sites the rule applies on; any rule type.
+            const domains = parseDomains($('tmPageDomains').value);
+            if (domains.length) match.pageDomains = domains;
+
+            // B2-F7: only what the network layer applies; none ticked is the default.
+            const appliesAll = APPLIES_TO_TYPES.includes(type) && $('tmAppliesAll').checked;
+            if (resourceTypesApply(type, appliesAll)) {
+                const picked = RESOURCE_TYPES.map(([value]) => value).filter((value) => $('tmRt_' + value).checked);
+                if (picked.length) match.resourceTypes = picked;
+            }
+
+            // B2-F7 / PER-66: both need the in-page interceptor; where the rule
+            // cannot be handled there they are dropped, because the schema
+            // refuses them and the fields are not on screen to be fixed.
+            if (inPageFiltersApply(type, appliesAll)) {
+                const path = $('tmPayloadPath').value.trim();
+                const value = $('tmPayloadValue').value;
+                if (path || value) {
+                    match.payload = { path, operator: $('tmPayloadOp').value, value };
+                }
+                const mode = $('tmCallMode').value;
+                if (mode) {
+                    // A blank number would reach the schema as null, which it
+                    // refuses; say so here, on the field, instead.
+                    const n = readInteger('tmCallN', 'Call filter N', problems);
+                    if (Number.isNaN(n) && !problems.some((p) => p.fieldId === 'tmCallN')) {
+                        problems.push({ fieldId: 'tmCallN', message: 'Call filter N is required once a mode is chosen' });
+                    }
+                    match.callFilter = { mode, n };
+                }
             }
             rule.match = match;
 
@@ -1369,10 +1895,15 @@
                     delay: delay || 0, // blank means no delay
                     mode
                 });
+                // B2-F8: only patch mode has a status override, and only a
+                // filled field sets one (empty keeps the real response's).
+                delete response.patchStatus;
                 if (mode === 'patch') {
                     response.patch = parseJson('tmPatch', 'Response Patch', {}, problems);
                     delete response.body;
                     delete response.code;
+                    const override = readInteger('tmPatchStatus', 'Patch status', problems);
+                    if (Number.isFinite(override)) response.patchStatus = override;
                 } else if (mode === 'code') {
                     // Kept exactly as typed (indentation matters to nobody but
                     // the author); a blank one is left '' for the schema to refuse.
@@ -1412,6 +1943,9 @@
                     add: parseJson('tmQpAdd', 'Add Query Params', [], problems),
                     remove: $('tmQpRemove').value.split(',').map((s) => s.trim()).filter(Boolean)
                 };
+                // B2-F9: written only when ticked, so a rule that does not use
+                // it stays what it was.
+                if ($('tmQpRemoveAll').checked) rule.queryParams.removeAll = true;
             }
 
             return { rule, problems };
@@ -1433,11 +1967,12 @@
             }
         }
 
-        function setSaving(saving) {
+        function setSaving(isSaving) {
+            saving = isSaving;
             const btn = $('tmSave');
             if (!btn) return;
-            btn.disabled = saving;
-            btn.textContent = saving ? 'Saving…' : 'Save Rule';
+            btn.disabled = isSaving;
+            btn.textContent = isSaving ? 'Saving…' : 'Save Rule';
         }
 
         async function save() {
@@ -1502,11 +2037,145 @@
             }
         }
 
+        // ---- Try a URL (B2-F10 / PER-59) ------------------------------------
+
+        function tryNode(tag, className, text) {
+            const node = document.createElement(tag);
+            if (className) node.className = className;
+            if (text !== undefined) node.textContent = text;
+            return node;
+        }
+
+        /** A name or URL that may be right-to-left must not reorder the sentence around it. */
+        function tryQuoted(text) {
+            return tryNode('bdi', '', String(text));
+        }
+
+        function showTryResult(nodes) {
+            const out = $('tmTryResult');
+            if (!out) return;
+            // Replace in one go so the live region announces the result once.
+            const fragment = document.createDocumentFragment();
+            nodes.forEach((n) => fragment.appendChild(n));
+            while (out.firstChild) out.removeChild(out.firstChild);
+            out.appendChild(fragment);
+        }
+
+        function tryMessage(text, className) {
+            return tryNode('p', className || 'tm-try-sum', text);
+        }
+
+        /**
+         * What the background said about one request, as plain sentences: the
+         * verdict, a pass/fail line per condition (the glyph is decoration; a
+         * hidden word carries the meaning), a note when Chrome's network layer
+         * would be the one acting, and a warning for each earlier rule that
+         * would take the request first.
+         */
+        function renderTryResult(response, typedUrl) {
+            if (response && response.needsUrl) {
+                showTryResult([tryMessage('This URL pattern is a regular expression, so there is nothing to make a URL from. Enter a URL to try.')]);
+                return;
+            }
+            if (!response || response.success === false) {
+                showTryResult([tryMessage((response && response.error) || 'SpliceTap could not check that URL.', 'tm-try-sum tm-field-err')]);
+                return;
+            }
+
+            const result = response.result || {};
+            const nodes = [];
+
+            const sum = tryNode('p', 'tm-try-sum');
+            sum.append(result.matches ? 'This rule would handle ' : 'This rule would not handle ');
+            if (response.url) sum.appendChild(tryQuoted(response.url));
+            else sum.append('that request');
+            if (!typedUrl && response.url) sum.append(' (made up from the pattern)');
+            nodes.push(sum);
+
+            if (response.network) nodes.push(tryMessage("Would be handled by Chrome's network layer", 'tm-try-net'));
+
+            const checks = Array.isArray(result.checks) ? result.checks : [];
+            if (checks.length) {
+                const list = tryNode('ul', 'tm-try-list');
+                for (const check of checks) {
+                    const ok = !!(check && check.ok);
+                    const item = tryNode('li');
+                    const mark = tryNode('span', 'tm-try-mark ' + (ok ? 'tm-try-ok' : 'tm-try-no'), ok ? '✓' : '✗');
+                    mark.setAttribute('aria-hidden', 'true');
+                    item.appendChild(mark);
+                    item.appendChild(tryNode('span', 'tm-sr', ok ? 'Passed: ' : 'Failed: '));
+                    item.appendChild(tryNode('span', '', String((check && check.detail) || (check && check.condition) || '')));
+                    list.appendChild(item);
+                }
+                nodes.push(list);
+            }
+
+            for (const shadow of Array.isArray(response.shadowedBy) ? response.shadowedBy : []) {
+                const warning = tryNode('p', 'tm-note');
+                warning.append('An earlier rule, ', tryQuoted((shadow && (shadow.ruleName || shadow.ruleId)) || 'another rule'),
+                    ', also matches this request and takes precedence');
+                nodes.push(warning);
+            }
+
+            showTryResult(nodes);
+        }
+
+        async function tryUrl() {
+            const button = $('tmTryCheck');
+            if (!button || button.disabled) return;
+
+            // The rule as the form describes it now: saved or not, valid or not.
+            // Only JSON the form cannot read at all is a reason not to ask.
+            let rule;
+            try {
+                const collected = collect();
+                if (collected.problems.length) {
+                    showTryResult([tryMessage('Fix this first: ' + collected.problems.map((p) => p.message).join(' · '), 'tm-try-sum tm-field-err')]);
+                    return;
+                }
+                rule = collected.rule;
+            } catch (e) {
+                showTryResult([tryMessage(e.message, 'tm-try-sum tm-field-err')]);
+                return;
+            }
+            if (!rule.name) rule.name = 'Untitled rule'; // a rule still being named can be tried
+
+            const message = { type: 'explainMatch', rule };
+            const typedUrl = $('tmTryUrl').value.trim();
+            if (typedUrl) message.url = typedUrl;
+            const method = $('tmTryMethod').value;
+            if (method) message.method = method;
+            const pageUrl = $('tmTryPage').value.trim();
+            if (pageUrl) message.pageUrl = pageUrl;
+            const resourceType = $('tmTryType').value;
+            if (resourceType) message.resourceType = resourceType;
+            const body = $('tmTryBody').value;
+            if (body) message.body = body;
+
+            button.disabled = true;
+            button.textContent = 'Checking…';
+            try {
+                const response = await send(message);
+                if (!shadow) return; // closed while waiting
+                renderTryResult(response, typedUrl);
+            } catch (e) {
+                if (!shadow) return;
+                showTryResult([tryMessage('SpliceTap could not check that URL: ' + e.message, 'tm-try-sum tm-field-err')]);
+            } finally {
+                const again = $('tmTryCheck');
+                if (again) {
+                    again.disabled = false;
+                    again.textContent = 'Check';
+                }
+            }
+        }
+
         function close(saved, savedRule) {
             document.removeEventListener('keydown', onKeydown, true);
-            // PER-63: nothing left to lose, so stop prompting before unload.
+            window.removeEventListener('pagehide', onPageHide);
+            // PER-63: saved, cancelled or closed clean — the draft has done its job.
+            endDraft();
             formDirty = false;
-            guardUnload(false);
             if (hostEl && hostEl.parentNode) hostEl.parentNode.removeChild(hostEl);
             hostEl = null;
             shadow = null;
@@ -1575,6 +2244,116 @@
             }
         }
 
+        // ---- offering a kept draft back (PER-63) -----------------------------
+
+        function hideDraftOffer() {
+            pendingDraft = null;
+            const bar = $('tmDraftBar');
+            if (bar) bar.hidden = true;
+            const text = $('tmDraftText');
+            if (text) text.textContent = '';
+        }
+
+        /** Ask the background for this tab's draft and, if there is one, offer it. */
+        async function offerDraft() {
+            hideDraftOffer();
+            const seq = ++openSeq;
+            let response;
+            try {
+                response = await send(draftMessage({ type: 'getEditorDraft' }));
+            } catch (e) {
+                return; // no draft service (or it failed): the editor opens as usual
+            }
+            const draft = response && response.success !== false && response.draft;
+            // Gone, replaced by a newer open, or already being edited: do not offer.
+            if (!shadow || seq !== openSeq || formDirty) return;
+            if (!draft || typeof draft !== 'object' || !draft.values || typeof draft.values !== 'object') return;
+
+            pendingDraft = draft;
+            draftMayExist = true;
+            const name = String(draft.values.tmName || draft.name || '').trim();
+            const bar = $('tmDraftBar');
+            const text = $('tmDraftText');
+            bar.hidden = false;
+            // The text follows the reveal, so the live region has something to announce.
+            setTimeout(() => {
+                if (!shadow || pendingDraft !== draft) return;
+                text.textContent = '';
+                if (name) {
+                    text.append("Restore your unsaved rule '", tryQuoted(name), "'?");
+                } else {
+                    text.append('Restore your unsaved rule?');
+                }
+            }, 60);
+        }
+
+        /** Put a draft back in the form: the rule being edited, and every control as it was. */
+        function restoreDraft(draft) {
+            editingRule = draft.editingRule && typeof draft.editingRule === 'object' ? draft.editingRule : null;
+            $('tmTitle').textContent = editingRule ? 'Edit Rule' : 'New Rule';
+            for (const [id, value] of Object.entries(draft.values)) {
+                const el = $(id);
+                if (!el || DRAFT_SKIP.test(id)) continue;
+                if (el.type === 'checkbox') el.checked = value === true;
+                else if (el.tagName === 'SELECT') {
+                    if (Array.from(el.options).some((o) => o.value === String(value))) el.value = String(value);
+                } else el.value = String(value);
+            }
+            hideDraftOffer();
+            applyTypeVisibility();
+            clearError();
+            markDirty(); // it is unsaved work again, and the draft keeps being kept
+            const nameInput = $('tmName');
+            if (nameInput) nameInput.focus();
+        }
+
+        function discardDraft() {
+            hideDraftOffer();
+            queueDraftMessage({ type: 'clearEditorDraft' }); // the offered draft is stored: remove it
+            draftMayExist = false;
+            const nameInput = $('tmName');
+            if (nameInput) nameInput.focus();
+        }
+
+        // ---- Captured response (PER-60) --------------------------------------
+
+        /**
+         * Show (or hide) the read-only panel with a captured response. A JSON
+         * object or array is laid out for reading; anything else is shown as
+         * received. A very large body is cut, and the panel says so.
+         */
+        function setReference(referenceBody) {
+            const field = $('tmRefField');
+            if (!field) return;
+            let text = typeof referenceBody === 'string' ? referenceBody
+                : (referenceBody !== undefined && referenceBody !== null ? JSON.stringify(referenceBody) : '');
+            if (!text) {
+                field.style.display = 'none';
+                $('tmRefBody').value = '';
+                return;
+            }
+            try {
+                const parsed = JSON.parse(text);
+                if (parsed !== null && typeof parsed === 'object') text = JSON.stringify(parsed, null, 2);
+            } catch (e) {
+                // not JSON: shown as received
+            }
+            let hint = 'Read-only: what the page received when it was captured. Select and copy from it.';
+            if (text.length > REFERENCE_MAX) {
+                hint += ` Showing the first ${REFERENCE_MAX.toLocaleString('en-US')} of ${text.length.toLocaleString('en-US')} characters.`;
+                text = text.slice(0, REFERENCE_MAX);
+            }
+            $('tmRefBody').value = text;
+            $('tmRefHint').textContent = hint;
+            setReferenceOpen(true);
+            field.style.display = '';
+        }
+
+        function setReferenceOpen(open) {
+            $('tmRefToggle').setAttribute('aria-expanded', String(open));
+            $('tmRefRegion').hidden = !open;
+        }
+
         function open(request = {}) {
             const isFreshOpen = !(hostEl && hostEl.isConnected);
 
@@ -1593,16 +2372,19 @@
             editingRule = request.rule || null;
             settings = null; // re-read below; never show last open's answer
             populate(editingRule, request.prefillUrl);
+            setReference(request.referenceBody); // PER-60
             // A11Y-7: populate() fires input/change events as it fills the
             // form; reset the dirty flags afterwards, or every editor would
             // open already considering itself modified.
             formDirty = false;
-            guardUnload(false);
+            clearTimeout(draftTimer); // populate() is not an edit; nothing to save yet
+            draftTimer = null;
             closeArmed = false;
             setSaving(false);
             clearError();
             applySettings();
             maybeShowHint();
+            offerDraft(); // PER-63
 
             const nameInput = $('tmName');
             if (nameInput) nameInput.focus();
@@ -1616,13 +2398,20 @@
             // it. Save uses this; it is exposed so a unit test can assert what
             // a form state produces without a trusted click on Save (which
             // the editor, by design, refuses from script).
-            collect: () => collect()
+            collect: () => collect(),
+            // Mark problems on their fields exactly as a failed save does
+            // (aria-invalid, aria-describedby, focus on the first): a unit test
+            // cannot make the trusted click that Save needs.
+            showProblems: (problems, summary) => reportProblems(problems, summary)
         };
     }
 
-    // fieldForError, parseWholeNumber and readBody are pure; exported so they
-    // can be unit-tested without a browser.
-    const api = { create, HOST_ID, fieldForError, parseWholeNumber, readBody };
+    // fieldForError, parseWholeNumber, readBody and the field-availability
+    // helpers are pure; exported so they can be unit-tested without a browser.
+    const api = {
+        create, HOST_ID, fieldForError, parseWholeNumber, readBody,
+        parseDomains, resourceTypesApply, inPageFiltersApply, RESOURCE_TYPES
+    };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
