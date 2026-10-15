@@ -835,3 +835,100 @@ describe('B2-F10 Try a URL', () => {
         expect(h.editor.isOpen()).toBe(false);
     });
 });
+
+// ---- PER-60: captured response panel ------------------------------------------
+
+describe('PER-60 captured response panel', () => {
+    const shownPanel = () => h.$('tmRefField').style.display !== 'none' && h.$('tmRefField').classList.contains('tm-visible');
+
+    test('without a referenceBody there is no panel', () => {
+        h = mount();
+        h.editor.open({});
+        expect(h.$('tmRefField').style.display).toBe('none');
+        h.editor.close();
+        h.editor.open({ referenceBody: '' });
+        expect(h.$('tmRefField').style.display).toBe('none');
+    });
+
+    test('with one, a read-only, labelled, monospace, left-to-right textarea shows it beside the body', () => {
+        h = mount();
+        h.editor.open({ referenceBody: '{"id":1,"name":"Ann"}' });
+        expect(shownPanel()).toBe(true);
+        const box = h.$('tmRefBody');
+        expect(box.readOnly).toBe(true);
+        expect(box.getAttribute('dir')).toBe('ltr');
+        expect(box.classList.contains('tm-code')).toBe(true);
+        expect(box.getAttribute('aria-labelledby')).toBe('tmRefToggle');
+        expect(h.$('tmRefToggle').textContent).toBe('Captured response');
+        // it sits directly before the body field
+        expect(h.$('tmRefField').nextElementSibling.id).toBe('tmBodyField');
+        // JSON is laid out for reading; the text is otherwise the capture's
+        expect(JSON.parse(box.value)).toEqual({ id: 1, name: 'Ann' });
+        expect(box.value).toContain('\n');
+    });
+
+    test('text that is not a JSON object is shown exactly as received', () => {
+        h = mount();
+        h.editor.open({ referenceBody: '  <html>hi</html>\n' });
+        expect(h.$('tmRefBody').value).toBe('  <html>hi</html>\n');
+        h.editor.close();
+        h.editor.open({ referenceBody: '42' });
+        expect(h.$('tmRefBody').value).toBe('42');
+    });
+
+    test('the toggle collapses and expands it, with aria-expanded kept true to what is on screen', () => {
+        h = mount();
+        h.editor.open({ referenceBody: 'abc' });
+        const toggle = h.$('tmRefToggle');
+        expect(toggle.getAttribute('aria-controls')).toBe('tmRefRegion');
+        expect(toggle.getAttribute('aria-expanded')).toBe('true');
+        expect(h.$('tmRefRegion').hidden).toBe(false);
+        toggle.click();
+        expect(toggle.getAttribute('aria-expanded')).toBe('false');
+        expect(h.$('tmRefRegion').hidden).toBe(true);
+        toggle.click();
+        expect(toggle.getAttribute('aria-expanded')).toBe('true');
+        expect(h.$('tmRefRegion').hidden).toBe(false);
+    });
+
+    test('it is only for mock rules, stays out of the rule, and does not dirty the form', () => {
+        h = mount();
+        h.editor.open({ referenceBody: '{"a":1}' });
+        h.set('tmType', 'delay');
+        expect(shownPanel()).toBe(false);
+        h.set('tmType', 'mock');
+        expect(shownPanel()).toBe(true);
+        h.set('tmName', 'x');
+        h.set('tmUrl', '*/a*');
+        expect(JSON.stringify(h.editor.collect().rule)).not.toContain('Captured');
+        h.$('tmRefToggle').click();
+        h.editor.close();
+        h.editor.open({ referenceBody: 'z' });
+        document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        expect(h.editor.isOpen()).toBe(false); // untouched form: closes at once
+    });
+
+    test('it is gone when the editor is opened again without one, and starts expanded again with one', () => {
+        h = mount();
+        h.editor.open({ referenceBody: 'one' });
+        h.$('tmRefToggle').click();
+        h.editor.close();
+        h.editor.open({});
+        expect(h.$('tmRefField').style.display).toBe('none');
+        expect(h.$('tmRefBody').value).toBe('');
+        h.editor.close();
+        h.editor.open({ referenceBody: 'two' });
+        expect(h.$('tmRefBody').value).toBe('two');
+        expect(h.$('tmRefToggle').getAttribute('aria-expanded')).toBe('true');
+    });
+
+    test('an object is accepted, and a huge body is cut with a note saying so', () => {
+        h = mount();
+        h.editor.open({ referenceBody: { a: [1, 2] } });
+        expect(JSON.parse(h.$('tmRefBody').value)).toEqual({ a: [1, 2] });
+        h.editor.close();
+        h.editor.open({ referenceBody: 'x'.repeat(150000) });
+        expect(h.$('tmRefBody').value.length).toBe(100000);
+        expect(h.$('tmRefHint').textContent).toMatch(/first 100,000 of 150,000 characters/);
+    });
+});

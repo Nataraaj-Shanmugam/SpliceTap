@@ -373,6 +373,93 @@ describe.each(HOSTS)('B2 editor fields — %s host', (hostKind) => {
     });
 });
 
+describe('PER-60 captured response panel (overlay host, as the popup opens it)', () => {
+    let h;
+    let page;
+
+    beforeAll(async () => { h = await launch(); });
+    afterAll(async () => { if (h) await h.close(); });
+    beforeEach(async () => { await h.reset(); });
+    afterEach(async () => { if (page && !page.isClosed()) await page.close({ runBeforeUnload: false }); page = null; });
+
+    async function openWithReference(referenceBody) {
+        page = await h.openPage();
+        await h.openOverlay(page, { mode: 'new', ...(referenceBody === undefined ? {} : { referenceBody }) });
+        await waitFor(() => ed.isOpen(page), { label: 'the editor to open' });
+        await sleep(150);
+    }
+
+    const panel = () => ed.inShadow(page, (root) => {
+        const field = root.getElementById('tmRefField');
+        const box = root.getElementById('tmRefBody');
+        const toggle = root.getElementById('tmRefToggle');
+        const cs = window.getComputedStyle(box);
+        return {
+            shown: field.offsetParent !== null,
+            value: box.value,
+            readOnly: box.readOnly,
+            expanded: toggle.getAttribute('aria-expanded'),
+            boxVisible: box.offsetParent !== null,
+            direction: cs.direction,
+            fontFamily: cs.fontFamily,
+            beforeBody: field.nextElementSibling.id
+        };
+    });
+
+    test('the body text from a capture shows in a read-only, monospace, left-to-right panel before the body field', async () => {
+        await openWithReference('{"id":7,"items":[1,2]}');
+        const p = await panel();
+        expect(p.shown).toBe(true);
+        expect(p.readOnly).toBe(true);
+        expect(JSON.parse(p.value)).toEqual({ id: 7, items: [1, 2] });
+        expect(p.direction).toBe('ltr');
+        expect(p.fontFamily).toMatch(/mono|Consolas|Menlo/i);
+        expect(p.beforeBody).toBe('tmBodyField');
+    });
+
+    test('it can be collapsed and expanded with the keyboard, and typing into it changes nothing', async () => {
+        await openWithReference('hello');
+        await ed.inShadow(page, (root) => root.getElementById('tmRefToggle').focus());
+        await page.keyboard.press('Enter');
+        expect((await panel()).expanded).toBe('false');
+        expect((await panel()).boxVisible).toBe(false);
+        await page.keyboard.press('Space');
+        expect((await panel()).expanded).toBe('true');
+        expect((await panel()).boxVisible).toBe(true);
+
+        await ed.inShadow(page, (root) => root.getElementById('tmRefBody').focus());
+        await page.keyboard.type('zzz');
+        expect((await panel()).value).toBe('hello');
+    });
+
+    test('with the patch field showing, the panel is still on screen beside it', async () => {
+        await openWithReference('{"a":1}');
+        await ed.fill(page, 'tmMode', 'patch');
+        const p = await panel();
+        expect(p.shown).toBe(true);
+        expect(p.beforeBody).toBe('tmBodyField');
+        expect(await ed.visibleFieldIds(page)).toContain('tmPatch');
+    });
+
+    test('there is no panel when the editor is opened without a capture', async () => {
+        await openWithReference(undefined);
+        expect((await panel()).shown).toBe(false);
+    });
+
+    test('a mock written beside the panel saves as an ordinary rule, without the capture in it', async () => {
+        await openWithReference('{"secret-ish":"CAPTURED-MARKER"}');
+        await ed.fill(page, 'tmName', 'From capture');
+        await ed.fill(page, 'tmUrl', '*/api/cap*');
+        await ed.fill(page, 'tmBody', '{"ok": true}');
+        await ed.click(page, 'tmSave');
+        const rules = await waitFor(async () => {
+            const r = (await h.bg({ type: 'getRules' })).rules;
+            return r.length === 1 ? r : null;
+        }, { label: 'the rule to save' });
+        expect(JSON.stringify(rules[0])).not.toContain('CAPTURED-MARKER');
+    });
+});
+
 describe('B2 editor fields — accessibility (options host, open shadow root)', () => {
     let h;
     let page;
@@ -420,6 +507,21 @@ describe('B2 editor fields — accessibility (options host, open shadow root)', 
         await waitFor(async () => ed.inShadow(page, (root) => /would handle/.test(root.getElementById('tmTryResult').textContent)), { label: 'the result' });
         await sleep(150);
         await audit('try box, with a result', violations);
+        expect(violations).toEqual([]);
+    });
+
+    test.each(['dark', 'light'])('the captured-response panel, expanded and collapsed, has no WCAG A/AA violations (%s)', async (theme) => {
+        await openOnOptionsPage(theme);
+        // The options host is never handed a capture; put the panel in the state
+        // setReference() leaves it in, so its markup and colours are audited.
+        await ed.inShadow(page, (root) => {
+            root.getElementById('tmRefField').style.display = '';
+            root.getElementById('tmRefBody').value = '{\n  "id": 1\n}';
+        });
+        const violations = [];
+        await audit('captured response, expanded', violations);
+        await ed.click(page, 'tmRefToggle');
+        await audit('captured response, collapsed', violations);
         expect(violations).toEqual([]);
     });
 

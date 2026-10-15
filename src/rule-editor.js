@@ -33,6 +33,11 @@
     const HOST_ID = 'splicetap-rule-overlay-host';
     const HINT_SEEN_KEY = 'tmOverlayHintSeen'; // U-13: one-time first-run tip
 
+    // PER-60: the most of a captured response the panel shows (the capture
+    // itself is already capped well below this; a stray huge string is not
+    // worth a huge textarea).
+    const REFERENCE_MAX = 100000;
+
     const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD', '*'];
 
     const RULE_TYPES = [
@@ -580,6 +585,27 @@
         .tm-more summary:focus-visible { outline: 2px solid #2f7dfa; outline-offset: 2px; }
         .tm-more[open] summary { margin-bottom: 8px; }
 
+        /* PER-60: the captured-response panel's toggle is a text button, not a
+           boxed one; the caret is CSS (decoration), the state is aria-expanded. */
+        .tm-ref-toggle {
+            align-self: flex-start;
+            display: inline-flex; align-items: center; gap: 6px;
+            background: transparent; border: none; cursor: pointer;
+            padding: 2px 4px; margin-left: -4px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 0.625em; font-weight: 600;
+            letter-spacing: 0.08em; text-transform: uppercase; line-height: 1.35;
+            color: #8b9ab3;
+        }
+        .tm-ref-toggle:hover { color: #e7eefb; }
+        .tm-ref-toggle:focus-visible { outline: 2px solid #2f7dfa; outline-offset: 2px; }
+        .tm-ref-caret::before { content: '\\25BE'; }
+        .tm-ref-toggle[aria-expanded="false"] .tm-ref-caret::before { content: '\\25B8'; }
+        .tm-ref-region { display: flex; flex-direction: column; gap: 5px; }
+        .tm-ref-region[hidden] { display: none; }
+        .tm-field textarea.tm-code[readonly] { cursor: text; }
+
         .tm-check {
             display: flex; align-items: center; gap: 8px;
             min-height: 24px;
@@ -674,6 +700,8 @@
         .tm-light .tm-try-ok { color: #15803d; }
         .tm-light .tm-try-no { color: #b91c1c; }
         .tm-light .tm-more summary { color: #5d6a80; }
+        .tm-light .tm-ref-toggle { color: #5d6a80; }
+        .tm-light .tm-ref-toggle:hover { color: #101828; }
         .tm-light .tm-field [aria-invalid="true"] { border-color: #b91c1c !important; }
         .tm-light .tm-check { color: #101828; }
         .tm-light .tm-x { color: #5d6a80; }
@@ -935,6 +963,19 @@
               <div class="tm-field" data-types="mock" id="tmResHeadersField">
                 <label for="tmResHeaders">Response Headers (JSON)</label>
                 <textarea id="tmResHeaders" rows="2">{"Content-Type": "application/json"}</textarea>
+              </div>
+
+              <!-- PER-60: the response a capture recorded, to copy from while
+                   writing the body or patch. Read-only and collapsible; shown
+                   only when the editor was opened with a referenceBody
+                   (inline display:none until then: the field's own display
+                   rule outranks [hidden]). -->
+              <div class="tm-field" data-types="mock" id="tmRefField" style="display:none">
+                <button type="button" class="tm-ref-toggle" id="tmRefToggle" aria-expanded="true" aria-controls="tmRefRegion"><span class="tm-ref-caret" aria-hidden="true"></span>Captured response</button>
+                <div id="tmRefRegion" class="tm-ref-region">
+                  <textarea id="tmRefBody" class="tm-code" rows="8" readonly dir="ltr" wrap="off" spellcheck="false" aria-labelledby="tmRefToggle" aria-describedby="tmRefHint"></textarea>
+                  <span class="tm-hint" id="tmRefHint">Read-only: what the page received when it was captured. Select and copy from it.</span>
+                </div>
               </div>
 
               <div class="tm-field" data-types="mock" id="tmBodyField">
@@ -1228,6 +1269,10 @@
             $('tmAppliesAll').addEventListener('change', () => applyTypeVisibility());
             $('tmCallMode').addEventListener('change', () => applyTypeVisibility());
             $('tmHintClose').addEventListener('click', dismissHint);
+            // PER-60: collapse / expand the captured response.
+            $('tmRefToggle').addEventListener('click', () => {
+                setReferenceOpen($('tmRefToggle').getAttribute('aria-expanded') !== 'true');
+            });
             // B2-F10: not a trusted-click matter like Save: it changes nothing.
             $('tmTryCheck').addEventListener('click', tryUrl);
             $('tmTryUrl').addEventListener('keydown', (e) => {
@@ -2097,6 +2142,45 @@
             }
         }
 
+        // ---- Captured response (PER-60) --------------------------------------
+
+        /**
+         * Show (or hide) the read-only panel with a captured response. A JSON
+         * object or array is laid out for reading; anything else is shown as
+         * received. A very large body is cut, and the panel says so.
+         */
+        function setReference(referenceBody) {
+            const field = $('tmRefField');
+            if (!field) return;
+            let text = typeof referenceBody === 'string' ? referenceBody
+                : (referenceBody !== undefined && referenceBody !== null ? JSON.stringify(referenceBody) : '');
+            if (!text) {
+                field.style.display = 'none';
+                $('tmRefBody').value = '';
+                return;
+            }
+            try {
+                const parsed = JSON.parse(text);
+                if (parsed !== null && typeof parsed === 'object') text = JSON.stringify(parsed, null, 2);
+            } catch (e) {
+                // not JSON: shown as received
+            }
+            let hint = 'Read-only: what the page received when it was captured. Select and copy from it.';
+            if (text.length > REFERENCE_MAX) {
+                hint += ` Showing the first ${REFERENCE_MAX.toLocaleString('en-US')} of ${text.length.toLocaleString('en-US')} characters.`;
+                text = text.slice(0, REFERENCE_MAX);
+            }
+            $('tmRefBody').value = text;
+            $('tmRefHint').textContent = hint;
+            setReferenceOpen(true);
+            field.style.display = '';
+        }
+
+        function setReferenceOpen(open) {
+            $('tmRefToggle').setAttribute('aria-expanded', String(open));
+            $('tmRefRegion').hidden = !open;
+        }
+
         function open(request = {}) {
             const isFreshOpen = !(hostEl && hostEl.isConnected);
 
@@ -2115,6 +2199,7 @@
             editingRule = request.rule || null;
             settings = null; // re-read below; never show last open's answer
             populate(editingRule, request.prefillUrl);
+            setReference(request.referenceBody); // PER-60
             // A11Y-7: populate() fires input/change events as it fills the
             // form; reset the dirty flags afterwards, or every editor would
             // open already considering itself modified.
