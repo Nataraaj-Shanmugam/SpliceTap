@@ -6,42 +6,19 @@
  * test fails and PARITY.md has to be updated with it, rather than drifting.
  */
 
-const { launch, waitFor, sleep } = require('./harness');
+const { launch, waitFor } = require('./harness');
 
 describe('documented limitations vs Requestly', () => {
     let h;
-    let page;
 
     beforeAll(async () => { h = await launch(); });
     afterAll(async () => { if (h) await h.close(); });
-    afterEach(async () => { if (page && !page.isClosed()) await page.close(); page = null; });
-
-    async function withRule(rule) {
-        await h.reset();
-        await h.saveRule(rule);
-        page = await h.openPage();
-        await sleep(300);
-    }
 
     // Lifted on 15 October 2026, so no longer pinned here: block/redirect now
     // reach scripts, images and pages (appliesTo 'all', tests/e2e/feat-network),
     // and request bodies can be modified (tests/e2e/feat-interceptor).
-
-    test('patch mode cannot change the status code of a real response', async () => {
-        // Requestly's Modify Response can override the status and keep the
-        // body. SpliceTap's patch mode always keeps the real status.
-        await withRule({
-            id: 'p', name: 'Patch', enabled: true, type: 'mock',
-            match: { url: '*/api/status-keep*', method: '*' },
-            response: { mode: 'patch', statusCode: 503, patch: { patched: true }, headers: {}, delay: 0 }
-        });
-        const r = await page.evaluate(async () => {
-            const res = await fetch('/api/status-keep');
-            return { status: res.status, body: await res.json() };
-        });
-        expect(r.status).toBe(200);
-        expect(r.body.patched).toBe(true);
-    });
+    // B2-F8: patch mode can now change the status code of a real response
+    // (response.patchStatus, tests/e2e/b2-interceptor).
 
     test('ran without errors', async () => {
         await waitFor(async () => true, { label: 'noop' });

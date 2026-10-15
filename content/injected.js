@@ -40,6 +40,7 @@
     const processDynamicResponse = sharedPlaceholders && sharedPlaceholders.processDynamicResponse;
     const jsonMergePatch = sharedPatch && sharedPatch.jsonMergePatch;
     const isPatchApplicable = sharedPatch && sharedPatch.isPatchApplicable;
+    const reasonPhrase = (sharedPatch && sharedPatch.reasonPhrase) || (() => ''); // B2-F8
 
     // PER-2: the built-ins this file applies to rule data, captured for the
     // same reason. A page that later replaced JSON.stringify or Array.isArray
@@ -92,6 +93,24 @@
     const NativeCustomEvent = CustomEvent;
     const customEventDetail = (Object.getOwnPropertyDescriptor(CustomEvent.prototype, 'detail') || {}).get;
     const consoleLog = console.log;
+
+    // B2-F7: the host of the page or frame making the requests, for a rule's
+    // `match.pageDomains`. Read once, here, before any page script runs; a
+    // document's host cannot change. An about:blank or srcdoc frame (or a
+    // blob: document) has no host of its own: it has its creator's origin,
+    // and so its creator's host — as its relay has its creator's rules.
+    const PAGE_HOST = (() => {
+        try {
+            const loc = window.location;
+            const host = loc && typeof loc.hostname === 'string' ? loc.hostname : '';
+            if (host) return host;
+            const origin = window.origin;
+            if (typeof origin === 'string' && origin !== '' && origin !== 'null') return new NativeURL(origin).hostname;
+            return loc && typeof loc.href === 'string' ? new NativeURL(loc.href).hostname : '';
+        } catch (e) {
+            return '';
+        }
+    })();
 
     const hasOwn = (object, key) => reflectApply(hasOwnProperty, object, [key]);
     const indexOf = (text, search) => reflectApply(stringIndexOf, text, [search]);
@@ -231,8 +250,14 @@
         _anyRuleUsesHeaders: false,
         _anyRuleUsesGraphQL: false,
         _hasRedirectRules: false,
-        _hasRequestBodyRules: false // F3
+        _hasRequestBodyRules: false, // F3
+        _anyRuleUsesPayload: false // B2-F7
     };
+
+    // PER-66: how many matching calls each rule with a call filter has seen,
+    // keyed by rule id, for this page's lifetime. Reset whenever the rule
+    // set changes (onSyncState). In this closure only: never on the page.
+    let callCounts = objectCreate(null);
 
     // Helper: Logging with debug mode check
     function log(msg, ...args) {
@@ -584,34 +609,42 @@
      * a host-scoped or full-URL pattern miss every relative call, which is
      * how most single-page apps call their own API.
      *
-     * Two scans keep findMatchingRule's first-match order exactly: the winner
-     * is whichever of the two hits comes first in the rule list.
+     * One scan, in which a rule matches if either URL form does, keeps
+     * findMatchingRule's first-match order exactly. (B2-F7: this was two
+     * scans, one per form, merged by list position. Equivalent, but a rule's
+     * call counter, PER-66, must see each call once.)
      *
      * `finder` (optional) is findMatchingRequestBodyRule for the F3 pass.
+     *
+     * PER-66: `counted` makes this scan the call's deciding one, which
+     * counts the call for every call-filtered rule it reaches. Each request
+     * has exactly one deciding scan per pass; XHR open()'s look-ahead is not
+     * one.
      */
-    function findRule(request, rawUrl, finder) {
+    function findRule(request, rawUrl, finder, counted) {
         const find = finder || findMatchingRule;
-        const rules = tmState.rules;
-        const hit = find(rules, matchRequest(request.url, request));
-        if (rawUrl === request.url) return hit;
-
-        const rawHit = find(rules, matchRequest(rawUrl, request));
-        if (!hit || !rawHit || hit === rawHit) return hit || rawHit;
-        for (let i = 0; i < rules.length; i++) {
-            if (rules[i] === hit) return hit;
-            if (rules[i] === rawHit) return rawHit;
-        }
-        return hit;
+        return find(tmState.rules, matchRequest(request, rawUrl, counted));
     }
 
     // Contract B: the request record the matcher reads, with no prototype.
-    function matchRequest(url, request) {
+    // B2-F7: with the frame's host, and fetch/XHR as the resource type.
+    function matchRequest(request, rawUrl, counted) {
         const record = objectCreate(null);
-        record.url = url;
+        record.url = request.url;
+        record.altUrl = rawUrl;
         record.method = request.method;
         record.headers = request.headers;
         record.bodyText = request.bodyText;
+        record.pageHost = PAGE_HOST;
+        record.resourceType = 'fetch-xhr';
+        if (counted) record.callCounts = callCounts; // PER-66
         return record;
+    }
+
+    /** PER-66: does this rule only apply to some of its calls? */
+    function hasCallFilter(rule) {
+        const match = rule && rule.match;
+        return !!(match && match.callFilter && typeof match.callFilter === 'object');
     }
 
     /**
@@ -627,8 +660,10 @@
             // F3: request-body rules are their own pass, not a contender.
             if (!rule || !rule.enabled || rule.type === 'requestBody') continue;
             const match = rule.match || EMPTY_RECORD;
+            // B2-F7: a payload condition needs the body as well. PER-66: and
+            // a call filter is decided by send()'s counted scan.
             const conditional = (match.headers && objectKeys(match.headers).length > 0) ||
-                (match.graphql && match.graphql.operationName);
+                (match.graphql && match.graphql.operationName) || match.payload || hasCallFilter(rule);
             if (!conditional) continue;
             const ruleMethod = upper(String(match.method || '*'));
             if (ruleMethod !== '*' && ruleMethod !== method) continue;
@@ -723,8 +758,22 @@
             // so a rule captured from one is faithful with an empty string.
             statusText: r.statusText !== undefined ? r.statusText : ((r.statusCode || 200) === 200 ? 'OK' : ''),
             headers: r.headers,
-            code: typeof r.code === 'string' ? r.code : '' // F4
+            code: typeof r.code === 'string' ? r.code : '', // F4
+            // B2-F8: patch mode's status override (200-599), or null to keep
+            // the real response's status.
+            patchStatus: Number.isInteger(r.patchStatus) && r.patchStatus >= 200 && r.patchStatus <= 599 ? r.patchStatus : null
         };
+    }
+
+    /**
+     * B2-F8: the status and reason phrase a patch-mode rule serves: its
+     * patchStatus with the phrase from SpliceTap's table, or the real ones.
+     */
+    function patchedStatus(cfg, real) {
+        const out = objectCreate(null);
+        out.status = cfg.patchStatus !== null ? cfg.patchStatus : real.status;
+        out.statusText = cfg.patchStatus !== null ? reasonPhrase(cfg.patchStatus) : real.statusText;
+        return out;
     }
 
     /**
@@ -1169,6 +1218,21 @@
             // Environment won't allow the override — keep the constructed values.
         }
         return response;
+    }
+
+    /**
+     * B2-F8: a real response a patch rule leaves unpatched (not JSON, an
+     * empty patch…) still has the rule's status override: the same
+     * response, unread, reporting that status.
+     */
+    function withServedStatus(real, cfg, served) {
+        if (cfg.patchStatus === null) return real;
+        return overrideResponse(real, {
+            __proto__: null,
+            status: served.status,
+            statusText: served.statusText,
+            ok: served.status >= 200 && served.status < 300
+        });
     }
 
     function absoluteHref(url) {
@@ -1644,11 +1708,12 @@
 
             // 3. Body text: only read it if some enabled rule needs graphql
             //    matching (perf: avoid consuming/reading the body otherwise).
+            //    B2-F7: or has a payload condition.
             let bodyText = null;
-            if (tmState._anyRuleUsesGraphQL) {
+            if (tmState._anyRuleUsesGraphQL || tmState._anyRuleUsesPayload) {
                 bodyText = await readBodyText(resource, config, isRequestObj);
                 if (bodyText === null) {
-                    log('A GraphQL-matching rule is configured but this request body could not be read as text', { url, method });
+                    log('A rule matches on the request body, but this request body could not be read as text', { url, method });
                 }
             }
 
@@ -1658,7 +1723,7 @@
             let bodyRule = null;
             let bodyNote = null;
             if (tmState._hasRequestBodyRules && method !== 'GET' && method !== 'HEAD' && !(config && config[REDIRECT_HOPS])) {
-                const candidate = findRule({ url, method, headers, bodyText }, rawUrl, findMatchingRequestBodyRule);
+                const candidate = findRule({ url, method, headers, bodyText }, rawUrl, findMatchingRequestBodyRule, true);
                 const rewritten = candidate && relayAlive()
                     ? await rewriteFetchBody(candidate, resource, config, isRequestObj, url, method)
                     : null;
@@ -1672,7 +1737,9 @@
                         config = args[1];
                         isRequestObj = false;
                         if (tmState._anyRuleUsesHeaders) headers = collectRequestHeaders(resource, config, false);
-                        if (tmState._anyRuleUsesGraphQL) bodyText = await readBodyText(resource, config, false);
+                        if (tmState._anyRuleUsesGraphQL || tmState._anyRuleUsesPayload) {
+                            bodyText = await readBodyText(resource, config, false);
+                        }
                     }
                 }
             }
@@ -1688,8 +1755,8 @@
         async function fetchMainPass(args, context) {
             const { startedAt, resource, config, isRequestObj, rawUrl, url, method, signal, headers, bodyText } = context;
 
-            // 4. Find matching rule
-            const rule = findRule({ url, method, headers, bodyText }, rawUrl);
+            // 4. Find matching rule (the counted scan, PER-66)
+            const rule = findRule({ url, method, headers, bodyText }, rawUrl, null, true);
             if (!rule || !relayAlive()) {
                 // Nothing to apply — but this is exactly the response worth
                 // capturing, since a rule for it does not exist yet.
@@ -1751,6 +1818,8 @@
 
             if (cfg.mode === 'patch') {
                 const real = await reflectApply(originalFetch, this, args);
+                // B2-F8: the status served, whatever happens to the body.
+                const served = patchedStatus(cfg, real);
 
                 // PER-18: only a JSON response is patched. Waiting for any
                 // other body held an event stream or NDJSON feed back until
@@ -1758,8 +1827,8 @@
                 // straight through, unread.
                 const skippedUnread = patchSkipBeforeReading(real, method);
                 if (skippedUnread) {
-                    logInterception(rule, url, method, real.status, { note: skippedUnread });
-                    return real;
+                    logInterception(rule, url, method, served.status, { note: skippedUnread });
+                    return withServedStatus(real, cfg, served);
                 }
 
                 let data;
@@ -1767,8 +1836,8 @@
                     data = await real.clone().json();
                 } catch (e) {
                     log('Patch mode: real response is not valid JSON, returning it unmodified', e);
-                    logInterception(rule, url, method, real.status, { note: PATCH_NOT_JSON_NOTE });
-                    return real;
+                    logInterception(rule, url, method, served.status, { note: PATCH_NOT_JSON_NOTE });
+                    return withServedStatus(real, cfg, served);
                 }
 
                 const patchPayload = renderPatch(cfg.patch, { url, method });
@@ -1776,8 +1845,8 @@
                 // the real one untouched (no markers) and says why in the log.
                 const skipped = patchSkipReason(data, patchPayload);
                 if (skipped) {
-                    logInterception(rule, url, method, real.status, { note: skipped });
-                    return real;
+                    logInterception(rule, url, method, served.status, { note: skipped });
+                    return withServedStatus(real, cfg, served);
                 }
                 const merged = jsonMergePatch(data, patchPayload);
 
@@ -1793,12 +1862,12 @@
                 mergedHeaders['x-splicetap-rule'] = ruleMarker(rule.name);
 
                 log(`Patched ${method} ${url} (Rule: ${rule.name})`);
-                logInterception(rule, url, method, real.status);
+                logInterception(rule, url, method, served.status);
 
                 // Q-28: a freshly constructed Response can't carry url,
                 // redirected or type, but patch mode is "the real response,
                 // plus a merge" — restore them from the real response.
-                return buildMockResponse(jsonStringify(toNullProto(merged)), real.status, real.statusText, mergedHeaders,
+                return buildMockResponse(jsonStringify(toNullProto(merged)), served.status, served.statusText, mergedHeaders,
                     { url: real.url, redirected: real.redirected, type: real.type });
             }
 
@@ -2405,13 +2474,15 @@
                 if (!real || stale()) return;
 
                 const realHeaders = responseHeaderRecord(real);
+                // B2-F8: the status served, whatever happens to the body.
+                const served = patchedStatus(cfg, real);
 
                 // PER-18: only JSON is patched. Anything else (an event
                 // stream, NDJSON) is delivered as it arrives, unchanged.
                 const skippedUnread = patchSkipBeforeReading(real, requestMethod);
                 if (skippedUnread) {
-                    logInterception(rule, requestAbsUrl, requestMethod, real.status, { note: skippedUnread });
-                    await deliverStreaming(real, realHeaders, stale);
+                    logInterception(rule, requestAbsUrl, requestMethod, served.status, { note: skippedUnread });
+                    await deliverStreaming(real, realHeaders, stale, served);
                     return;
                 }
 
@@ -2435,8 +2506,8 @@
                     // delivers the real one, and the log says why.
                     const skipped = patchSkipReason(data, patchPayload);
                     if (skipped) {
-                        logInterception(rule, requestAbsUrl, requestMethod, real.status, { note: skipped });
-                        finishMock(realText, real.status, real.statusText, realHeaders, rawBody, real.url);
+                        logInterception(rule, requestAbsUrl, requestMethod, served.status, { note: skipped });
+                        finishMock(realText, served.status, served.statusText, realHeaders, rawBody, real.url);
                         return;
                     }
                     mergedText = jsonStringify(toNullProto(jsonMergePatch(data, patchPayload)));
@@ -2444,8 +2515,8 @@
                     // Not JSON (or nothing to merge into): deliver the real
                     // response unchanged, as fetch does.
                     log('XHR patch mode: real response is not valid JSON, delivering it unmodified', error);
-                    logInterception(rule, requestAbsUrl, requestMethod, real.status, { note: PATCH_NOT_JSON_NOTE });
-                    finishMock(realText, real.status, real.statusText, realHeaders, rawBody, real.url);
+                    logInterception(rule, requestAbsUrl, requestMethod, served.status, { note: PATCH_NOT_JSON_NOTE });
+                    finishMock(realText, served.status, served.statusText, realHeaders, rawBody, real.url);
                     return;
                 }
 
@@ -2455,9 +2526,10 @@
                 mergedHeaders['x-splicetap-rule'] = ruleMarker(rule.name);
 
                 log(`Patched XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
-                logInterception(rule, requestAbsUrl, requestMethod, real.status);
+                logInterception(rule, requestAbsUrl, requestMethod, served.status);
 
-                finishMock(mergedText, real.status, real.statusText || 'OK', mergedHeaders, undefined, real.url);
+                finishMock(mergedText, served.status, cfg.patchStatus !== null ? served.statusText : (real.statusText || 'OK'),
+                    mergedHeaders, undefined, real.url);
             })();
         }
 
@@ -2499,9 +2571,13 @@
          * native XHR does — LOADING with the text so far and a progress
          * event per chunk — so a stream is not held back until it ends.
          */
-        async function deliverStreaming(real, headers, stale) {
+        // B2-F8: `served` (optional) is the status and reason phrase to
+        // report instead of the real ones.
+        async function deliverStreaming(real, headers, stale, served) {
+            const status = served ? served.status : real.status;
+            const statusText = served ? served.statusText : real.statusText;
             completeUpload();
-            advanceTo(2, real.status, real.statusText, headers);
+            advanceTo(2, status, statusText, headers);
             const responseType = xhr.responseType || '';
             const textual = responseType === '' || responseType === 'text';
             const total = Number(real.headers.get('content-length')) || 0;
@@ -2527,7 +2603,7 @@
                     chunks.push(step.value);
                     loaded += step.value.byteLength;
                     text += decoder.decode(step.value, { stream: true });
-                    advanceTo(3, real.status, real.statusText, headers);
+                    advanceTo(3, status, statusText, headers);
                     if (textual) {
                         setState('responseText', text);
                         setState('response', text);
@@ -2543,7 +2619,7 @@
                 raw.set(chunks[i], offset);
                 offset += chunks[i].byteLength;
             }
-            finishMock(text, real.status, real.statusText, headers, raw.buffer, real.url);
+            finishMock(text, status, statusText, headers, raw.buffer, real.url);
         }
 
         // Override open
@@ -2604,7 +2680,9 @@
                     url: requestAbsUrl, method: requestMethod, headers: EMPTY_HEADERS, bodyText: null
                 }, requestUrl);
 
-                if (first && (first.type || 'mock') === 'redirect' &&
+                // PER-66: a call-filtered redirect is decided by send(),
+                // which counts the call.
+                if (first && (first.type || 'mock') === 'redirect' && !hasCallFilter(first) &&
                     !conditionalRuleAhead(first, requestAbsUrl, requestUrl, requestMethod) &&
                     relayAlive()) {
                     const newUrl = computeRedirectUrl(requestAbsUrl, first, requestUrl);
@@ -2703,7 +2781,7 @@
             if (tmState._hasRequestBodyRules && requestMethod !== 'GET' && requestMethod !== 'HEAD') {
                 const bodyRule = findRule({
                     url: sourceAbsUrl, method: requestMethod, headers: requestHeaders, bodyText: xhrBodyText(body)
-                }, sourceUrl, findMatchingRequestBodyRule);
+                }, sourceUrl, findMatchingRequestBodyRule, true);
                 const rewritten = bodyRule && relayAlive()
                     ? rewriteRequestBody(bodyRule, body, { __proto__: null, url: sourceAbsUrl, method: requestMethod })
                     : null;
@@ -2741,7 +2819,7 @@
                 method: requestMethod,
                 headers: requestHeaders,
                 bodyText
-            }, requestUrl);
+            }, requestUrl, null, true); // the counted scan (PER-66)
 
             if (!rule || !relayAlive()) {
                 // No rule applies, so this response is a capture candidate.
@@ -2940,8 +3018,12 @@
         // iterator for the matcher's for...of.
         const rules = ownValue(payload, 'rules');
         const settings = ownValue(payload, 'settings');
+        const previousRules = tmState.rules;
         tmState.active = ownValue(payload, 'active') !== false;
         tmState.rules = toNullProto(isArray(rules) ? rules : [], true);
+        // PER-66: a changed rule set starts every call count again. A sync
+        // for anything else (a setting, capture, a hit count) keeps them.
+        if (!sameRuleSet(previousRules, tmState.rules)) callCounts = objectCreate(null);
         tmState.settings = settings && typeof settings === 'object' ? toNullProto(settings, true) : objectCreate(null);
 
         // Recompute derived flags once per sync rather than per request.
@@ -2951,12 +3033,14 @@
         let usesGraphQL = false;
         let hasRedirect = false;
         let hasRequestBody = false;
+        let usesPayload = false;
         const synced = tmState.rules;
         for (let i = 0; i < synced.length; i++) {
             const r = synced[i];
             if (!r || !r.enabled) continue;
             if (r.match && r.match.headers && objectKeys(r.match.headers).length > 0) usesHeaders = true;
             if (r.match && r.match.graphql && r.match.graphql.operationName) usesGraphQL = true;
+            if (r.match && r.match.payload) usesPayload = true; // B2-F7
             if ((r.type || 'mock') === 'redirect') hasRedirect = true;
             if (r.type === 'requestBody') hasRequestBody = true;
         }
@@ -2964,6 +3048,7 @@
         tmState._anyRuleUsesGraphQL = usesGraphQL;
         tmState._hasRedirectRules = hasRedirect;
         tmState._hasRequestBodyRules = hasRequestBody && typeof findMatchingRequestBodyRule === 'function';
+        tmState._anyRuleUsesPayload = usesPayload;
 
         if (tmState.settings.debugMode) {
             log('State synced:', {
@@ -2972,6 +3057,38 @@
                 settings: tmState.settings
             });
         }
+    }
+
+    /**
+     * PER-66: the same data, compared through own enumerable keys only (the
+     * synced copies are null-prototype). Recursion is bounded by the copy's
+     * own depth limit.
+     */
+    function sameData(a, b, ignoreKey) {
+        if (a === b) return true;
+        if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+        if (isArray(a) !== isArray(b)) return false;
+        const keysA = objectKeys(a);
+        const keysB = objectKeys(b);
+        let countA = 0;
+        let countB = 0;
+        for (let i = 0; i < keysB.length; i++) if (keysB[i] !== ignoreKey) countB++;
+        for (let i = 0; i < keysA.length; i++) {
+            const key = keysA[i];
+            if (key === ignoreKey) continue;
+            countA++;
+            if (!hasOwn(b, key) || !sameData(a[key], b[key])) return false;
+        }
+        return countA === countB;
+    }
+
+    /** PER-66: the same rules, in the same order, hit counts aside. */
+    function sameRuleSet(previous, next) {
+        if (!isArray(previous) || !isArray(next) || previous.length !== next.length) return false;
+        for (let i = 0; i < next.length; i++) {
+            if (!sameData(previous[i], next[i], 'hitCount')) return false;
+        }
+        return true;
     }
 
     // One-shot handshake: the relay hands over this frame's nonce, we bind the
@@ -3010,6 +3127,8 @@
         tmState._anyRuleUsesGraphQL = false;
         tmState._hasRedirectRules = false;
         tmState._hasRequestBodyRules = false;
+        tmState._anyRuleUsesPayload = false;
+        callCounts = objectCreate(null);
         document.removeEventListener(SYNC_STATE_EVENT, onSyncState, true);
         log('Extension context gone; interception stopped for this page');
     }

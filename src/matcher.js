@@ -90,6 +90,13 @@
     function listAddUnique(list, value) {
         if (!listIncludes(list, value)) listPush(list, value);
     }
+    function listOf(values) {
+        const list = newList();
+        for (let i = 0; i < values.length; i++) listPush(list, values[i]);
+        return list;
+    }
+    // B2-F7: a rule without a `match` block reads its conditions from here.
+    const EMPTY_MATCH = objectCreate(null);
     function nullProtoTable(entries) {
         const table = objectCreate(null);
         const keys = objectKeys(entries);
@@ -671,10 +678,158 @@
         return regexExec(regex, request.unparsed) !== null;
     }
 
+    // B2-F7: a host as compared: lowercase, without the trailing dot of a
+    // fully qualified name ('example.com.').
+    function normalizeHost(host) {
+        const lowered = stringToLowerCase(NativeString(host));
+        return stringEndsWith(lowered, '.') ? stringSlice(lowered, 0, -1) : lowered;
+    }
+
+    // B2-F7: does `host` fall under `domain` — the name itself or a
+    // subdomain of it, as DNR's initiatorDomains reads it.
+    function hostWithin(host, domain) {
+        const name = normalizeHost(domain);
+        if (name === '' || host === '') return false;
+        return host === name || stringEndsWith(host, '.' + name);
+    }
+
+    /**
+     * B2-F7: `match.pageDomains` against the host of the page (or frame) that
+     * makes the request. No list (or an empty one) is no condition. An
+     * unknown host — a caller that names no page — matches no list: the rule
+     * only runs on those pages, and nothing says this is one.
+     */
+    function matchPageDomains(pageHost, domains) {
+        if (!isArray(domains) || domains.length === 0) return true;
+        if (typeof pageHost !== 'string') return false;
+        const host = normalizeHost(pageHost);
+        for (let i = 0; i < domains.length; i++) {
+            if (typeof domains[i] === 'string' && hostWithin(host, domains[i])) return true;
+        }
+        return false;
+    }
+
+    // B2-F7: what a rule reaches when it has no `match.resourceTypes`.
+    const FETCH_XHR = 'fetch-xhr';
+    const RESOURCE_TYPES = listOf([FETCH_XHR, 'document', 'subdocument', 'script', 'stylesheet', 'image', 'font',
+        'media', 'websocket', 'ping', 'other']);
+    const API_RESOURCE_TYPES = listOf([FETCH_XHR, 'other']);
+    const PAGE_RESOURCE_TYPES = listOf([FETCH_XHR]);
+    const NETWORK_RULE_TYPES = new Set(['headers', 'queryparams']);
+
+    function isAllRequestsRule(rule) {
+        const type = own(rule, 'type') || 'mock';
+        return (type === 'block' || type === 'redirect') && own(rule, 'appliesTo') === 'all';
+    }
+
+    /**
+     * B2-F7: the resource types a rule applies to. Its own list when it has
+     * one; otherwise every type for an appliesTo:'all' block or redirect,
+     * fetch/XHR plus 'other' for headers and query-parameter rules, and
+     * fetch/XHR alone for everything the in-page interceptor runs.
+     */
+    function ruleResourceTypes(rule) {
+        const match = own(rule, 'match');
+        const listed = match && typeof match === 'object' ? own(match, 'resourceTypes') : undefined;
+        if (isArray(listed) && listed.length > 0) return listed;
+        if (isAllRequestsRule(rule)) return RESOURCE_TYPES;
+        return setHas(NETWORK_RULE_TYPES, own(rule, 'type')) ? API_RESOURCE_TYPES : PAGE_RESOURCE_TYPES;
+    }
+
+    function matchResourceType(rule, resourceType) {
+        return listIncludes(ruleResourceTypes(rule), resourceType || FETCH_XHR);
+    }
+
+    // B2-F7: the JSON request body, parsed once per request (see the
+    // GraphQL memo). `ok` is false for a body that is absent or not JSON.
+    function parsedBody(bodyText, memo) {
+        let parsed = memo ? own(memo, 'json') : undefined;
+        if (parsed) return parsed;
+        parsed = objectCreate(null);
+        parsed.ok = false;
+        if (typeof bodyText === 'string' && bodyText !== '') {
+            try {
+                parsed.value = jsonParse(bodyText);
+                parsed.ok = true;
+            } catch (error) {
+                // Not JSON: a payload condition never matches it.
+            }
+        }
+        if (memo) {
+            objectDefineProperty(memo, 'json', { __proto__: null, value: parsed, writable: true, enumerable: true, configurable: true });
+        }
+        return parsed;
+    }
+
+    /**
+     * B2-F7: the value at a dot path ('user.id', 'items.0.sku') in parsed
+     * JSON. Own properties only, so a key the body lacks never reaches a
+     * getter the page put on Object.prototype (the key is rule data).
+     * `found` is false when the path leaves the body.
+     */
+    function valueAtPath(value, path) {
+        const result = objectCreate(null);
+        result.found = false;
+        if (typeof path !== 'string' || path === '') return result;
+        const segments = splitOn(path, '.');
+        let current = value;
+        for (let i = 0; i < segments.length; i++) {
+            if (current === null || typeof current !== 'object' || !hasOwnProperty(current, segments[i])) return result;
+            current = current[segments[i]];
+        }
+        result.found = true;
+        result.value = current;
+        return result;
+    }
+
+    // B2-F7: String(value) for parsed JSON, without the toString and join
+    // lookups String() makes on an object or array (page-hookable).
+    function jsonValueText(value) {
+        if (value === null) return 'null';
+        if (typeof value !== 'object') return NativeString(value);
+        if (!isArray(value)) return '[object Object]';
+        let out = '';
+        for (let i = 0; i < value.length; i++) {
+            if (i > 0) out += ',';
+            const item = value[i];
+            if (item !== null && item !== undefined) out += jsonValueText(item);
+        }
+        return out;
+    }
+
+    function payloadCompare(actual, operator, expected) {
+        if (operator === 'equals') return actual === expected;
+        if (operator === 'contains') return stringIncludes(actual, expected);
+        return false;
+    }
+
+    /**
+     * B2-F7: `match.payload` ({ path, operator, value }) against the JSON
+     * request body: String(value at path) equals, or contains, `value`. A
+     * body that is absent or not JSON, or lacks the path, never matches.
+     * Absent payload -> true. `memo` as for matchGraphQL.
+     */
+    function matchPayload(bodyText, payload, memo) {
+        if (!payload || typeof payload !== 'object') return true;
+        const body = parsedBody(bodyText, memo);
+        if (!body.ok) return false;
+        const at = valueAtPath(body.value, own(payload, 'path'));
+        if (!at.found) return false;
+        const expected = own(payload, 'value');
+        return payloadCompare(jsonValueText(at.value), own(payload, 'operator'),
+            expected === undefined || expected === null ? '' : NativeString(expected));
+    }
+
     /**
      * Find the first enabled, interceptor-handled rule (array order) whose
      * url + method + headers + graphql conditions all match. Method '*'
      * matches any method.
+     *
+     * B2-F7: and whose page domains, resource types and payload condition
+     * match too. The request may carry `pageHost` (the requesting frame's
+     * host), `resourceType` (default 'fetch-xhr') and `altUrl`, the URL as
+     * the page wrote it: a rule matches if either URL form does (PER-8), in
+     * one scan.
      */
     function findMatchingRule(rules, request) {
         return findFirstMatch(rules, request, false);
@@ -690,10 +845,56 @@
         return findFirstMatch(rules, request, true);
     }
 
+    /**
+     * PER-66: `match.callFilter` ({ mode: 'first'|'after'|'every', n }) —
+     * does this call, the rule's n-th matching one, qualify? `first` applies
+     * to calls 1..n, `after` skips them, `every` applies to n, 2n, 3n… A
+     * missing or malformed filter always qualifies.
+     */
+    function callQualifies(filter, nth) {
+        if (!filter || typeof filter !== 'object') return true;
+        const n = own(filter, 'n');
+        if (typeof n !== 'number' || !(n >= 1)) return true;
+        const mode = own(filter, 'mode');
+        if (mode === 'first') return nth <= n;
+        if (mode === 'after') return nth > n;
+        if (mode === 'every') return nth % n === 0;
+        return true;
+    }
+
+    /**
+     * PER-66: record one more matching call for a rule with a call filter, in
+     * the caller's counter store (a null-prototype object, keyed by rule id),
+     * and say whether it qualifies. Only a caller that passes `callCounts`
+     * counts; one that does not (the service worker, a pre-scan) judges a
+     * filtered rule by its conditions alone. A call that does not qualify
+     * falls through to later rules.
+     */
+    function countCall(callCounts, rule, index, filter) {
+        if (!filter || typeof filter !== 'object') return true;
+        const id = own(rule, 'id');
+        const key = typeof id === 'string' ? 'id:' + id : 'index:' + index;
+        const nth = (callCounts[key] || 0) + 1;
+        callCounts[key] = nth;
+        return callQualifies(filter, nth);
+    }
+
     // `requestBodyPass`: requestBody rules only (F3), else the main-pass types.
     function findFirstMatch(rules, request, requestBodyPass) {
         if (!isArray(rules)) return null;
-        const { url, method, headers, bodyText } = request || {};
+        const record = request && typeof request === 'object' ? request : objectCreate(null);
+        const url = own(record, 'url');
+        const method = own(record, 'method');
+        const headers = own(record, 'headers');
+        const bodyText = own(record, 'bodyText');
+        // B2-F7: see findMatchingRule.
+        const pageHost = own(record, 'pageHost');
+        const resourceType = own(record, 'resourceType') || FETCH_XHR;
+        const rawAltUrl = own(record, 'altUrl');
+        const altUrl = typeof rawAltUrl === 'string' && rawAltUrl !== url ? rawAltUrl : null;
+        // PER-66: see countCall.
+        const rawCounts = own(record, 'callCounts');
+        const callCounts = rawCounts && typeof rawCounts === 'object' ? rawCounts : null;
 
         // PER-36: keep every pattern of this rule set cached (see the cache).
         patternCacheMax = mathMax(PATTERN_CACHE_MIN, rules.length);
@@ -704,6 +905,7 @@
         const requestMethod = stringToUpperCase(NativeString(method || ''));
 
         // PER-38: filled by the first GraphQL rule that gets this far.
+        // B2-F7: and the parsed body, by the first payload rule.
         const graphqlMemo = objectCreate(null);
 
         // PER-2: an index loop (for...of asks the rule list for its iterator)
@@ -716,13 +918,19 @@
             const type = own(rule, 'type') || 'mock';
             if (requestBodyPass ? type !== REQUEST_BODY_TYPE : !setHas(INTERCEPTOR_TYPES, type)) continue;
 
-            const match = own(rule, 'match') || {};
+            const match = own(rule, 'match') || EMPTY_MATCH;
             const ruleMethod = stringToUpperCase(own(match, 'method') || '*');
             if (ruleMethod !== '*' && requestMethod !== ruleMethod) continue;
 
-            if (!matchUrl(url, own(match, 'url'))) continue;
+            const pattern = own(match, 'url');
+            if (!matchUrl(url, pattern) && !(altUrl !== null && matchUrl(altUrl, pattern))) continue;
+            if (!matchPageDomains(pageHost, own(match, 'pageDomains'))) continue;
+            if (!matchResourceType(rule, resourceType)) continue;
             if (!matchHeaders(headers, own(match, 'headers'))) continue;
             if (!matchGraphQL(bodyText, own(match, 'graphql'), url, graphqlMemo)) continue;
+            if (!matchPayload(bodyText, own(match, 'payload'), graphqlMemo)) continue;
+            // PER-66: counted only here, once every condition holds.
+            if (callCounts !== null && !countCall(callCounts, rule, i, own(match, 'callFilter'))) continue;
 
             return rule;
         }
@@ -730,10 +938,241 @@
         return null;
     }
 
+    // --- B2-F10: why a rule does or does not match a request -----------------
+    //
+    // For the "Try a URL" box and shadowing warnings (the service worker's
+    // explainMatch and the editors). Never called on the page's request path.
+
+    const DETAIL_TEXT_MAX = 60;
+
+    // Text from a rule or request, quoted into a detail and kept short.
+    function shown(text) {
+        const value = NativeString(text);
+        return value.length > DETAIL_TEXT_MAX ? stringSlice(value, 0, DETAIL_TEXT_MAX - 1) + '…' : value;
+    }
+    function quoted(text) {
+        return '"' + shown(text) + '"';
+    }
+
+    // 'a', 'a or b', 'a, b or c'.
+    function orList(items) {
+        let out = '';
+        for (let i = 0; i < items.length; i++) {
+            if (i > 0) out += i === items.length - 1 ? ' or ' : ', ';
+            out += items[i];
+        }
+        return out;
+    }
+
+    const RESOURCE_TYPE_LABELS = nullProtoTable({
+        'fetch-xhr': 'fetch/XHR calls', document: 'pages', subdocument: 'frames', script: 'scripts',
+        stylesheet: 'stylesheets', image: 'images', font: 'fonts', media: 'media', websocket: 'WebSockets',
+        ping: 'pings and beacons', other: 'other requests'
+    });
+    function resourceTypeLabel(type) {
+        return RESOURCE_TYPE_LABELS[type] || quoted(type);
+    }
+
+    function check(condition, ok, detail) {
+        return { condition, ok, detail };
+    }
+
+    // How a URL pattern is read (see compilePattern).
+    function patternKind(pattern) {
+        if (stringStartsWith(pattern, '/') && stringEndsWith(pattern, '/')) return 'regex';
+        return stringIncludes(pattern, '*') ? 'wildcard' : 'substring';
+    }
+
+    // The URL as a same-site page usually writes it: its path, query and
+    // fragment. In the page a rule also matches that form (PER-8).
+    function relativeForm(url) {
+        const scheme = regexExec(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, url);
+        if (!scheme) return null;
+        const rest = stringSlice(url, scheme[0].length);
+        return rest === '' ? '/' : rest;
+    }
+
+    function explainUrl(pattern, url, rawUrl) {
+        if (typeof pattern !== 'string' || pattern === '') {
+            return check('url', false, 'This rule has no URL pattern, so it matches nothing.');
+        }
+        if (typeof url !== 'string' || url === '') return check('url', false, 'No URL was given to test.');
+        const kind = patternKind(pattern);
+        if (compilePattern(pattern).kind === 'never') {
+            return check('url', false, `The pattern ${shown(pattern)} is not a usable regular expression (invalid, empty or too slow to run safely), so it matches nothing.`);
+        }
+        const what = kind === 'regex' ? `the regular expression ${shown(pattern)}`
+            : kind === 'wildcard' ? `the wildcard pattern ${quoted(pattern)}` : null;
+        if (matchUrl(url, pattern)) {
+            return check('url', true, what ? `The URL matches ${what}.` : `The URL contains ${quoted(pattern)}.`);
+        }
+        const alternative = typeof rawUrl === 'string' && rawUrl !== '' ? rawUrl : relativeForm(url);
+        if (alternative !== null && alternative !== url && matchUrl(alternative, pattern)) {
+            return check('url', true, `The URL as a relative path (${quoted(alternative)}) matches ${what || quoted(pattern)}, as when the page calls it that way.`);
+        }
+        return check('url', false, what ? `The URL does not match ${what}.` : `The URL does not contain ${quoted(pattern)}.`);
+    }
+
+    function explainMethod(ruleMethod, method) {
+        const wanted = stringToUpperCase(NativeString(ruleMethod || '*'));
+        const actual = stringToUpperCase(NativeString(method || 'GET'));
+        if (wanted === '*') return check('method', true, 'Any method matches.');
+        if (wanted === actual) return check('method', true, `The method is ${shown(actual)}.`);
+        return check('method', false, `The rule needs ${shown(wanted)}, but this request is ${shown(actual)}.`);
+    }
+
+    function explainHeaders(requestHeaders, ruleHeaders) {
+        const names = objectKeys(ruleHeaders);
+        const request = objectCreate(null);
+        if (requestHeaders && typeof requestHeaders === 'object') {
+            const keys = objectKeys(requestHeaders);
+            for (let i = 0; i < keys.length; i++) request[stringToLowerCase(keys[i])] = requestHeaders[keys[i]];
+        }
+        for (let i = 0; i < names.length; i++) {
+            const expected = NativeString(ruleHeaders[names[i]]);
+            const actual = request[stringToLowerCase(names[i])];
+            if (actual === undefined || actual === null) {
+                return check('headers', false, `The request has no ${quoted(names[i])} header.`);
+            }
+            if (!stringIncludes(stringToLowerCase(NativeString(actual)), stringToLowerCase(expected))) {
+                return check('headers', false, `The ${quoted(names[i])} header does not contain ${quoted(expected)}.`);
+            }
+        }
+        return check('headers', true, names.length === 1
+            ? `The ${quoted(names[0])} header contains ${quoted(ruleHeaders[names[0]])}.`
+            : `All ${names.length} header conditions match.`);
+    }
+
+    function explainGraphQL(bodyText, url, wanted) {
+        if (matchGraphQL(bodyText, { operationName: wanted }, url)) {
+            return check('graphql', true, `The GraphQL operation is ${quoted(wanted)}.`);
+        }
+        const found = newList();
+        const names = readGraphQLRequest(bodyText, url).names;
+        names.forEach((name) => { if (found.length < 3) listPush(found, quoted(name)); });
+        if (found.length > 0) {
+            return check('graphql', false, `The GraphQL operation is ${orList(found)}, not ${quoted(wanted)}.`);
+        }
+        return check('graphql', false, typeof bodyText === 'string' && bodyText !== ''
+            ? `The request names no GraphQL operation; the rule needs ${quoted(wanted)}.`
+            : `No request body was given, so the GraphQL operation ${quoted(wanted)} cannot be found.`);
+    }
+
+    function explainPageDomains(pageHost, domains) {
+        const listed = newList();
+        for (let i = 0; i < domains.length && listed.length < 5; i++) listPush(listed, shown(domains[i]));
+        if (domains.length > 5) listPush(listed, `${domains.length - 5} more`);
+        const where = orList(listed);
+        if (typeof pageHost !== 'string') {
+            return check('pageDomains', false, `No page was given; this rule only runs on pages on ${where}.`);
+        }
+        const host = normalizeHost(pageHost);
+        if (host === '') return check('pageDomains', false, `The page has no host name; this rule only runs on pages on ${where}.`);
+        for (let i = 0; i < domains.length; i++) {
+            if (typeof domains[i] !== 'string' || !hostWithin(host, domains[i])) continue;
+            const domain = normalizeHost(domains[i]);
+            return check('pageDomains', true, host === domain
+                ? `The page is on ${shown(host)}.`
+                : `The page is on ${shown(host)}, within ${shown(domain)}.`);
+        }
+        return check('pageDomains', false, `The page is on ${shown(host)}, not on ${where}.`);
+    }
+
+    function explainResourceType(rule, resourceType) {
+        const type = resourceType || FETCH_XHR;
+        const types = ruleResourceTypes(rule);
+        if (types === RESOURCE_TYPES) return check('resourceTypes', true, 'This rule applies to every kind of request.');
+        const labels = newList();
+        for (let i = 0; i < types.length; i++) listPush(labels, resourceTypeLabel(types[i]));
+        const covered = labels.length === 1 ? labels[0] : orList(labels);
+        return listIncludes(types, type)
+            ? check('resourceTypes', true, `The rule covers ${resourceTypeLabel(type)}.`)
+            : check('resourceTypes', false, `The rule covers ${covered}, not ${resourceTypeLabel(type)}.`);
+    }
+
+    function explainPayload(bodyText, payload) {
+        const path = own(payload, 'path');
+        const operator = own(payload, 'operator');
+        const rawExpected = own(payload, 'value');
+        const expected = rawExpected === undefined || rawExpected === null ? '' : NativeString(rawExpected);
+        if (operator !== 'equals' && operator !== 'contains') {
+            return check('payload', false, `The payload operator ${quoted(operator)} is not one SpliceTap knows.`);
+        }
+        const needs = `${shown(path)} ${operator === 'equals' ? 'to equal' : 'to contain'} ${quoted(expected)}`;
+        if (typeof bodyText !== 'string' || bodyText === '') {
+            return check('payload', false, `No request body was given; the rule needs ${needs}.`);
+        }
+        const body = parsedBody(bodyText, null);
+        if (!body.ok) return check('payload', false, 'The request body is not JSON, so the payload condition cannot match.');
+        const at = valueAtPath(body.value, path);
+        if (!at.found) return check('payload', false, `The body has no ${quoted(path)}.`);
+        const actual = jsonValueText(at.value);
+        const ok = payloadCompare(actual, operator, expected);
+        if (operator === 'equals') {
+            return check('payload', ok, ok
+                ? `The body's ${shown(path)} is ${quoted(actual)}.`
+                : `The body's ${shown(path)} is ${quoted(actual)}, not ${quoted(expected)}.`);
+        }
+        return check('payload', ok, ok
+            ? `The body's ${shown(path)} (${quoted(actual)}) contains ${quoted(expected)}.`
+            : `The body's ${shown(path)} (${quoted(actual)}) does not contain ${quoted(expected)}.`);
+    }
+
+    /**
+     * B2-F10: does `rule` match `req`, condition by condition?
+     * `req` = { url, method, headers, bodyText, pageHost, resourceType }
+     * (and optionally `rawUrl`, the URL as the page wrote it). Returns
+     * { matches, checks: [{ condition, ok, detail }] }, `detail` a short
+     * plain-English sentence. url and method are always checked; headers,
+     * graphql, pageDomains and payload when the rule has them; resourceTypes
+     * when the rule lists some or `req` names one. Whether the rule is
+     * enabled, its type's pass and a call filter (PER-66) are not judged.
+     */
+    function explainRuleMatch(rule, req) {
+        const request = req && typeof req === 'object' ? req : objectCreate(null);
+        const ruleObject = rule && typeof rule === 'object' ? rule : objectCreate(null);
+        const matchBlock = own(ruleObject, 'match');
+        const match = matchBlock && typeof matchBlock === 'object' ? matchBlock : EMPTY_MATCH;
+        const url = own(request, 'url');
+        const bodyText = own(request, 'bodyText');
+        const checks = [];
+
+        checks[checks.length] = explainUrl(own(match, 'url'), url, own(request, 'rawUrl'));
+        checks[checks.length] = explainMethod(own(match, 'method'), own(request, 'method'));
+
+        const headers = own(match, 'headers');
+        if (headers && typeof headers === 'object' && objectKeys(headers).length > 0) {
+            checks[checks.length] = explainHeaders(own(request, 'headers'), headers);
+        }
+        const graphql = own(match, 'graphql');
+        const operationName = graphql && typeof graphql === 'object' ? own(graphql, 'operationName') : undefined;
+        if (operationName) checks[checks.length] = explainGraphQL(bodyText, url, operationName);
+
+        const domains = own(match, 'pageDomains');
+        if (isArray(domains) && domains.length > 0) checks[checks.length] = explainPageDomains(own(request, 'pageHost'), domains);
+
+        const listed = own(match, 'resourceTypes');
+        const resourceType = own(request, 'resourceType');
+        if ((isArray(listed) && listed.length > 0) || resourceType) {
+            checks[checks.length] = explainResourceType(ruleObject, resourceType);
+        }
+
+        const payload = own(match, 'payload');
+        if (payload && typeof payload === 'object') checks[checks.length] = explainPayload(bodyText, payload);
+
+        let matches = true;
+        for (let i = 0; i < checks.length; i++) if (!checks[i].ok) matches = false;
+        return { matches, checks };
+    }
+
     // isCatastrophicRegex is exported so the save-time validator and the
     // redirect path guard against the same thing this matcher does, rather
     // than each re-deriving (or, as before, omitting) the check.
-    const api = { matchUrl, matchHeaders, matchGraphQL, findMatchingRule, findMatchingRequestBodyRule, isCatastrophicRegex };
+    const api = {
+        matchUrl, matchHeaders, matchGraphQL, findMatchingRule, findMatchingRequestBodyRule, isCatastrophicRegex,
+        matchPageDomains, matchPayload, // B2-F7
+        explainRuleMatch // B2-F10
+    };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
