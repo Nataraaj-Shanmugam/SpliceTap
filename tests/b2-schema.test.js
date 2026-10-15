@@ -11,6 +11,8 @@
  */
 
 const S = require('../src/rule-schema');
+const templates = require('../src/templates');
+const { matchUrl } = require('../src/matcher');
 
 const URL_MATCH = { url: '*/api/x*', method: 'POST' };
 const mk = (type, extra = {}, match = {}) => ({
@@ -522,5 +524,101 @@ describe('B2-PER-66 match.callFilter', () => {
         expect(S.validateCallFilter(filter())).toEqual({ valid: true, errors: [] });
         expect(S.validateCallFilter({}).valid).toBe(false);
         expect(S.LIMITS).toMatchObject({ CALL_FILTER_N_MIN: 1, CALL_FILTER_N_MAX: 1000 });
+    });
+});
+
+// -- F11 ----------------------------------------------------------------
+
+describe('B2-F11 User-Agent preset templates', () => {
+    const PRESETS = [
+        { id: 'userAgentIphone', label: 'User-Agent: iPhone (Safari)' },
+        { id: 'userAgentAndroid', label: 'User-Agent: Android (Chrome)' },
+        { id: 'userAgentGooglebot', label: 'User-Agent: Googlebot' }
+    ];
+    const listed = templates.listTemplates();
+
+    // The rule an editor saves from a template's flat fields.
+    const asRule = (id) => {
+        const t = templates.getTemplate(id);
+        return {
+            name: id, enabled: true, type: t.type,
+            match: { url: t.url, method: t.method },
+            headersMod: { request: t.headersModRequest || [], response: t.headersModResponse || [] }
+        };
+    };
+    const userAgentOf = (id) => templates.getTemplate(id).headersModRequest[0].value;
+
+    test('the three presets are listed with the labels from the contract, each with a description', () => {
+        for (const preset of PRESETS) {
+            expect(listed).toContainEqual({ id: preset.id, label: preset.label, description: expect.any(String) });
+            expect(listed.find((t) => t.id === preset.id).description.length).toBeGreaterThan(0);
+        }
+    });
+
+    test('they follow Custom User-Agent and leave the request-body template last', () => {
+        const ids = listed.map((t) => t.id);
+        const custom = ids.indexOf('customUserAgent');
+        expect(ids.slice(custom, custom + 4)).toEqual(['customUserAgent', ...PRESETS.map((p) => p.id)]);
+        expect(ids[0]).toBe('graphqlMock');
+        expect(ids[ids.length - 1]).toBe('modifyRequestBody');
+        expect(new Set(ids).size).toBe(ids.length);
+        expect(new Set(listed.map((t) => t.label)).size).toBe(listed.length);
+    });
+
+    test.each(PRESETS)('$label is a headers rule setting only the request User-Agent', ({ id }) => {
+        const t = templates.getTemplate(id);
+        expect(t.type).toBe('headers');
+        expect(t.method).toBe('*');
+        expect(t.headersModRequest).toEqual([{ op: 'set', name: 'User-Agent', value: expect.any(String) }]);
+        expect(t.headersModResponse).toBeUndefined();
+    });
+
+    test.each(PRESETS)('$label uses the same local-API pattern as Custom User-Agent', ({ id }) => {
+        const custom = templates.getTemplate('customUserAgent');
+        expect(templates.getTemplate(id).url).toBe(custom.url);
+        expect(S.validateUrlPattern(custom.url).isValid).toBe(true);
+        expect(matchUrl('http://localhost:3000/api/users', custom.url)).toBe(true);
+        expect(matchUrl('https://127.0.0.1/x', custom.url)).toBe(true);
+        // C-15: scoped to the local host, never every site
+        expect(matchUrl('https://localhost.attacker.example/api', custom.url)).toBe(false);
+        expect(matchUrl('https://example.com/localhost/', custom.url)).toBe(false);
+    });
+
+    test.each(PRESETS)('$label, as the editor saves it, passes the schema', ({ id }) => {
+        expect(S.validateRule(asRule(id))).toEqual({ valid: true, errors: [] });
+    });
+
+    test('the strings are what each client really sends', () => {
+        const iphone = userAgentOf('userAgentIphone');
+        expect(iphone).toMatch(/^Mozilla\/5\.0 \(iPhone; CPU iPhone OS \d+_\d+ like Mac OS X\) AppleWebKit\/605\.1\.15 \(KHTML, like Gecko\) Version\/\d+\.\d+ Mobile\/15E148 Safari\/604\.1$/);
+
+        const android = userAgentOf('userAgentAndroid');
+        expect(android).toMatch(/^Mozilla\/5\.0 \(Linux; Android \d+; [^)]+\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/\d+\.0\.0\.0 Mobile Safari\/537\.36$/);
+
+        const bot = userAgentOf('userAgentGooglebot');
+        expect(bot).toContain('(compatible; Googlebot/2.1; +http://www.google.com/bot.html)');
+        expect(bot).toMatch(/^Mozilla\/5\.0 \(Linux; Android [\d.]+; [^)]+\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/\d+\.0\.0\.0 Mobile Safari\/537\.36 /);
+    });
+
+    test('the three strings differ, and none carries a line break or a non-Latin-1 character', () => {
+        const strings = PRESETS.map((p) => userAgentOf(p.id));
+        expect(new Set(strings).size).toBe(3);
+        for (const ua of strings) {
+            expect(ua).not.toMatch(/[\r\n]/);
+            expect(ua).not.toMatch(/[^\x20-\x7e]/);
+            expect(ua.length).toBeLessThan(300);
+        }
+    });
+
+    test('the Chrome-based strings agree on the Chrome version', () => {
+        const major = (ua) => /Chrome\/(\d+)\./.exec(ua)[1];
+        expect(major(userAgentOf('userAgentAndroid'))).toBe(major(userAgentOf('userAgentGooglebot')));
+        expect(Number(major(userAgentOf('userAgentAndroid')))).toBeGreaterThanOrEqual(140);
+    });
+
+    test('getTemplate returns a copy, so an editor cannot corrupt the shared string', () => {
+        const first = templates.getTemplate('userAgentIphone');
+        first.headersModRequest[0].value = 'MUTATED';
+        expect(userAgentOf('userAgentIphone')).toContain('iPhone');
     });
 });

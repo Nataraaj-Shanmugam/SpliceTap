@@ -130,6 +130,54 @@
                 ]
             }
         },
+        // B2-F11: three ready-made User-Agent strings. Same rule shape, scope
+        // and reasoning as Custom User-Agent above (C-15): a request-header
+        // `set` on the local-API pattern, so one click never rewrites the
+        // User-Agent sent to every site. They sit before the request-body
+        // template, which stays last. The strings follow what the browsers
+        // send today: Safari and Chrome freeze the parts of the UA that used
+        // to leak the OS build, so the iPhone says "iPhone OS 18_6" and the
+        // Android one "Android 10; K"; Googlebot is the smartphone crawler
+        // Google documents, with its Chrome version filled in.
+        {
+            id: 'userAgentIphone',
+            label: 'User-Agent: iPhone (Safari)',
+            description: 'Send an iPhone Safari User-Agent to your local API',
+            rule: {
+                type: 'headers',
+                method: '*',
+                url: LOCAL_API_PATTERN,
+                headersModRequest: [
+                    { op: 'set', name: 'User-Agent', value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1' }
+                ]
+            }
+        },
+        {
+            id: 'userAgentAndroid',
+            label: 'User-Agent: Android (Chrome)',
+            description: 'Send an Android Chrome User-Agent to your local API',
+            rule: {
+                type: 'headers',
+                method: '*',
+                url: LOCAL_API_PATTERN,
+                headersModRequest: [
+                    { op: 'set', name: 'User-Agent', value: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36' }
+                ]
+            }
+        },
+        {
+            id: 'userAgentGooglebot',
+            label: 'User-Agent: Googlebot',
+            description: 'Send the Googlebot smartphone User-Agent to your local API',
+            rule: {
+                type: 'headers',
+                method: '*',
+                url: LOCAL_API_PATTERN,
+                headersModRequest: [
+                    { op: 'set', name: 'User-Agent', value: 'Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' }
+                ]
+            }
+        },
         {
             // F3: last in the list, so the editors' first-option behaviour is
             // unchanged. The requestBody* fields are the flat form of the
