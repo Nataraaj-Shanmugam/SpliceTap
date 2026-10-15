@@ -78,6 +78,8 @@ class SpliceTapPopup {
             this.updateTabCount();
             this.renderSettings();
             this.addShortcutHints();
+            // PER-58: after the first render, so it never holds the list up.
+            this.startTabStatus();
 
             // NOTE: the popup must NOT clear the badge. It used to, back when
             // the badge was a one-off "NEW" install hint. The badge now shows
@@ -211,6 +213,38 @@ class SpliceTapPopup {
         notice.appendChild(grantBtn);
 
         wrapper.parentNode.insertBefore(notice, wrapper.nextSibling);
+    }
+
+    /**
+     * PER-58: "This tab: N intercepted · last 5 s ago". The footer counter is
+     * global and daily; this is the active tab's own log, which the background
+     * already filters when given a tabId. Refetched every few seconds while
+     * the popup is open so the age keeps moving.
+     */
+    startTabStatus() {
+        this.refreshTabStatus();
+        clearInterval(this._tabStatusTimer);
+        this._tabStatusTimer = setInterval(() => this.refreshTabStatus(), 5000);
+    }
+
+    async refreshTabStatus() {
+        const el = document.getElementById('tabStatus');
+        if (!el) return;
+        let tab = null;
+        try {
+            [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        } catch (error) {
+            tab = null;
+        }
+        if (!tab || typeof tab.id !== 'number') {
+            el.hidden = true;
+            return;
+        }
+        const response = await this.sendMessage({ type: 'getInterceptionLog', tabId: tab.id });
+        if (!response || !response.success) return; // keep what is showing
+        this.tabLogEntries = Array.isArray(response.entries) ? response.entries : [];
+        el.textContent = window.SpliceTapPopupHelpers.tabStatusText(this.tabLogEntries, Date.now());
+        el.hidden = false;
     }
 
     /**
@@ -2791,6 +2825,7 @@ class SpliceTapPopup {
             this.applySearchFilter();
             this.updateStatus();
             this.updateStats();
+            this.refreshTabStatus();
 
             this.showNotification('Refreshed');
         } catch (error) {

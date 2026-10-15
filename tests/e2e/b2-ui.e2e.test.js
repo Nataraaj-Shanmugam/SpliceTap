@@ -48,8 +48,8 @@ describe('batch 2: popup and DevTools panel', () => {
      * function run in the popup page before any of its own script, which is
      * where a stub for a background message has to go.
      */
-    async function openPopup(rules = [], { settings = {}, viewport = POPUP_SIZE, beforeLoad = null, beforeLoadArg = null } = {}) {
-        await h.reset();
+    async function openPopup(rules = [], { settings = {}, viewport = POPUP_SIZE, beforeLoad = null, beforeLoadArg = null, reset = true } = {}) {
+        if (reset) await h.reset();
         await h.bg({ type: 'settingsUpdated', settings });
         for (const r of rules) await h.saveRule(r);
         popup = await h.browser.newPage();
@@ -321,6 +321,86 @@ describe('batch 2: popup and DevTools panel', () => {
             expect(rules[0]).toMatchObject({ type: 'block', appliesTo: 'all', enabled: true });
             expect(rules[1]).toMatchObject({ type: 'delay', enabled: false });
             expect(await popup.$eval('#importReport', (el) => el.innerText)).toMatch(/Inject banner/);
+        });
+    });
+
+    // ============================================================ PER-58 ===
+    describe('PER-58: the per-tab status line', () => {
+        /** The id Chrome gave the test page's tab, found the way the harness finds it for the overlay. */
+        const tabIdOf = (p) => h.control.evaluate(async (url) => {
+            const tabs = await chrome.tabs.query({});
+            const tab = tabs.find((t) => t.url === url);
+            return tab ? tab.id : null;
+        }, p.url());
+
+        /** The popup sees `tab` as the active tab, as it does when opened from the toolbar on that page. */
+        const asActiveTab = (tab) => (arg) => {
+            chrome.tabs.query = async () => [arg];
+        };
+        const statusText = () => popup.$eval('#tabStatus', (e) => (e.hidden ? null : e.textContent.trim()));
+
+        test('says nothing has been intercepted on a tab with no traffic', async () => {
+            await h.reset();
+            page = await h.openPage();
+            await openPopup([rule('users')], { beforeLoad: asActiveTab(), beforeLoadArg: { id: await tabIdOf(page), url: page.url(), active: true } });
+            await waitFor(statusText, { label: 'the status line' });
+            expect(await statusText()).toBe('Nothing intercepted on this tab yet');
+        });
+
+        test('counts what was intercepted on that tab and says how long ago', async () => {
+            await h.reset();
+            await h.saveRule(rule('users'));
+            page = await h.openPage();
+            await waitFor(async () => (await pageFetch(page, '/api/users')).marker === 'true', { label: 'mock active' });
+            await pageFetch(page, '/api/users?again=1');
+            const tabId = await tabIdOf(page);
+            await waitFor(async () => (await h.bg({ type: 'getInterceptionLog', tabId })).entries.length >= 2, { label: 'two log entries' });
+
+            await openPopup([], { reset: false, beforeLoad: asActiveTab(), beforeLoadArg: { id: tabId, url: page.url(), active: true } });
+            await waitFor(async () => /^This tab: \d+ intercepted · last \d+ s ago$/.test(await statusText() || ''), { label: 'the status line' });
+            const n = Number((await statusText()).match(/This tab: (\d+)/)[1]);
+            expect(n).toBeGreaterThanOrEqual(2);
+
+            // A new request moves the count on the next refresh.
+            await pageFetch(page, '/api/users?third=1');
+            await waitFor(async () => (await h.bg({ type: 'getInterceptionLog', tabId })).entries.length > n, { label: 'third entry' });
+            await popup.click('#refreshBtn');
+            await waitFor(async () => Number(((await statusText()) || '').match(/This tab: (\d+)/)?.[1]) > n, { label: 'the count to rise' });
+        });
+
+        test('counts only the active tab: another tab\'s traffic is not in it', async () => {
+            await h.reset();
+            await h.saveRule(rule('users'));
+            page = await h.openPage();
+            const other = await h.openPage();
+            await waitFor(async () => (await pageFetch(other, '/api/users')).marker === 'true', { label: 'mock active' });
+            await pageFetch(other, '/api/users?x=1');
+            await waitFor(async () => (await h.bg({ type: 'getInterceptionLog' })).entries.length >= 2, { label: 'entries' });
+            const quiet = await tabIdOf(page);
+            await other.close();
+
+            popup = await h.browser.newPage();
+            await popup.evaluateOnNewDocument(asActiveTab(), { id: quiet, url: page.url(), active: true });
+            await popup.goto(h.extUrl('popup/popup.html'), { waitUntil: 'load' });
+            await waitFor(statusText, { label: 'the status line' });
+            expect(await statusText()).toBe('Nothing intercepted on this tab yet');
+        });
+
+        test('is a plain line under the header: not a live region, and no axe violations (dark and light)', async () => {
+            for (const theme of ['dark', 'light']) {
+                await h.reset();
+                page = await h.openPage();
+                await openPopup([rule('users')], { settings: { theme }, beforeLoad: asActiveTab(), beforeLoadArg: { id: await tabIdOf(page), url: page.url(), active: true } });
+                await waitFor(statusText, { label: 'the status line' });
+                const info = await popup.$eval('#tabStatus', (e) => ({
+                    live: e.closest('[aria-live]'), prevIsHeader: e.previousElementSibling.classList.contains('header')
+                }));
+                expect(info).toEqual({ live: null, prevIsHeader: true });
+                await settle(popup);
+                expect(await auditA11y(popup)).toEqual([]);
+                await popup.close();
+                await page.close();
+            }
         });
     });
 
