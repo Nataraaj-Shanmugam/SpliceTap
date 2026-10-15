@@ -1,0 +1,16 @@
+[
+  null,
+  42,
+  "a string",
+  { "objectType": "widget", "name": "Not a rule" },
+  { "objectType": "rule", "name": "No type", "status": "Active", "pairs": [] },
+  { "objectType": "rule", "name": "Unknown type", "ruleType": "Teleport", "status": "Active", "pairs": [{ "source": {} }] },
+  { "objectType": "rule", "name": "No pairs", "ruleType": "Cancel", "status": "Active" },
+  { "objectType": "rule", "name": "Empty pairs", "ruleType": "Cancel", "status": "Active", "pairs": [] },
+  { "objectType": "rule", "name": "Pair is null", "ruleType": "Cancel", "status": "Active", "pairs": [null] },
+  { "objectType": "rule", "name": "No source", "ruleType": "Cancel", "status": "Active", "pairs": [{ "id": "x" }] },
+  { "objectType": "rule", "name": "Bad key", "ruleType": "Cancel", "status": "Active", "pairs": [{ "source": { "key": "Header", "operator": "Equals", "value": "x" } }] },
+  { "objectType": "rule", "name": "Bad operator", "ruleType": "Cancel", "status": "Active", "pairs": [{ "source": { "key": "Url", "operator": "StartsWith", "value": "x" } }] },
+  { "objectType": "rule", "name": "Bad regex", "ruleType": "Cancel", "status": "Active", "pairs": [{ "source": { "key": "Url", "operator": "Matches", "value": "/(unclosed/" } }] },
+  { "objectType": "rule", "name": "Survivor", "ruleType": "Cancel", "status": "Active", "pairs": [{ "source": { "key": "Url", "operator": "Contains", "value": "ok.example.com" } }] }
+]

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "Group_1a2b3",
+    "name": "Staging",
+    "objectType": "group",
+    "status": "Active",
+    "children": [],
+    "schemaVersion": "3.0.0"
+  },
+  {
+    "id": "Group_4c5d6",
+    "name": "Retired",
+    "objectType": "group",
+    "status": "Inactive",
+    "children": []
+  },
+  {
+    "id": "Cancel_in_active_group",
+    "name": "Block metrics",
+    "objectType": "rule",
+    "ruleType": "Cancel",
+    "status": "Active",
+    "groupId": "Group_1a2b3",
+    "pairs": [{ "id": "g1", "source": { "key": "Url", "operator": "Contains", "value": "metrics.example.com" } }]
+  },
+  {
+    "id": "Cancel_in_retired_group",
+    "name": "Block pixels",
+    "objectType": "rule",
+    "ruleType": "Cancel",
+    "status": "Active",
+    "groupId": "Group_4c5d6",
+    "pairs": [{ "id": "g2", "source": { "key": "Url", "operator": "Contains", "value": "pixel.example.com" } }]
+  },
+  {
+    "id": "Cancel_unknown_group",
+    "name": "Block beacons",
+    "objectType": "rule",
+    "ruleType": "Cancel",
+    "status": "Active",
+    "groupId": "Group_gone",
+    "pairs": [{ "id": "g3", "source": { "key": "Url", "operator": "Contains", "value": "beacon.example.com" } }]
+  }
+]

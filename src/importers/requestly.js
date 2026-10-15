@@ -259,7 +259,7 @@
         try {
             new RegExp(parsed.body);
         } catch (e) {
-            return { skip: `The regular expression "${shorten(value)}" is invalid: ${e.message}.` };
+            return { skip: `The regular expression "${shorten(value)}" is not valid.` };
         }
         if (opts.network && NOT_RE2_RE.test(parsed.body)) {
             return { skip: 'The regular expression uses a lookahead, lookbehind or backreference, which Chrome\'s network layer cannot evaluate, and this rule is applied there.' };
@@ -276,13 +276,14 @@
         return regexPattern(body, groupCount(parsed.body));
     }
 
-    function wildcardPattern(value, kind, notes) {
+    function wildcardPattern(value, kind, opts, notes) {
         const special = WILDCARD_REGEX_CHARS_RE.test(value);
         if (special) {
             notes.push('The wildcard contains regex characters; Requestly evaluates them as a regular expression, and so does this import.');
         }
         if (kind === 'url') {
-            const native = value.includes('*') && !special && !(value.startsWith('/') && value.endsWith('/'));
+            // $1-$9 in a redirect destination only work with a /regex/ pattern.
+            const native = value.includes('*') && !special && !opts.needsRegex && !(value.startsWith('/') && value.endsWith('/'));
             if (native) return { pattern: value, groups: 0 };
             const body = value.replace(/([?.-])/g, '\\$1').replace(/\*/g, '(.*)');
             return regexPattern('^' + body + '$', (value.match(/\*/g) || []).length);
@@ -309,7 +310,7 @@
             return { pattern: '*', groups: 0 };
         }
         if (op === 'matches') return userRegexPattern(value, key, opts, notes);
-        if (op === 'wildcard') return wildcardPattern(value, key, notes);
+        if (op === 'wildcard') return wildcardPattern(value, key, opts, notes);
 
         if (key === 'url') {
             if (op === 'equals') return regexPattern('^' + escapeRegex(value) + '$');
@@ -865,6 +866,7 @@
         let parts = 1;
 
         if (value === '') {
+            env.notes.push('The URL condition is empty, so this rule applies to every request whose URL contains the replaced text.');
             regexFor = (scheme) => `^${scheme}:\\/\\/(.*?)${escapeRegex(from)}(.*)`;
         } else if (key === 'url' && (op === 'equals' || op === 'contains') && value.includes(from)) {
             let v = value;

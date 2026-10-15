@@ -1,0 +1,205 @@
+[
+  {
+    "id": "Redirect_a1b2c",
+    "name": "Redirect API to staging",
+    "description": "",
+    "objectType": "rule",
+    "ruleType": "Redirect",
+    "status": "Active",
+    "groupId": "",
+    "schemaVersion": "3.0.0",
+    "isSample": false,
+    "creationDate": 1721631222828,
+    "modificationDate": 1721631245411,
+    "pairs": [
+      {
+        "id": "p1",
+        "destination": "https://staging.example.com/v1",
+        "destinationType": "url",
+        "source": { "key": "Url", "operator": "Contains", "value": "https://api.example.com/v1", "filters": [] }
+      }
+    ]
+  },
+  {
+    "id": "Cancel_d3e4f",
+    "name": "Block analytics",
+    "objectType": "rule",
+    "ruleType": "Cancel",
+    "status": "Active",
+    "groupId": "",
+    "schemaVersion": "3.0.0",
+    "pairs": [
+      { "id": "p2", "source": { "key": "Url", "operator": "Contains", "value": "analytics.example.com" } }
+    ]
+  },
+  {
+    "id": "Delay_g5h6i",
+    "name": "Slow search",
+    "objectType": "rule",
+    "ruleType": "Delay",
+    "status": "Active",
+    "groupId": "",
+    "schemaVersion": "3.0.0",
+    "pairs": [
+      { "id": "p3", "delay": "1500", "source": { "key": "Url", "operator": "Wildcard_Matches", "value": "https://api.example.com/search*" } }
+    ]
+  },
+  {
+    "id": "Headers_j7k8l",
+    "name": "Debug headers",
+    "objectType": "rule",
+    "ruleType": "Headers",
+    "status": "Active",
+    "groupId": "",
+    "schemaVersion": "3.0.0",
+    "version": 2,
+    "pairs": [
+      {
+        "id": "p4",
+        "modifications": {
+          "Request": [
+            { "id": "m1", "header": "X-Debug", "type": "Add", "value": "1" },
+            { "id": "m2", "header": "X-Trace", "type": "Remove", "value": "" }
+          ],
+          "Response": [
+            { "id": "m3", "header": "X-Env", "type": "Modify", "value": "staging" }
+          ]
+        },
+        "source": { "key": "Url", "operator": "Contains", "value": "https://api.example.com/", "filters": [{ "resourceType": ["xmlhttprequest"] }] }
+      }
+    ]
+  },
+  {
+    "id": "QueryParam_m9n0o",
+    "name": "Debug on, tracking off",
+    "objectType": "rule",
+    "ruleType": "QueryParam",
+    "status": "Active",
+    "groupId": "",
+    "schemaVersion": "3.0.0",
+    "pairs": [
+      {
+        "id": "p5",
+        "modifications": [
+          { "id": "q1", "type": "Add", "param": "debug", "value": "1", "actionWhenParamExists": "Overwrite" },
+          { "id": "q2", "type": "Remove", "param": "utm_source", "value": "" }
+        ],
+        "source": { "key": "Url", "operator": "Contains", "value": "https://api.example.com/", "filters": [{ "resourceType": ["xmlhttprequest"] }] }
+      }
+    ]
+  },
+  {
+    "id": "Response_p1q2r",
+    "name": "Mock the user",
+    "objectType": "rule",
+    "ruleType": "Response",
+    "status": "Active",
+    "groupId": "",
+    "schemaVersion": "3.0.0",
+    "pairs": [
+      {
+        "id": "p6",
+        "isCompressed": false,
+        "response": { "type": "static", "resourceType": "restApi", "statusCode": "201", "statusText": "Created", "value": "{\"id\":7,\"name\":\"Ada\"}" },
+        "source": { "key": "Url", "operator": "Equals", "value": "https://api.example.com/user", "filters": [{ "requestMethod": ["GET"] }] }
+      }
+    ]
+  },
+  {
+    "id": "Response_s3t4u",
+    "name": "Dynamic user",
+    "objectType": "rule",
+    "ruleType": "Response",
+    "status": "Active",
+    "groupId": "",
+    "schemaVersion": "3.0.0",
+    "pairs": [
+      {
+        "id": "p7",
+        "isCompressed": false,
+        "response": {
+          "type": "code",
+          "resourceType": "restApi",
+          "statusCode": "202",
+          "value": "function modifyResponse(args) {\n  const {method, url, response, responseType, requestHeaders, requestData, responseJSON} = args;\n  // Change response below depending upon request attributes received in args\n  return {\"dynamic\": method};\n}"
+        },
+        "source": { "key": "Url", "operator": "Contains", "value": "https://api.example.com/dynamic" }
+      }
+    ]
+  },
+  {
+    "id": "Request_v5w6x",
+    "name": "Patch request body",
+    "objectType": "rule",
+    "ruleType": "Request",
+    "status": "Active",
+    "groupId": "",
+    "schemaVersion": "3.0.0",
+    "pairs": [
+      {
+        "id": "p8",
+        "isCompressed": false,
+        "request": { "type": "static", "value": "{\"debug\":true}" },
+        "source": { "key": "Url", "operator": "Contains", "value": "https://api.example.com/orders", "filters": [{ "requestMethod": ["POST"] }] }
+      }
+    ]
+  },
+  {
+    "id": "UserAgent_y7z8a",
+    "name": "Pretend to be an iPhone",
+    "objectType": "rule",
+    "ruleType": "UserAgent",
+    "status": "Active",
+    "groupId": "",
+    "schemaVersion": "3.0.0",
+    "pairs": [
+      {
+        "id": "p9",
+        "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",
+        "envType": "device",
+        "env": "iPhone",
+        "source": { "key": "Url", "operator": "Contains", "value": "https://api.example.com/" }
+      }
+    ]
+  },
+  {
+    "id": "Replace_b9c0d",
+    "name": "Point example.com at staging",
+    "objectType": "rule",
+    "ruleType": "Replace",
+    "status": "Active",
+    "groupId": "",
+    "schemaVersion": "3.0.1",
+    "pairs": [
+      { "id": "p10", "from": "example.com", "to": "staging.example.net", "source": { "key": "Url", "operator": "Contains", "value": "https://api.example.com" } }
+    ]
+  },
+  {
+    "id": "Script_e1f2g",
+    "name": "Inject banner",
+    "objectType": "rule",
+    "ruleType": "Script",
+    "status": "Active",
+    "groupId": "",
+    "schemaVersion": "3.0.0",
+    "pairs": [
+      {
+        "id": "p11",
+        "scripts": [{ "id": "s1", "type": "code", "codeType": "js", "loadTime": "afterPageLoad", "value": "document.title = 'x'" }],
+        "source": { "key": "Url", "operator": "Contains", "value": "example.com" }
+      }
+    ]
+  },
+  {
+    "id": "Cancel_h3i4j",
+    "name": "Block ads (off)",
+    "objectType": "rule",
+    "ruleType": "Cancel",
+    "status": "Inactive",
+    "groupId": "",
+    "schemaVersion": "3.0.0",
+    "pairs": [
+      { "id": "p12", "source": { "key": "Url", "operator": "Contains", "value": "ads.example.com" } }
+    ]
+  }
+]
