@@ -67,6 +67,61 @@
         requestBody: 'requestBody'
     };
 
+    // B2-F7: the resource types a rule can be limited to, in the order shown.
+    // The values are the schema's (src/rule-schema.js); the labels are the
+    // words a person would use for each.
+    const RESOURCE_TYPES = [
+        ['fetch-xhr', 'Fetch / XHR'],
+        ['document', 'Pages'],
+        ['subdocument', 'Frames'],
+        ['script', 'Scripts'],
+        ['stylesheet', 'Stylesheets'],
+        ['image', 'Images'],
+        ['font', 'Fonts'],
+        ['media', 'Audio and video'],
+        ['websocket', 'WebSockets'],
+        ['ping', 'Pings'],
+        ['other', 'Other']
+    ];
+
+    // B2-F7 / PER-66: the match fields that exist only for some rule shapes.
+    // Resource types: headers and queryparams, and block/redirect that apply
+    // to all requests. Payload and call filters need the in-page interceptor,
+    // so they are the mock/delay/requestBody types and page-scoped
+    // block/redirect. A field that does not apply is removed on save rather
+    // than left as a value the schema refuses and the person cannot see.
+    const IN_PAGE_ONLY_TYPES = ['mock', 'delay', 'requestBody'];
+
+    function resourceTypesApply(type, appliesAll) {
+        return type === 'headers' || type === 'queryparams'
+            || (APPLIES_TO_TYPES.includes(type) && !!appliesAll);
+    }
+
+    function inPageFiltersApply(type, appliesAll) {
+        return IN_PAGE_ONLY_TYPES.includes(type)
+            || (APPLIES_TO_TYPES.includes(type) && !appliesAll);
+    }
+
+    /**
+     * B2-F7: the page domains typed into the field. Comma-, space- or
+     * line-separated; hostnames are case-insensitive, and the schema wants
+     * them lowercase, so that much is done here. Anything else wrong with one
+     * (a scheme, a path, a port) is left for the schema to name.
+     * @returns {string[]} unique, in the order typed
+     */
+    function parseDomains(text) {
+        const seen = new Set();
+        const out = [];
+        for (const part of String(text === undefined || text === null ? '' : text).split(/[\s,;]+/)) {
+            const host = part.trim().toLowerCase();
+            if (host && !seen.has(host)) {
+                seen.add(host);
+                out.push(host);
+            }
+        }
+        return out;
+    }
+
     // CQ-10: limits come from the one shared definition (src/common.js).
     function L() {
         return (global.SpliceTapCommon && global.SpliceTapCommon.LIMITS) || {
@@ -113,6 +168,23 @@
 
         if (/^Rule name/i.test(m)) return 'tmName';
         if (/^Unknown rule type/i.test(m)) return 'tmType';
+        // B2-F7 / F8 / F9 / PER-66: the schema opens each of these messages with
+        // the name of the field it is about ("Page domains…", "Resource types…").
+        if (/^Page domains/i.test(m)) return 'tmPageDomains';
+        if (/^Resource types/i.test(m)) return 'tmResourceTypes';
+        // A payload filter is three inputs: name the one a message points at,
+        // and the first when it is about the filter as a whole.
+        if (/^Payload filter operator/i.test(m)) return 'tmPayloadOp';
+        if (/^Payload filter value/i.test(m)) return 'tmPayloadValue';
+        if (/^Payload filter/i.test(m)) return 'tmPayloadPath';
+        // Before the general "status code" rule below: "Patch status code …"
+        // is about the override, not the mock's own Status Code field.
+        if (/^Patch status/i.test(m)) return 'tmPatchStatus';
+        // A call filter is a mode and a number. A message about the number says
+        // so up front ("Call filter n …") or by asking for a whole number; one
+        // about the filter as a whole goes to its first control, the mode.
+        if (/^Call filter/i.test(m)) return /^Call filter (n|number|count)\b|whole number|between 1/i.test(m) ? 'tmCallN' : 'tmCallMode';
+        if (/^Query parameters/i.test(m)) return /remove\s?all/i.test(m) ? 'tmQpRemoveAll' : 'tmQpAdd';
         // F1: the all-requests checkbox is what these two are about — a stray
         // appliesTo, and "all requests" combined with a header/GraphQL
         // condition (which only fetch/XHR can be checked against).
@@ -444,6 +516,23 @@
         .tm-field-err { font-size: 0.6875em; color: #f87171; line-height: 1.45; }
         .tm-field [aria-invalid="true"] { border-color: #f87171 !important; }
 
+        /* B2-F7: the title of a group of controls (a row of inputs, a set of
+           checkboxes). A <span>, because a <label> must point at one control;
+           the group's role and aria-labelledby carry it to assistive tech.
+           Same micro-label scale as .tm-field > label. */
+        .tm-glabel {
+            font-size: 0.625em;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            line-height: 1.35;
+            color: #8b9ab3;
+        }
+        .tm-checks { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+        /* Inputs inside a group sit in a row of their own; the group's hint
+           follows, so they need less room below than a field of their own. */
+        .tm-subrow .tm-field { margin-bottom: 4px; }
+
         .tm-check {
             display: flex; align-items: center; gap: 8px;
             min-height: 24px;
@@ -524,7 +613,8 @@
         .tm-light .tm-head { border-bottom-color: #eef1f6; }
         .tm-light .tm-foot { border-top-color: #eef1f6; }
         .tm-light .tm-title { color: #101828; }
-        .tm-light .tm-field > label:not(.tm-check) { color: #5d6a80; }
+        .tm-light .tm-field > label:not(.tm-check),
+        .tm-light .tm-glabel { color: #5d6a80; }
         .tm-light .tm-hint,
         .tm-light .tm-legend { color: #5d6a80; }
         .tm-light .tm-note {
@@ -608,6 +698,11 @@
             .concat(templates.map((t) => `<option value="${t.id}" title="${t.description}">${t.label}</option>`))
             .join('');
 
+        // B2-F7: one labelled checkbox per resource type.
+        const resourceTypeBoxes = RESOURCE_TYPES
+            .map(([v, l]) => `<label class="tm-check"><input type="checkbox" id="tmRt_${v}" data-group="tmResourceTypes" value="${v}"> ${l}</label>`)
+            .join('');
+
         // PER-77: the marker is decoration for sighted users; aria-required
         // on the control is what assistive tech reads.
         const REQ = '<span class="tm-req" aria-hidden="true">*</span>';
@@ -689,6 +784,14 @@
                 </div>
               </div>
 
+              <!-- B2-F7: limit the rule to requests made by certain sites. Any
+                   rule type; one or several hostnames, subdomains included. -->
+              <div class="tm-field">
+                <label for="tmPageDomains">Only on these sites (optional)</label>
+                <textarea id="tmPageDomains" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" placeholder="example.com, app.example.com" aria-describedby="tmPageDomainsHint"></textarea>
+                <span class="tm-hint" id="tmPageDomainsHint">Separate with commas or new lines. A site includes its subdomains. Leave empty to apply on every site. Judged by the page that makes the request, not the URL it asks for.</span>
+              </div>
+
               <!-- mock -->
               <div class="tm-row" data-types="mock">
                 <div class="tm-field" id="tmStatusField">
@@ -723,6 +826,53 @@
                 <textarea id="tmMatchHeaders" rows="2" placeholder='{"x-api-key": "abc"}'></textarea>
               </div>
 
+              <!-- B2-F7: match on a value in the request's JSON body. In the
+                   page only, so it is shown where a rule can be handled there
+                   (applyTypeVisibility decides: not for "all requests"). -->
+              <div class="tm-field" data-types="mock block delay redirect requestBody" id="tmPayloadField" role="group" aria-labelledby="tmPayloadLegend">
+                <span class="tm-glabel" id="tmPayloadLegend">Only when the request body has (optional)</span>
+                <div class="tm-row tm-subrow">
+                  <div class="tm-field" style="flex:2">
+                    <label for="tmPayloadPath">JSON path</label>
+                    <input type="text" id="tmPayloadPath" placeholder="user.id or items.0.sku" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" aria-describedby="tmPayloadHint">
+                  </div>
+                  <div class="tm-field" style="flex:1">
+                    <label for="tmPayloadOp">Comparison</label>
+                    <select id="tmPayloadOp" aria-describedby="tmPayloadHint">
+                      <option value="equals">equals</option>
+                      <option value="contains">contains</option>
+                    </select>
+                  </div>
+                  <div class="tm-field" style="flex:2">
+                    <label for="tmPayloadValue">Value</label>
+                    <input type="text" id="tmPayloadValue" placeholder="42" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" aria-describedby="tmPayloadHint">
+                  </div>
+                </div>
+                <span class="tm-hint" id="tmPayloadHint">Compared as text against the value at that dot path in a JSON request body. A request whose body is not JSON never matches.</span>
+              </div>
+
+              <!-- PER-66: apply the rule to some of the matching calls only.
+                   Same availability as the payload filter. -->
+              <div class="tm-field" data-types="mock block delay redirect requestBody" id="tmCallField" role="group" aria-labelledby="tmCallLegend">
+                <span class="tm-glabel" id="tmCallLegend">Which calls (optional)</span>
+                <div class="tm-row tm-subrow">
+                  <div class="tm-field" style="flex:2">
+                    <label for="tmCallMode">Apply to</label>
+                    <select id="tmCallMode" aria-describedby="tmCallHint">
+                      <option value="">Every matching call</option>
+                      <option value="first">Only the first N calls</option>
+                      <option value="after">Every call after the first N</option>
+                      <option value="every">Every Nth call</option>
+                    </select>
+                  </div>
+                  <div class="tm-field" style="flex:1" id="tmCallNField">
+                    <label for="tmCallN">N (1&ndash;1000)</label>
+                    <input type="number" id="tmCallN" value="3" min="1" max="1000" aria-describedby="tmCallHint">
+                  </div>
+                </div>
+                <span class="tm-hint" id="tmCallHint">Counted per page, from when it loads; the count starts again when the page reloads or your rules change. Calls the rule skips go on to later rules.</span>
+              </div>
+
               <div class="tm-field" data-types="mock" id="tmResHeadersField">
                 <label for="tmResHeaders">Response Headers (JSON)</label>
                 <textarea id="tmResHeaders" rows="2">{"Content-Type": "application/json"}</textarea>
@@ -737,6 +887,14 @@
                 <label for="tmPatch">Response Patch (JSON Merge Patch)</label>
                 <textarea id="tmPatch" rows="7" placeholder='{"data": null}' aria-describedby="tmPatchHint"></textarea>
                 <span class="tm-hint" id="tmPatchHint">Merged into the real response (RFC 7386). null deletes a key.</span>
+              </div>
+
+              <!-- B2-F8: patch mode keeps the real response's status; this
+                   replaces it, and the real body is still patched. -->
+              <div class="tm-field" data-types="mock" id="tmPatchStatusField">
+                <label for="tmPatchStatus">Status override (optional)</label>
+                <input type="number" id="tmPatchStatus" min="${L().STATUS_MIN}" max="${L().STATUS_MAX}" placeholder="keep the real status" aria-describedby="tmPatchStatusHint">
+                <span class="tm-hint" id="tmPatchStatusHint">The page gets this status (${L().STATUS_MIN}&ndash;${L().STATUS_MAX}) with the patched real body. Leave empty to keep the real one.</span>
               </div>
 
               <!-- F4: a code response. The gate note is shown only once the
@@ -795,17 +953,33 @@
                 <span class="tm-hint" id="tmAppliesAllHint">fetch/XHR are handled in the page; everything else by Chrome's network layer.</span>
               </div>
 
+              <!-- B2-F7: which resource types the network layer applies the
+                   rule to. Shown where that is valid: headers and query
+                   rules, and block/redirect once "all requests" is ticked
+                   (applyTypeVisibility). None ticked means the default. -->
+              <div class="tm-field" data-types="block redirect headers queryparams" id="tmResourceTypes" role="group" aria-labelledby="tmResourceTypesLabel">
+                <span class="tm-glabel" id="tmResourceTypesLabel">Only these resource types (optional)</span>
+                <div class="tm-checks">${resourceTypeBoxes}</div>
+                <span class="tm-hint" id="tmResourceTypesHint">Leave all unticked for the default: every type for block and redirect, fetch/XHR and other for header and query rules. Fetch / XHR is also handled in the page for block and redirect.</span>
+              </div>
+
               <!-- headers -->
               <div class="tm-field" data-types="headers">
                 <label for="tmHdrReq">Request Headers (JSON array of {op, name, value})</label>
-                <textarea id="tmHdrReq" rows="3" placeholder='[{"op":"set","name":"User-Agent","value":"MyAgent/1.0"}]'></textarea>
+                <textarea id="tmHdrReq" rows="3" placeholder='[{"op":"set","name":"User-Agent","value":"MyAgent/1.0"}]' aria-describedby="tmHdrReqHint"></textarea>
+                <span class="tm-hint" id="tmHdrReqHint">op is set or remove. (append is for response headers only.)</span>
               </div>
               <div class="tm-field" data-types="headers">
                 <label for="tmHdrRes">Response Headers (JSON array of {op, name, value})</label>
-                <textarea id="tmHdrRes" rows="3" placeholder='[{"op":"set","name":"Access-Control-Allow-Origin","value":"*"}]'></textarea>
+                <textarea id="tmHdrRes" rows="3" placeholder='[{"op":"set","name":"Access-Control-Allow-Origin","value":"*"}]' aria-describedby="tmHdrResHint"></textarea>
+                <span class="tm-hint" id="tmHdrResHint">op is set, remove or append. append adds your value next to any the server sent, instead of replacing them: <code>{"op":"append","name":"Set-Cookie","value":"a=1"}</code>.</span>
               </div>
 
               <!-- queryparams -->
+              <div class="tm-field" data-types="queryparams">
+                <label class="tm-check"><input type="checkbox" id="tmQpRemoveAll" aria-describedby="tmQpRemoveAllHint"> Remove all query parameters</label>
+                <span class="tm-hint" id="tmQpRemoveAllHint">Strips the whole query string from matching requests. Parameters added below are then the only ones sent.</span>
+              </div>
               <div class="tm-field" data-types="queryparams">
                 <label for="tmQpAdd">Add Query Params (JSON array of {key, value})</label>
                 <textarea id="tmQpAdd" rows="2" placeholder='[{"key":"debug","value":"1"}]'></textarea>
@@ -870,7 +1044,19 @@
             tmReqMode: 'tmReqModeHint',
             tmReqBody: 'tmReqBodyHint',
             tmReqPatch: 'tmReqPatchHint',
-            tmCode: 'tmCodeHint tmCodeSecurity'
+            tmCode: 'tmCodeHint tmCodeSecurity',
+            // B2-F7 / F8 / F9 / PER-66
+            tmPageDomains: 'tmPageDomainsHint',
+            tmResourceTypes: 'tmResourceTypesHint',
+            tmPayloadPath: 'tmPayloadHint',
+            tmPayloadOp: 'tmPayloadHint',
+            tmPayloadValue: 'tmPayloadHint',
+            tmPatchStatus: 'tmPatchStatusHint',
+            tmCallMode: 'tmCallHint',
+            tmCallN: 'tmCallHint',
+            tmQpRemoveAll: 'tmQpRemoveAllHint',
+            tmHdrReq: 'tmHdrReqHint',
+            tmHdrRes: 'tmHdrResHint'
         };
 
         /**
@@ -939,6 +1125,11 @@
             $('tmType').addEventListener('change', () => applyTypeVisibility());
             $('tmMode').addEventListener('change', () => applyTypeVisibility());
             $('tmReqMode').addEventListener('change', () => applyTypeVisibility());
+            // B2-F7 / PER-66: ticking "all requests" decides which of the
+            // resource-type, payload and call-filter fields can apply; the
+            // call filter's number only matters once a mode is chosen.
+            $('tmAppliesAll').addEventListener('change', () => applyTypeVisibility());
+            $('tmCallMode').addEventListener('change', () => applyTypeVisibility());
             $('tmHintClose').addEventListener('click', dismissHint);
 
             // Close on backdrop click (but not when clicking inside the panel).
@@ -953,7 +1144,11 @@
                 markDirty();
                 disarmClose();
                 // PER-77: editing a field answers its error.
-                if (e.target && e.target.id) clearFieldError(e.target.id);
+                // (A checkbox in a group answers its group's error.)
+                if (e.target) {
+                    const answered = (e.target.dataset && e.target.dataset.group) || e.target.id;
+                    if (answered) clearFieldError(answered);
+                }
             };
             panel.addEventListener('input', onEdit, true);
             panel.addEventListener('change', onEdit, true);
@@ -1089,6 +1284,8 @@
                 // (Inline style: the field's own display rule outranks [hidden].)
                 $('tmStatusField').style.display = patch || code ? 'none' : '';
                 $('tmResHeadersField').style.display = code ? 'none' : '';
+                // B2-F8: the one place patch mode can change the status.
+                $('tmPatchStatusField').classList.toggle('tm-visible', patch);
             }
             if (type === 'requestBody') {
                 const patch = $('tmReqMode').value === 'patch';
@@ -1108,6 +1305,16 @@
                 }
             }
             if (bodyless && (method.value === 'GET' || method.value === 'HEAD')) method.value = '*';
+
+            // B2-F7 / PER-66: what "all requests" switches on and off. Resource
+            // types are for the network layer; the payload and call filters
+            // need the page's interceptor, so they go the other way.
+            const appliesAll = APPLIES_TO_TYPES.includes(type) && $('tmAppliesAll').checked;
+            $('tmResourceTypes').classList.toggle('tm-visible', resourceTypesApply(type, appliesAll));
+            const inPage = inPageFiltersApply(type, appliesAll);
+            $('tmPayloadField').classList.toggle('tm-visible', inPage);
+            $('tmCallField').classList.toggle('tm-visible', inPage);
+            $('tmCallNField').style.display = $('tmCallMode').value ? '' : 'none';
 
             // Hints that exist only in some states are linked only then.
             linkDescriptions(method);
@@ -1153,50 +1360,63 @@
          * rule; F4: the code-responses-are-off note), and its error if it has
          * one.
          */
-        function linkDescriptions(el) {
+        /**
+         * B2-F7: the control that carries aria-invalid, the description and
+         * focus for a field id. Almost always the element itself; a group of
+         * checkboxes is not one widget that can be invalid, so its first box
+         * stands for it (and takes the focus).
+         */
+        function controlFor(id) {
+            const el = $(id);
+            if (el && el.getAttribute('role') === 'group') return el.querySelector('input, select, textarea');
+            return el;
+        }
+
+        function linkDescriptions(el, id = el && el.id) {
             if (!el) return;
             const ids = [];
-            if (el.id === 'tmCode') {
+            if (id === 'tmCode') {
                 const note = $('tmCodeOffNote');
                 if (note && !note.hidden) ids.push('tmCodeOffNote');
             }
-            if (FIELD_HINTS[el.id]) ids.push(FIELD_HINTS[el.id]);
-            if (el.id === 'tmMethod' && $('tmType').value === 'requestBody') ids.push('tmReqModeHint');
-            const err = $(el.id + 'Err');
+            if (FIELD_HINTS[id]) ids.push(FIELD_HINTS[id]);
+            if (id === 'tmMethod' && $('tmType').value === 'requestBody') ids.push('tmReqModeHint');
+            const err = $(id + 'Err');
             if (err) ids.push(err.id);
             if (ids.length) el.setAttribute('aria-describedby', ids.join(' '));
             else el.removeAttribute('aria-describedby');
         }
 
         function clearFieldError(id) {
-            const el = $(id);
+            const el = controlFor(id);
             if (!el) return;
             el.removeAttribute('aria-invalid');
             const err = $(id + 'Err');
             if (err) err.remove();
-            linkDescriptions(el);
+            linkDescriptions(el, id);
         }
 
         function clearFieldErrors() {
             if (!shadow) return;
-            shadow.querySelectorAll('[aria-invalid]').forEach((el) => clearFieldError(el.id));
+            shadow.querySelectorAll('[aria-invalid]').forEach((el) => clearFieldError((el.dataset && el.dataset.group) || el.id));
         }
 
         function setFieldError(id, message) {
-            const el = $(id);
+            const el = controlFor(id);
             if (!el || el.offsetParent === null) return false; // hidden: the user could never reach it
             let err = $(id + 'Err');
             if (!err) {
                 err = document.createElement('span');
                 err.id = id + 'Err';
                 err.className = 'tm-field-err';
-                el.closest('.tm-field').appendChild(err);
+                // A group is its own .tm-field; a lone control sits in one.
+                ($(id).closest('.tm-field') || $(id)).appendChild(err);
                 err.textContent = message;
             } else {
                 err.textContent += ' · ' + message;
             }
             el.setAttribute('aria-invalid', 'true');
-            linkDescriptions(el);
+            linkDescriptions(el, id);
             return true;
         }
 
@@ -1253,6 +1473,18 @@
             $('tmMethod').value = match.method || '*';
             $('tmUrl').value = match.url || prefillUrl || '';
 
+            // B2-F7 / PER-66: the match fields added in batch 2.
+            $('tmPageDomains').value = Array.isArray(match.pageDomains) ? match.pageDomains.join('\n') : '';
+            const storedTypes = Array.isArray(match.resourceTypes) ? match.resourceTypes : [];
+            for (const [value] of RESOURCE_TYPES) $('tmRt_' + value).checked = storedTypes.includes(value);
+            const payload = match.payload || {};
+            $('tmPayloadPath').value = typeof payload.path === 'string' ? payload.path : '';
+            $('tmPayloadOp').value = payload.operator === 'contains' ? 'contains' : 'equals';
+            $('tmPayloadValue').value = typeof payload.value === 'string' ? payload.value : '';
+            const callFilter = match.callFilter || {};
+            $('tmCallMode').value = ['first', 'after', 'every'].includes(callFilter.mode) ? callFilter.mode : '';
+            $('tmCallN').value = Number.isInteger(callFilter.n) ? callFilter.n : 3;
+
             const res = r.response || {};
             $('tmStatus').value = res.statusCode || 200;
             $('tmDelay').value = res.delay || 0;
@@ -1265,6 +1497,7 @@
                 ? ''
                 : (typeof res.body === 'string' ? res.body : JSON.stringify(res.body, null, 2));
             $('tmPatch').value = res.patch ? JSON.stringify(res.patch, null, 2) : '';
+            $('tmPatchStatus').value = Number.isInteger(res.patchStatus) ? res.patchStatus : ''; // B2-F8
             $('tmCode').value = typeof res.code === 'string' ? res.code : '';
 
             // F3
@@ -1288,6 +1521,7 @@
             const qp = r.queryParams || {};
             $('tmQpAdd').value = qp.add && qp.add.length ? JSON.stringify(qp.add, null, 2) : '';
             $('tmQpRemove').value = (qp.remove || []).join(', ');
+            $('tmQpRemoveAll').checked = qp.removeAll === true; // B2-F9
 
             applyTypeVisibility();
         }
@@ -1328,6 +1562,10 @@
             match.url = $('tmUrl').value.trim();
             delete match.headers;
             delete match.graphql;
+            delete match.pageDomains;
+            delete match.resourceTypes;
+            delete match.payload;
+            delete match.callFilter;
 
             if (CONDITION_TYPES.includes(type)) {
                 const matchHeaders = parseJson('tmMatchHeaders', 'Match Request Headers', null, problems);
@@ -1336,6 +1574,33 @@
                 }
                 const op = $('tmGraphql').value.trim();
                 if (op) match.graphql = { operationName: op };
+            }
+
+            // B2-F7: which sites the rule applies on; any rule type.
+            const domains = parseDomains($('tmPageDomains').value);
+            if (domains.length) match.pageDomains = domains;
+
+            // B2-F7: only what the network layer applies; none ticked is the default.
+            const appliesAll = APPLIES_TO_TYPES.includes(type) && $('tmAppliesAll').checked;
+            if (resourceTypesApply(type, appliesAll)) {
+                const picked = RESOURCE_TYPES.map(([value]) => value).filter((value) => $('tmRt_' + value).checked);
+                if (picked.length) match.resourceTypes = picked;
+            }
+
+            // B2-F7 / PER-66: both need the in-page interceptor; where the rule
+            // cannot be handled there they are dropped, because the schema
+            // refuses them and the fields are not on screen to be fixed.
+            if (inPageFiltersApply(type, appliesAll)) {
+                const path = $('tmPayloadPath').value.trim();
+                const value = $('tmPayloadValue').value;
+                if (path || value) {
+                    match.payload = { path, operator: $('tmPayloadOp').value, value };
+                }
+                const mode = $('tmCallMode').value;
+                if (mode) {
+                    // A blank number is left to the schema ("Call filter n …").
+                    match.callFilter = { mode, n: readInteger('tmCallN', 'Call filter N', problems) };
+                }
             }
             rule.match = match;
 
@@ -1369,10 +1634,15 @@
                     delay: delay || 0, // blank means no delay
                     mode
                 });
+                // B2-F8: only patch mode has a status override, and only a
+                // filled field sets one (empty keeps the real response's).
+                delete response.patchStatus;
                 if (mode === 'patch') {
                     response.patch = parseJson('tmPatch', 'Response Patch', {}, problems);
                     delete response.body;
                     delete response.code;
+                    const override = readInteger('tmPatchStatus', 'Patch status', problems);
+                    if (Number.isFinite(override)) response.patchStatus = override;
                 } else if (mode === 'code') {
                     // Kept exactly as typed (indentation matters to nobody but
                     // the author); a blank one is left '' for the schema to refuse.
@@ -1412,6 +1682,9 @@
                     add: parseJson('tmQpAdd', 'Add Query Params', [], problems),
                     remove: $('tmQpRemove').value.split(',').map((s) => s.trim()).filter(Boolean)
                 };
+                // B2-F9: written only when ticked, so a rule that does not use
+                // it stays what it was.
+                if ($('tmQpRemoveAll').checked) rule.queryParams.removeAll = true;
             }
 
             return { rule, problems };
@@ -1616,13 +1889,20 @@
             // it. Save uses this; it is exposed so a unit test can assert what
             // a form state produces without a trusted click on Save (which
             // the editor, by design, refuses from script).
-            collect: () => collect()
+            collect: () => collect(),
+            // Mark problems on their fields exactly as a failed save does
+            // (aria-invalid, aria-describedby, focus on the first): a unit test
+            // cannot make the trusted click that Save needs.
+            showProblems: (problems, summary) => reportProblems(problems, summary)
         };
     }
 
-    // fieldForError, parseWholeNumber and readBody are pure; exported so they
-    // can be unit-tested without a browser.
-    const api = { create, HOST_ID, fieldForError, parseWholeNumber, readBody };
+    // fieldForError, parseWholeNumber, readBody and the field-availability
+    // helpers are pure; exported so they can be unit-tested without a browser.
+    const api = {
+        create, HOST_ID, fieldForError, parseWholeNumber, readBody,
+        parseDomains, resourceTypesApply, inPageFiltersApply, RESOURCE_TYPES
+    };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
