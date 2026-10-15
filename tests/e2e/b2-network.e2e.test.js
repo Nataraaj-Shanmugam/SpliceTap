@@ -186,6 +186,19 @@ describe('B2-F9: header append and query "remove all" in Chrome', () => {
         expect(regex).toMatchObject({ success: false, needsUrl: true });
     });
 
+    test('PER-63: a draft saved for the options page is kept in session storage and survives a page reload', async () => {
+        const draft = { rule: { name: 'Half-written', type: 'mock', match: { url: '*/api/*', method: '*' } } };
+        expect((await h.bg({ type: 'saveEditorDraft', tabId: 'options', draft })).success).toBe(true);
+        await h.control.reload({ waitUntil: 'load' });
+        expect((await h.bg({ type: 'getEditorDraft', tabId: 'options' })).draft).toEqual(draft);
+        const session = await h.extensionEval(() => chrome.storage.session.get('spliceTapDrafts'));
+        expect(session.spliceTapDrafts.options.draft).toEqual(draft);
+        const local = await h.extensionEval(() => chrome.storage.local.get('spliceTapDrafts'));
+        expect(local).toEqual({});
+        await h.bg({ type: 'clearEditorDraft', tabId: 'options' });
+        expect((await h.bg({ type: 'getEditorDraft', tabId: 'options' })).draft).toBeNull();
+    });
+
     test('removeAll with params to add leaves exactly those, encoded', async () => {
         const saved = await h.saveRule({
             id: 'qp-only', name: 'Only these params', enabled: true, type: 'queryparams',

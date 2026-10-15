@@ -4,6 +4,8 @@
  *            the network observer;
  *   B2-F9  — response-header append and queryParams.removeAll;
  *   B2-F10 — the explainMatch message ("Try a URL" and shadowing);
+ *   PER-63 — restorable editor drafts (saveEditorDraft / getEditorDraft /
+ *            clearEditorDraft);
  *
  * Chrome's own behaviour is covered by tests/e2e/b2-network.e2e.test.js.
  */
@@ -606,5 +608,113 @@ describe('B2-F10: explainMatch — shadowedBy', () => {
         const response = await withExplain(null, () => send({ type: 'explainMatch', ruleId: 't' }));
         expect(response.shadowedBy.map((s) => s.ruleId)).toEqual(['b1']);
         expect(response.result.matches).toBe(true);
+    });
+});
+
+// ---- PER-63: editor drafts --------------------------------------------------------------
+
+describe('PER-63: editor drafts', () => {
+    const tab = (id, frameId = 0) => ({ tab: { id }, frameId, url: 'https://a.test/page' });
+    const draft = (name = 'Unsaved', extra = {}) => ({ rule: { name, type: 'mock', match: { url: '*/api/*', method: '*' } }, ...extra });
+
+    test('a content script saves, reads and clears its own tab\'s draft, in session storage', async () => {
+        const { mock, send } = await setup();
+        expect((await send({ type: 'saveEditorDraft', draft: draft() }, tab(5))).success).toBe(true);
+        expect(mock.rawSession.spliceTapDrafts['5'].draft).toEqual(draft());
+        expect(mock.raw.spliceTapDrafts).toBeUndefined(); // never local storage
+
+        const got = await send({ type: 'getEditorDraft' }, tab(5));
+        expect(got).toMatchObject({ success: true, draft: draft() });
+        expect(typeof got.savedAt).toBe('number');
+
+        expect((await send({ type: 'clearEditorDraft' }, tab(5))).success).toBe(true);
+        expect((await send({ type: 'getEditorDraft' }, tab(5))).draft).toBeNull();
+    });
+
+    test('a page cannot reach another tab\'s draft by naming its id', async () => {
+        const { send } = await setup();
+        await send({ type: 'saveEditorDraft', draft: draft('Tab 5') }, tab(5));
+        expect((await send({ type: 'getEditorDraft', tabId: 5 }, tab(6))).draft).toBeNull();
+        await send({ type: 'saveEditorDraft', draft: draft('From 6'), tabId: 5 }, tab(6));
+        await send({ type: 'clearEditorDraft', tabId: 5 }, tab(6));
+        expect((await send({ type: 'getEditorDraft' }, tab(5))).draft.rule.name).toBe('Tab 5');
+        expect((await send({ type: 'getEditorDraft' }, tab(6))).draft).toBeNull(); // cleared its own
+    });
+
+    test('a subframe is refused all three', async () => {
+        const { send } = await setup();
+        for (const type of ['saveEditorDraft', 'getEditorDraft', 'clearEditorDraft']) {
+            expect(await send({ type, draft: draft() }, tab(5, 2))).toEqual({ success: false, error: 'This request is not available to web pages' });
+        }
+    });
+
+    test('extension pages name the tab, or "options"; anything else is refused', async () => {
+        const { send } = await setup();
+        await send({ type: 'saveEditorDraft', draft: draft('Overlay') }, tab(9));
+        expect((await send({ type: 'getEditorDraft', tabId: 9 })).draft.rule.name).toBe('Overlay');
+        await send({ type: 'saveEditorDraft', tabId: 'options', draft: draft('Options') });
+        expect((await send({ type: 'getEditorDraft', tabId: 'options' })).draft.rule.name).toBe('Options');
+        for (const tabId of [undefined, '9', -1, 1.5, 'popup']) {
+            expect((await send({ type: 'getEditorDraft', tabId })).success).toBe(false);
+        }
+    });
+
+    test('a draft over 200 KB is refused, and the stored one kept', async () => {
+        const { send } = await setup();
+        await send({ type: 'saveEditorDraft', draft: draft('Small') }, tab(5));
+        const big = await send({ type: 'saveEditorDraft', draft: draft('Big', { body: 'x'.repeat(200 * 1024) }) }, tab(5));
+        expect(big.success).toBe(false);
+        expect(big.error).toMatch(/200 KB/);
+        // Bytes, not characters: 70k three-byte characters is over the cap.
+        expect((await send({ type: 'saveEditorDraft', draft: draft('Wide', { body: '€'.repeat(70 * 1024) }) }, tab(5))).success).toBe(false);
+        expect((await send({ type: 'getEditorDraft' }, tab(5))).draft.rule.name).toBe('Small');
+        expect((await send({ type: 'saveEditorDraft', draft: 'text' }, tab(5))).success).toBe(false);
+        expect((await send({ type: 'saveEditorDraft', draft: [1] }, tab(5))).success).toBe(false);
+    });
+
+    test('a draft expires after 24 hours', async () => {
+        const day = 24 * 60 * 60 * 1000;
+        const { mock, send } = await setup({
+            session: {
+                spliceTapDrafts: {
+                    5: { draft: draft('Old'), ts: Date.now() - day - 1000 },
+                    6: { draft: draft('Fresh'), ts: Date.now() - day + 60000 }
+                }
+            }
+        });
+        expect((await send({ type: 'getEditorDraft' }, tab(5))).draft).toBeNull();
+        expect((await send({ type: 'getEditorDraft' }, tab(6))).draft.rule.name).toBe('Fresh');
+        await send({ type: 'saveEditorDraft', draft: draft('New') }, tab(7));
+        expect(Object.keys(mock.rawSession.spliceTapDrafts).sort()).toEqual(['6', '7']);
+    });
+
+    test('closing a tab drops its draft; at most 20 drafts are kept, newest first', async () => {
+        const { mock, send } = await setup();
+        const realNow = Date.now;
+        let clock = realNow();
+        Date.now = () => ++clock;
+        try {
+            // Saved from high tab ids to low: the oldest drafts have the highest ids.
+            for (let id = 30; id >= 9; id--) await send({ type: 'saveEditorDraft', draft: draft('T' + id) }, tab(id));
+        } finally {
+            Date.now = realNow;
+        }
+        const keys = Object.keys(mock.rawSession.spliceTapDrafts);
+        expect(keys).toHaveLength(20);
+        expect(keys).not.toContain('30');
+        expect(keys).not.toContain('29');
+        expect(keys).toContain('9');
+
+        mock.events.onTabRemoved._emit(9);
+        await new Promise((r) => setTimeout(r, 20));
+        expect((await send({ type: 'getEditorDraft' }, tab(9))).draft).toBeNull();
+        expect((await send({ type: 'getEditorDraft' }, tab(10))).draft.rule.name).toBe('T10');
+    });
+
+    test('"Delete all SpliceTap data" removes drafts too', async () => {
+        const { send } = await setup();
+        await send({ type: 'saveEditorDraft', draft: draft() }, tab(5));
+        await send({ type: 'resetAll' });
+        expect((await send({ type: 'getEditorDraft' }, tab(5))).draft).toBeNull();
     });
 });

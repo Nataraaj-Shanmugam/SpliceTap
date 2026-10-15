@@ -48,11 +48,19 @@ const INTERCEPTOR_TYPES = new Set(['mock', 'block', 'delay', 'redirect', 'reques
 // getRules, saveRule; B2-F10: explainMatch). Everything else is for extension
 // pages only.
 const CONTENT_SCRIPT_MESSAGES = new Set([
-    'getRules', 'saveRule', 'logInterception', 'logInterceptionBatch', 'logCapture', 'explainMatch'
+    'getRules', 'saveRule', 'logInterception', 'logInterceptionBatch', 'logCapture', 'explainMatch',
+    'saveEditorDraft', 'getEditorDraft', 'clearEditorDraft' // PER-63
 ]);
 // The in-page editor only ever runs in the top frame, so its messages are
 // refused from any other frame.
-const TOP_FRAME_MESSAGES = new Set(['saveRule', 'explainMatch']);
+const TOP_FRAME_MESSAGES = new Set(['saveRule', 'explainMatch', 'saveEditorDraft', 'getEditorDraft', 'clearEditorDraft']);
+
+// PER-63: unsaved editor drafts, in session storage, one per tab (or the
+// options page). Each is capped and expires; the oldest go past the count.
+const DRAFTS_KEY = 'spliceTapDrafts';
+const DRAFT_MAX_BYTES = 200 * 1024;
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+const DRAFTS_MAX = 20;
 
 // B2-F10: explainMatch's bounds on what a caller can hand it.
 const EXPLAIN_URL_MAX = 4096;
@@ -638,6 +646,7 @@ class SpliceTapBackground {
                     this.stats = { intercepted: 0, lastReset: new Date().toISOString() };
                     this.dnrRejected = new Map();
                     this._logClearedAt = Date.now();
+                    this._draftsFallback = null; // PER-63: drafts are in session storage, cleared below
 
                     const cleared = await this.storage.clearAll();
                     try {
@@ -661,6 +670,11 @@ class SpliceTapBackground {
 
                 case 'explainMatch':
                     return this._explainMatch(request);
+
+                case 'saveEditorDraft':
+                case 'getEditorDraft':
+                case 'clearEditorDraft':
+                    return this._editorDraft(request, sender);
 
                 case 'settingsUpdated': {
                     if (request.settings) {
@@ -1231,6 +1245,97 @@ class SpliceTapBackground {
     }
 
     /**
+     * PER-63: saveEditorDraft {draft} / getEditorDraft / clearEditorDraft.
+     *
+     * A content script's draft is keyed by the tab it runs in — never by a
+     * tab id it names, so a page cannot read or overwrite another tab's
+     * draft. Extension pages name the tab explicitly (`tabId`), or 'options'.
+     * Drafts live in chrome.storage.session under spliceTapDrafts — gone
+     * when the browser closes, not readable from content scripts — each at
+     * most DRAFT_MAX_BYTES and DRAFT_TTL_MS old.
+     */
+    async _editorDraft(request, sender) {
+        let key;
+        if (this._isContentScript(sender)) {
+            if (!sender || !sender.tab || typeof sender.tab.id !== 'number') {
+                return { success: false, error: 'Drafts need a tab' };
+            }
+            key = String(sender.tab.id);
+        } else if (request.tabId === 'options') {
+            key = 'options';
+        } else if (Number.isInteger(request.tabId) && request.tabId >= 0) {
+            key = String(request.tabId);
+        } else {
+            return { success: false, error: 'tabId must be a tab id or "options"' };
+        }
+
+        if (request.type === 'getEditorDraft') {
+            let found = null;
+            await this._updateDrafts((drafts) => { found = drafts[key] || null; });
+            return { success: true, draft: found ? found.draft : null, savedAt: found ? found.ts : null };
+        }
+
+        if (request.type === 'clearEditorDraft') {
+            await this._updateDrafts((drafts) => { delete drafts[key]; });
+            return { success: true };
+        }
+
+        const draft = request.draft;
+        if (!draft || typeof draft !== 'object' || Array.isArray(draft)) {
+            return { success: false, error: 'The draft must be an object' };
+        }
+        let size;
+        try {
+            size = new TextEncoder().encode(JSON.stringify(draft)).length;
+        } catch (error) {
+            return { success: false, error: 'The draft cannot be stored' };
+        }
+        if (size > DRAFT_MAX_BYTES) {
+            return { success: false, error: `The draft is too large to keep (over ${DRAFT_MAX_BYTES / 1024} KB)` };
+        }
+        const ts = Date.now();
+        await this._updateDrafts((drafts) => {
+            drafts[key] = { draft, ts };
+            // Past the count, the least recently saved go (tab-id keys are
+            // integer-like, so key order says nothing about age).
+            const byAge = Object.keys(drafts).sort((a, b) => drafts[a].ts - drafts[b].ts || (a === key) - (b === key));
+            for (const old of byAge.slice(0, Math.max(0, byAge.length - DRAFTS_MAX))) delete drafts[old];
+        });
+        return { success: true, savedAt: ts };
+    }
+
+    /**
+     * PER-63: read-modify-write the drafts map, one at a time, dropping
+     * expired drafts on the way. `change` edits the map in place.
+     */
+    _updateDrafts(change) {
+        const run = (this._draftChain || Promise.resolve()).then(async () => {
+            let stored = {};
+            try {
+                stored = (await chrome.storage.session.get(DRAFTS_KEY))[DRAFTS_KEY] || {};
+            } catch (error) {
+                stored = this._draftsFallback || {};
+            }
+            const now = Date.now();
+            const drafts = {};
+            for (const [key, entry] of Object.entries(stored)) {
+                if (entry && typeof entry.ts === 'number' && now - entry.ts < DRAFT_TTL_MS && entry.ts <= now) drafts[key] = entry;
+            }
+            const before = JSON.stringify(stored);
+            change(drafts);
+            if (JSON.stringify(drafts) === before) return;
+            this._draftsFallback = drafts;
+            try {
+                await chrome.storage.session.set({ [DRAFTS_KEY]: drafts });
+            } catch (error) {
+                // Kept in memory for this worker's lifetime instead.
+            }
+        });
+        this._draftChain = run.catch(() => undefined);
+        return run;
+    }
+
+    /**
      * Broadcast current rules/settings to all content scripts with retry logic
      */
     /**
@@ -1468,6 +1573,8 @@ class SpliceTapBackground {
         // Clean up retry counts when tabs close
         chrome.tabs.onRemoved.addListener((tabId) => {
             this.broadcastRetryCount.delete(tabId);
+            // PER-63: a closed tab's draft can never be restored.
+            this._updateDrafts((drafts) => { delete drafts[String(tabId)]; }).catch(() => undefined);
         });
     }
 
