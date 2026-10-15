@@ -409,6 +409,26 @@
             border: 1px solid rgba(47, 125, 250, 0.3);
         }
         .tm-hintbar[hidden] { display: none; }
+
+        /* PER-63: the restore offer. Like the hint bar, but with buttons, whose
+           own em sizes must not compound inside a smaller parent (PER-73): the
+           bar sets no font size, its text does. */
+        .tm-draftbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px 12px;
+            margin: 12px 16px 0;
+            padding: 9px 11px;
+            border-radius: 9px;
+            background: rgba(47, 125, 250, 0.12);
+            color: #e7eefb;
+            border: 1px solid rgba(47, 125, 250, 0.3);
+        }
+        .tm-draftbar[hidden] { display: none; }
+        .tm-draftbar-text { flex: 1; min-width: 12em; font-size: 0.75em; line-height: 1.45; }
+        .tm-draftbar-actions { display: inline-flex; gap: 8px; }
         .tm-hintbar-text { flex: 1; min-width: 0; }
         .tm-hintbar-x {
             width: 24px; height: 24px;
@@ -719,6 +739,11 @@
             color: #101828;
             border-color: rgba(30, 99, 245, 0.22);
         }
+        .tm-light .tm-draftbar {
+            background: rgba(30, 99, 245, 0.07);
+            color: #101828;
+            border-color: rgba(30, 99, 245, 0.22);
+        }
         .tm-light .tm-hintbar-x:hover { background: rgba(15, 23, 42, 0.07); }
         .tm-light .tm-error {
             background: rgba(220, 38, 38, 0.08);
@@ -751,6 +776,7 @@
             .tm-error,
             .tm-note,
             .tm-hintbar,
+            .tm-draftbar,
             .tm-btn,
             .tm-field input[type="text"],
             .tm-field input[type="number"],
@@ -826,6 +852,18 @@
             <div class="tm-hintbar" id="tmHintBar" hidden>
               <span class="tm-hintbar-text">SpliceTap opens this editor over your current page. Press Esc or click outside to close it.</span>
               <button type="button" class="tm-hintbar-x" id="tmHintClose" aria-label="Dismiss tip">&times;</button>
+            </div>
+
+            <!-- PER-63: offered when the editor opens and a draft of an unsaved
+                 rule was kept (the page was reloaded, say). The text goes into
+                 the live region a moment after the bar is shown, as the toast
+                 does, so a screen reader says it. -->
+            <div class="tm-draftbar" id="tmDraftBar" role="group" aria-labelledby="tmDraftText" hidden>
+              <span class="tm-draftbar-text" id="tmDraftText" role="status" aria-live="polite"></span>
+              <span class="tm-draftbar-actions">
+                <button type="button" class="tm-btn tm-btn-primary" id="tmDraftRestore">Restore</button>
+                <button type="button" class="tm-btn tm-btn-secondary" id="tmDraftDiscard">Discard</button>
+              </span>
             </div>
 
             <div class="tm-body">
@@ -1149,6 +1187,9 @@
      *        script a click on Save (S-1). An extension page has no hostile
      *        script to defend against, so it may use 'open'.
      * @param {Element} [options.mountPoint=document.documentElement]
+     * @param {string|number} [options.draftKey] PER-63: how the background keys this
+     *        editor's draft when the caller is an extension page ("options"); a
+     *        content script is keyed by its tab and passes nothing.
      * @param {function({saved: boolean, rule?: object})} [options.onClose]
      */
     function create(options = {}) {
@@ -1165,7 +1206,6 @@
         // next non-Escape input rather than for a fixed 4 s that nobody was told about.
         let closeArmed = false;
         let closeWarningShown = false;    // PER-84: the unsaved-changes message is what's in the error box
-        let unloadGuarded = false;        // PER-63: a beforeunload handler is registered
         let settings = null;              // F4: the extension settings, once read; null until then
 
         const $ = (id) => shadow && shadow.getElementById(id);
@@ -1197,30 +1237,83 @@
             tmHdrRes: 'tmHdrResHint'
         };
 
-        /**
-         * PER-63: a dev-server reload used to throw away a half-written rule
-         * with no warning. While the form is dirty, ask the browser to prompt
-         * before the page unloads. Restoring the draft after a reload would
-         * need storage that the page cannot read and this module does not own
-         * (a per-tab storage.session mirror in the background); until then the
-         * prompt is the safeguard. The draft is never written anywhere.
-         */
-        function onBeforeUnload(e) {
-            if (!formDirty) return;
-            e.preventDefault();
-            e.returnValue = '';
+        // ---- restorable drafts (PER-63) ------------------------------------
+        // A dev-server reload used to throw away a half-written rule, and a
+        // beforeunload prompt was the only safeguard. Now the form is mirrored
+        // to the background while it is dirty (debounced), kept per tab in
+        // chrome.storage.session — somewhere the page cannot read — and offered
+        // back the next time the editor opens. The prompt is gone: a reload
+        // loses nothing. The draft ends with the editor: saved, discarded or
+        // closed.
+
+        const DRAFT_DEBOUNCE_MS = 800;
+        // Controls that are not part of the rule: a template pick is a one-off,
+        // "Try a URL" is scratch input, the captured response is a reference.
+        const DRAFT_SKIP = /^(tmTemplate|tmTry|tmRefBody)/;
+
+        let draftTimer = null;
+        let draftChain = Promise.resolve(); // draft messages go out in the order they were made
+        let draftMayExist = false;          // one was saved, or one was offered: a clear is worth sending
+        let pendingDraft = null;            // an offered draft that has been neither restored nor discarded
+        let openSeq = 0;                    // which open() an answer from the background belongs to
+        let saving = false;
+
+        // An extension page may be asked for under an explicit key; a content
+        // script is keyed by its tab, which the background knows from the sender.
+        const draftMessage = (message) => (options.draftKey !== undefined
+            ? Object.assign(message, { tabId: options.draftKey })
+            : message);
+
+        function queueDraftMessage(message) {
+            draftChain = draftChain
+                .then(() => send(draftMessage(message)))
+                .catch(() => {}); // a draft is a convenience; never let one break the editor
+            return draftChain;
         }
 
-        function guardUnload(on) {
-            if (on === unloadGuarded) return;
-            unloadGuarded = on;
-            if (on) window.addEventListener('beforeunload', onBeforeUnload);
-            else window.removeEventListener('beforeunload', onBeforeUnload);
+        /** The form as plain data: each control's value by id, and the rule being edited. */
+        function captureDraft() {
+            const values = {};
+            shadow.querySelectorAll('input, select, textarea').forEach((el) => {
+                if (!el.id || DRAFT_SKIP.test(el.id)) return;
+                values[el.id] = el.type === 'checkbox' ? el.checked : el.value;
+            });
+            return { v: 1, name: values.tmName || '', editingRule, values };
+        }
+
+        function flushDraft() {
+            clearTimeout(draftTimer);
+            draftTimer = null;
+            if (!shadow || !formDirty || saving) return;
+            draftMayExist = true;
+            queueDraftMessage({ type: 'saveEditorDraft', draft: captureDraft() });
+        }
+
+        function scheduleDraft() {
+            clearTimeout(draftTimer);
+            draftTimer = setTimeout(flushDraft, DRAFT_DEBOUNCE_MS);
+        }
+
+        /** The draft's work is over: stop the timer, and remove it if one may be stored. */
+        function endDraft() {
+            clearTimeout(draftTimer);
+            draftTimer = null;
+            pendingDraft = null;
+            openSeq++; // an answer to a getEditorDraft still in flight is stale
+            if (draftMayExist) {
+                draftMayExist = false;
+                queueDraftMessage({ type: 'clearEditorDraft' });
+            }
+        }
+
+        // A reload can come within the debounce window; hand over what there is.
+        function onPageHide() {
+            if (draftTimer !== null) flushDraft();
         }
 
         function markDirty() {
             formDirty = true;
-            guardUnload(true);
+            scheduleDraft();
         }
 
         function mountPoint() {
@@ -1269,6 +1362,10 @@
             $('tmAppliesAll').addEventListener('change', () => applyTypeVisibility());
             $('tmCallMode').addEventListener('change', () => applyTypeVisibility());
             $('tmHintClose').addEventListener('click', dismissHint);
+            // PER-63: answer the offer of a kept draft.
+            $('tmDraftRestore').addEventListener('click', () => { if (pendingDraft) restoreDraft(pendingDraft); });
+            $('tmDraftDiscard').addEventListener('click', discardDraft);
+            window.addEventListener('pagehide', onPageHide);
             // PER-60: collapse / expand the captured response.
             $('tmRefToggle').addEventListener('click', () => {
                 setReferenceOpen($('tmRefToggle').getAttribute('aria-expanded') !== 'true');
@@ -1293,6 +1390,9 @@
             const onEdit = (e) => {
                 // B2-F10: what is typed into "Try a URL" is not part of the rule.
                 if (e.target && e.target.closest && e.target.closest('#tmTry')) return;
+                // PER-63: starting on something else answers the offer — "no" —
+                // and the first draft saved after this replaces the old one.
+                if (pendingDraft && !(e.target.closest && e.target.closest('#tmDraftBar'))) hideDraftOffer();
                 markDirty();
                 disarmClose();
                 // PER-77: editing a field answers its error.
@@ -1867,11 +1967,12 @@
             }
         }
 
-        function setSaving(saving) {
+        function setSaving(isSaving) {
+            saving = isSaving;
             const btn = $('tmSave');
             if (!btn) return;
-            btn.disabled = saving;
-            btn.textContent = saving ? 'Saving…' : 'Save Rule';
+            btn.disabled = isSaving;
+            btn.textContent = isSaving ? 'Saving…' : 'Save Rule';
         }
 
         async function save() {
@@ -2071,9 +2172,10 @@
 
         function close(saved, savedRule) {
             document.removeEventListener('keydown', onKeydown, true);
-            // PER-63: nothing left to lose, so stop prompting before unload.
+            window.removeEventListener('pagehide', onPageHide);
+            // PER-63: saved, cancelled or closed clean — the draft has done its job.
+            endDraft();
             formDirty = false;
-            guardUnload(false);
             if (hostEl && hostEl.parentNode) hostEl.parentNode.removeChild(hostEl);
             hostEl = null;
             shadow = null;
@@ -2142,6 +2244,77 @@
             }
         }
 
+        // ---- offering a kept draft back (PER-63) -----------------------------
+
+        function hideDraftOffer() {
+            pendingDraft = null;
+            const bar = $('tmDraftBar');
+            if (bar) bar.hidden = true;
+            const text = $('tmDraftText');
+            if (text) text.textContent = '';
+        }
+
+        /** Ask the background for this tab's draft and, if there is one, offer it. */
+        async function offerDraft() {
+            hideDraftOffer();
+            const seq = ++openSeq;
+            let response;
+            try {
+                response = await send(draftMessage({ type: 'getEditorDraft' }));
+            } catch (e) {
+                return; // no draft service (or it failed): the editor opens as usual
+            }
+            const draft = response && response.success !== false && response.draft;
+            // Gone, replaced by a newer open, or already being edited: do not offer.
+            if (!shadow || seq !== openSeq || formDirty) return;
+            if (!draft || typeof draft !== 'object' || !draft.values || typeof draft.values !== 'object') return;
+
+            pendingDraft = draft;
+            draftMayExist = true;
+            const name = String(draft.values.tmName || draft.name || '').trim();
+            const bar = $('tmDraftBar');
+            const text = $('tmDraftText');
+            bar.hidden = false;
+            // The text follows the reveal, so the live region has something to announce.
+            setTimeout(() => {
+                if (!shadow || pendingDraft !== draft) return;
+                text.textContent = '';
+                if (name) {
+                    text.append("Restore your unsaved rule '", tryQuoted(name), "'?");
+                } else {
+                    text.append('Restore your unsaved rule?');
+                }
+            }, 60);
+        }
+
+        /** Put a draft back in the form: the rule being edited, and every control as it was. */
+        function restoreDraft(draft) {
+            editingRule = draft.editingRule && typeof draft.editingRule === 'object' ? draft.editingRule : null;
+            $('tmTitle').textContent = editingRule ? 'Edit Rule' : 'New Rule';
+            for (const [id, value] of Object.entries(draft.values)) {
+                const el = $(id);
+                if (!el || DRAFT_SKIP.test(id)) continue;
+                if (el.type === 'checkbox') el.checked = value === true;
+                else if (el.tagName === 'SELECT') {
+                    if (Array.from(el.options).some((o) => o.value === String(value))) el.value = String(value);
+                } else el.value = String(value);
+            }
+            hideDraftOffer();
+            applyTypeVisibility();
+            clearError();
+            markDirty(); // it is unsaved work again, and the draft keeps being kept
+            const nameInput = $('tmName');
+            if (nameInput) nameInput.focus();
+        }
+
+        function discardDraft() {
+            hideDraftOffer();
+            queueDraftMessage({ type: 'clearEditorDraft' }); // the offered draft is stored: remove it
+            draftMayExist = false;
+            const nameInput = $('tmName');
+            if (nameInput) nameInput.focus();
+        }
+
         // ---- Captured response (PER-60) --------------------------------------
 
         /**
@@ -2204,12 +2377,14 @@
             // form; reset the dirty flags afterwards, or every editor would
             // open already considering itself modified.
             formDirty = false;
-            guardUnload(false);
+            clearTimeout(draftTimer); // populate() is not an edit; nothing to save yet
+            draftTimer = null;
             closeArmed = false;
             setSaving(false);
             clearError();
             applySettings();
             maybeShowHint();
+            offerDraft(); // PER-63
 
             const nameInput = $('tmName');
             if (nameInput) nameInput.focus();

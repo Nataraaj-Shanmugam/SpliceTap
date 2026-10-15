@@ -15,7 +15,7 @@ const {
     create, fieldForError, parseDomains, resourceTypesApply, inPageFiltersApply, RESOURCE_TYPES
 } = require('../src/rule-editor');
 
-function mount({ rules = [], settings, handlers = {} } = {}) {
+function mount({ rules = [], settings, handlers = {}, draftKey } = {}) {
     const sent = [];
     window.chrome = {
         runtime: {
@@ -35,7 +35,7 @@ function mount({ rules = [], settings, handlers = {} } = {}) {
 
     const mountPoint = document.createElement('div');
     document.body.appendChild(mountPoint);
-    const editor = create({ shadowMode: 'open', mountPoint });
+    const editor = create({ shadowMode: 'open', mountPoint, draftKey });
     const root = () => mountPoint.firstChild.shadowRoot;
     const $ = (id) => root().getElementById(id);
 
@@ -930,5 +930,308 @@ describe('PER-60 captured response panel', () => {
         h.editor.open({ referenceBody: 'x'.repeat(150000) });
         expect(h.$('tmRefBody').value.length).toBe(100000);
         expect(h.$('tmRefHint').textContent).toMatch(/first 100,000 of 150,000 characters/);
+    });
+});
+
+// ---- PER-63: restorable drafts ------------------------------------------------
+
+describe('PER-63 drafts', () => {
+    beforeEach(() => { jest.useFakeTimers(); });
+    afterEach(() => { if (h) h.cleanup(); h = null; jest.useRealTimers(); });
+
+    const tick = (ms) => jest.advanceTimersByTimeAsync(ms);
+    const of = (hh, type) => hh.sent.filter((m) => m.type === type);
+    const draftSaved = (hh) => of(hh, 'saveEditorDraft');
+    const kept = {
+        v: 1, name: 'Half written', editingRule: null,
+        values: { tmType: 'delay', tmName: 'Half written', tmUrl: '*/slow/*', tmMethod: 'POST', tmDelayMs: '2500', tmEnabled: false, tmCallMode: 'first', tmCallN: '4' }
+    };
+
+    test('the beforeunload prompt is gone: no listener, and an unload is never prevented', async () => {
+        const add = jest.spyOn(window, 'addEventListener');
+        h = mount();
+        h.editor.open({});
+        h.set('tmName', 'typing');
+        expect(add.mock.calls.filter(([type]) => type === 'beforeunload')).toEqual([]);
+        const event = new window.Event('beforeunload', { cancelable: true });
+        window.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+        add.mockRestore();
+    });
+
+    test('a dirty form is saved as a draft 800 ms after the last edit, once for a burst', async () => {
+        h = mount();
+        h.editor.open({});
+        await tick(0);
+        h.set('tmName', 'A');
+        await tick(500);
+        h.set('tmName', 'AB');
+        await tick(500);
+        expect(draftSaved(h)).toEqual([]); // 500 ms since the last edit
+        await tick(300);
+        expect(draftSaved(h).length).toBe(1);
+        const { draft } = draftSaved(h)[0];
+        expect(draft.name).toBe('AB');
+        expect(draft.values.tmName).toBe('AB');
+        expect(draft.values.tmType).toBe('mock');
+        expect(draft.editingRule).toBeNull();
+        await tick(5000);
+        expect(draftSaved(h).length).toBe(1); // nothing new, nothing more
+    });
+
+    test('an untouched form saves nothing, and neither does typing in "Try a URL"', async () => {
+        h = mount();
+        h.editor.open({});
+        await tick(3000);
+        h.set('tmTryUrl', 'https://example.com');
+        h.set('tmTryBody', '{}');
+        await tick(3000);
+        expect(draftSaved(h)).toEqual([]);
+    });
+
+    test('the draft carries the form and the rule being edited, but not scratch controls', async () => {
+        h = mount();
+        const rule = mockRule();
+        h.editor.open({ rule, referenceBody: '{"x":1}' });
+        await tick(0);
+        h.set('tmTryUrl', 'https://example.com');
+        h.set('tmName', 'Renamed');
+        h.set('tmCallMode', 'every');
+        h.set('tmPageDomains', 'a.test');
+        await tick(800);
+        const { draft } = draftSaved(h)[0];
+        expect(draft.editingRule).toEqual(rule);
+        expect(draft.values).toMatchObject({ tmName: 'Renamed', tmCallMode: 'every', tmPageDomains: 'a.test', tmEnabled: true });
+        expect(Object.keys(draft.values).some((id) => /^tmTry|^tmTemplate|^tmRefBody/.test(id))).toBe(false);
+    });
+
+    test('an extension page names its key; a content script sends none', async () => {
+        h = mount({ draftKey: 'options' });
+        h.editor.open({});
+        await tick(0);
+        h.set('tmName', 'x');
+        await tick(800);
+        expect(of(h, 'getEditorDraft')[0].tabId).toBe('options');
+        expect(draftSaved(h)[0].tabId).toBe('options');
+        h.cleanup();
+        h = mount();
+        h.editor.open({});
+        await tick(0);
+        h.set('tmName', 'x');
+        await tick(800);
+        expect(of(h, 'getEditorDraft')[0]).not.toHaveProperty('tabId');
+        expect(draftSaved(h)[0]).not.toHaveProperty('tabId');
+    });
+
+    test('closing before the debounce ends saves nothing; closing after a save clears it, in order', async () => {
+        h = mount();
+        h.editor.open({});
+        await tick(0);
+        h.set('tmName', 'quick');
+        await tick(300);
+        h.$('tmCancel').click();
+        await tick(5000);
+        expect(draftSaved(h)).toEqual([]);
+        expect(of(h, 'clearEditorDraft')).toEqual([]); // nothing was stored, so nothing to clear
+
+        h.editor.open({});
+        await tick(0);
+        h.set('tmName', 'longer');
+        await tick(800);
+        h.$('tmCancel').click();
+        await tick(100);
+        const order = h.sent.map((m) => m.type).filter((t) => /EditorDraft/.test(t));
+        expect(order.slice(-2)).toEqual(['saveEditorDraft', 'clearEditorDraft']);
+    });
+
+    test('a reload within the debounce window hands over what was typed (pagehide)', async () => {
+        h = mount();
+        h.editor.open({});
+        await tick(0);
+        h.set('tmName', 'last second');
+        window.dispatchEvent(new window.Event('pagehide'));
+        await tick(0);
+        expect(draftSaved(h).length).toBe(1);
+        expect(draftSaved(h)[0].draft.values.tmName).toBe('last second');
+        await tick(2000);
+        expect(draftSaved(h).length).toBe(1);
+    });
+
+    test('a failing draft service never breaks the editor', async () => {
+        h = mount({ handlers: {
+            getEditorDraft: async () => { throw new Error('gone'); },
+            saveEditorDraft: async () => { throw new Error('gone'); },
+            clearEditorDraft: async () => ({ success: false, error: 'Unknown message type: clearEditorDraft' })
+        } });
+        h.editor.open({});
+        await tick(0);
+        h.set('tmName', 'x');
+        await tick(800);
+        h.$('tmCancel').click();
+        await tick(100);
+        expect(h.editor.isOpen()).toBe(false);
+    });
+
+    describe('the offer', () => {
+        const withDraft = (draft = kept) => ({ getEditorDraft: async () => ({ success: true, draft }) });
+        const bar = () => h.$('tmDraftBar');
+
+        test('no draft, an unsupported service or a malformed one: no banner', async () => {
+            for (const answer of [{ success: true, draft: null }, { success: false, error: 'Unknown message type' }, { success: true, draft: { v: 1 } }, undefined]) {
+                h = mount({ handlers: { getEditorDraft: async () => answer } });
+                h.editor.open({});
+                await tick(200);
+                expect(bar().hidden).toBe(true);
+                h.cleanup();
+            }
+            h = null;
+        });
+
+        test('a draft is offered: "Restore your unsaved rule \'<name>\'?" with Restore and Discard', async () => {
+            h = mount({ handlers: withDraft() });
+            h.editor.open({});
+            await tick(200);
+            expect(bar().hidden).toBe(false);
+            expect(h.$('tmDraftText').textContent).toBe("Restore your unsaved rule 'Half written'?");
+            expect(h.$('tmDraftText').getAttribute('role')).toBe('status');
+            expect(h.$('tmDraftRestore').textContent).toBe('Restore');
+            expect(h.$('tmDraftDiscard').textContent).toBe('Discard');
+            expect(bar().getAttribute('role')).toBe('group');
+            // opening is not an edit
+            expect(draftSaved(h)).toEqual([]);
+        });
+
+        test('a draft with no name is offered without one', async () => {
+            h = mount({ handlers: withDraft({ ...kept, name: '', values: { ...kept.values, tmName: '' } }) });
+            h.editor.open({});
+            await tick(200);
+            expect(h.$('tmDraftText').textContent).toBe('Restore your unsaved rule?');
+        });
+
+        test('a name that looks like markup is text', async () => {
+            h = mount({ handlers: withDraft({ ...kept, values: { ...kept.values, tmName: '<b onclick=x>hi</b>' } }) });
+            h.editor.open({});
+            await tick(200);
+            expect(h.$('tmDraftText').textContent).toBe("Restore your unsaved rule '<b onclick=x>hi</b>'?");
+            expect(h.$('tmDraftText').querySelector('b')).toBeNull();
+        });
+
+        test('Restore puts the form back, and it counts as unsaved work again', async () => {
+            h = mount({ handlers: withDraft() });
+            h.editor.open({});
+            await tick(200);
+            h.$('tmDraftRestore').click();
+            expect(h.$('tmType').value).toBe('delay');
+            expect(h.$('tmName').value).toBe('Half written');
+            expect(h.$('tmUrl').value).toBe('*/slow/*');
+            expect(h.$('tmMethod').value).toBe('POST');
+            expect(h.$('tmDelayMs').value).toBe('2500');
+            expect(h.$('tmEnabled').checked).toBe(false);
+            expect(h.$('tmCallMode').value).toBe('first');
+            expect(h.$('tmCallN').value).toBe('4');
+            expect(h.isShown('tmCallField')).toBe(true);
+            expect(bar().hidden).toBe(true);
+            const { rule } = h.editor.collect();
+            expect(rule).toMatchObject({ type: 'delay', name: 'Half written', delayMs: 2500, enabled: false });
+            expect(rule.match.callFilter).toEqual({ mode: 'first', n: 4 });
+            // Escape now warns (dirty) instead of closing, and the draft keeps being kept
+            document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            expect(h.editor.isOpen()).toBe(true);
+            await tick(800);
+            expect(draftSaved(h).length).toBeGreaterThan(0);
+            expect(h.root().activeElement).toBe(h.$('tmName'));
+        });
+
+        test('Restore on a draft of an edit brings back the rule\'s identity', async () => {
+            const rule = mockRule();
+            h = mount({ handlers: withDraft({ v: 1, name: 'Mock', editingRule: rule, values: { tmType: 'mock', tmName: 'Mock edited', tmUrl: '*/api/*', tmMethod: '*' } }) });
+            h.editor.open({});
+            await tick(200);
+            h.$('tmDraftRestore').click();
+            expect(h.$('tmTitle').textContent).toBe('Edit Rule');
+            const collected = h.editor.collect().rule;
+            expect(collected.id).toBe('m1');
+            expect(collected.hitCount).toBe(2);
+            expect(collected.name).toBe('Mock edited');
+        });
+
+        test('Restore skips values that no longer fit a control (an option that is gone)', async () => {
+            h = mount({ handlers: withDraft({ ...kept, values: { ...kept.values, tmType: 'no-such-type', tmNoSuchField: 'x' } }) });
+            h.editor.open({});
+            await tick(200);
+            h.$('tmDraftRestore').click();
+            expect(h.$('tmType').value).toBe('mock'); // unchanged
+            expect(h.$('tmName').value).toBe('Half written');
+        });
+
+        test('Discard removes the draft and leaves the form as it opened', async () => {
+            h = mount({ handlers: withDraft() });
+            h.editor.open({});
+            await tick(200);
+            h.$('tmDraftDiscard').click();
+            await tick(0);
+            expect(bar().hidden).toBe(true);
+            expect(of(h, 'clearEditorDraft').length).toBe(1);
+            expect(h.$('tmName').value).toBe('');
+            expect(h.$('tmType').value).toBe('mock');
+            // and a later clean close has nothing more to clear
+            h.$('tmCancel').click();
+            await tick(0);
+            expect(of(h, 'clearEditorDraft').length).toBe(1);
+        });
+
+        test('closing without answering is a clean close: the draft is cleared', async () => {
+            h = mount({ handlers: withDraft() });
+            h.editor.open({});
+            await tick(200);
+            document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            await tick(0);
+            expect(h.editor.isOpen()).toBe(false);
+            expect(of(h, 'clearEditorDraft').length).toBe(1);
+        });
+
+        test('starting to type answers the offer with no: the banner goes and the draft is replaced', async () => {
+            h = mount({ handlers: withDraft() });
+            h.editor.open({});
+            await tick(200);
+            h.set('tmName', 'Something else');
+            expect(bar().hidden).toBe(true);
+            await tick(800);
+            expect(draftSaved(h)[0].draft.values.tmName).toBe('Something else');
+        });
+
+        test('an answer that arrives after the person has begun typing is not offered', async () => {
+            let answer;
+            h = mount({ handlers: { getEditorDraft: () => new Promise((resolve) => { answer = () => resolve({ success: true, draft: kept }); }) } });
+            h.editor.open({});
+            h.set('tmName', 'already typing');
+            answer();
+            await tick(200);
+            expect(bar().hidden).toBe(true);
+        });
+
+        test('an answer that arrives after the editor is closed is dropped', async () => {
+            let answer;
+            h = mount({ handlers: { getEditorDraft: () => new Promise((resolve) => { answer = () => resolve({ success: true, draft: kept }); }) } });
+            h.editor.open({});
+            h.editor.close();
+            answer();
+            await tick(200);
+            expect(h.editor.isOpen()).toBe(false);
+        });
+
+        test('opening again offers afresh, and the old banner does not linger', async () => {
+            let draft = kept;
+            h = mount({ handlers: { getEditorDraft: async () => ({ success: true, draft }) } });
+            h.editor.open({});
+            await tick(200);
+            expect(bar().hidden).toBe(false);
+            draft = null;
+            h.editor.close();
+            h.editor.open({});
+            await tick(200);
+            expect(bar().hidden).toBe(true);
+            expect(h.$('tmDraftText').textContent).toBe('');
+        });
     });
 });

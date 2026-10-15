@@ -1,7 +1,7 @@
 /**
  * Editor fix group (E1): the pure parts of src/rule-editor.js.
  *
- * What needs a browser (focus, aria state, the toast, beforeunload) is in
+ * What needs a browser (focus, aria state, the toast) is in
  * tests/e2e/fix-editor.e2e.test.js; these cover the logic that does not.
  */
 

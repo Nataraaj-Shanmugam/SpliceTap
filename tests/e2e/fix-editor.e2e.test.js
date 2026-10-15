@@ -425,10 +425,10 @@ describe('in-page editor (overlay host)', () => {
         return dialogs;
     }
 
-    test('PER-63: a dirty form makes the browser prompt before the page unloads', async () => {
+    test('PER-63: a dirty form no longer makes the browser prompt before the page unloads (drafts replaced the prompt, B2)', async () => {
         await openOverlay();
         await ed.fill(page, 'tmName', 'Draft in progress');
-        expect(await reloadAndWatchDialogs()).toEqual(['beforeunload']);
+        expect(await reloadAndWatchDialogs()).toEqual([]);
     });
 
     test('PER-63: no prompt while nothing has been typed, after Cancel, or after Save', async () => {

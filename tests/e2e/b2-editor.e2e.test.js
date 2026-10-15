@@ -76,7 +76,10 @@ describe.each(HOSTS)('B2 editor fields — %s host', (hostKind) => {
 
     beforeAll(async () => { h = await launch(); });
     afterAll(async () => { if (h) await h.close(); });
-    beforeEach(async () => { await h.reset(); });
+    beforeEach(async () => {
+        await h.reset();
+        await h.extensionEval(() => chrome.storage.local.remove('b2StubDraft'));
+    });
     afterEach(async () => {
         if (page && !page.isClosed()) await page.close({ runBeforeUnload: false });
         page = null;
@@ -358,6 +361,132 @@ describe.each(HOSTS)('B2 editor fields — %s host', (hostKind) => {
         expect(await tryText()).toMatch(/✗/);
     });
 
+    // ---- PER-63: restorable drafts ---------------------------------------------
+
+    const draftStub = { drafts: true };
+    const storedDraft = async () => (await h.extensionEval(() => chrome.storage.local.get('b2StubDraft'))).b2StubDraft || null;
+    const bannerText = () => ed.inShadow(page, (root) => {
+        const bar = root.getElementById('tmDraftBar');
+        return bar.hidden ? null : root.getElementById('tmDraftText').textContent;
+    });
+
+    /** Reload the page the way a dev server does, and open the editor again. */
+    async function reloadAndReopen({ stub, realBackground } = {}) {
+        const dialogs = [];
+        const onDialog = async (d) => { dialogs.push(d.type()); await d.accept(); };
+        page.on('dialog', onDialog);
+        await page.reload({ waitUntil: 'load' });
+        page.off('dialog', onDialog);
+        if (hostKind === 'overlay') {
+            if (stub && !realBackground) await inWorld(setupStub(stub));
+            await h.openOverlay(page, { mode: 'new' });
+        }
+        await waitFor(() => ed.isOpen(page), { label: 'the editor to open again' });
+        await sleep(200);
+        return dialogs;
+    }
+
+    test('PER-63: a dirty form is kept as a draft; after a reload the editor offers it back, and Restore puts it back', async () => {
+        await openEditor(null, { stub: draftStub });
+        await ed.fill(page, 'tmName', 'Kept across reload');
+        await ed.fill(page, 'tmUrl', '*/api/kept*');
+        await ed.fill(page, 'tmType', 'delay');
+        await ed.fill(page, 'tmDelayMs', '1500');
+        await waitFor(async () => (await storedDraft()) !== null, { timeout: 4000, label: 'the draft to be kept (800 ms debounce)' });
+        const draft = await storedDraft();
+        expect(draft.values).toMatchObject({ tmName: 'Kept across reload', tmUrl: '*/api/kept*', tmType: 'delay' });
+
+        // the reload raises no "leave site?" prompt, and nothing is lost
+        const dialogs = await reloadAndReopen({ stub: draftStub });
+        expect(dialogs).toEqual([]);
+        await waitFor(async () => (await bannerText()) !== null, { label: 'the offer' });
+        expect(await bannerText()).toBe("Restore your unsaved rule 'Kept across reload'?");
+        expect(await ed.value(page, 'tmName')).toBe(''); // not applied until asked
+
+        await ed.click(page, 'tmDraftRestore');
+        expect(await ed.value(page, 'tmName')).toBe('Kept across reload');
+        expect(await ed.value(page, 'tmUrl')).toBe('*/api/kept*');
+        expect(await ed.value(page, 'tmType')).toBe('delay');
+        expect(await ed.value(page, 'tmDelayMs')).toBe('1500');
+        expect(await bannerText()).toBeNull();
+        expect(await ed.activeElementId(page)).toBe('tmName');
+
+        // saving the restored rule ends the draft
+        const rules = await saveAndWait((r) => r.length === 1, 'the rule to save');
+        expect(rules[0]).toMatchObject({ name: 'Kept across reload', type: 'delay', delayMs: 1500 });
+        await waitFor(async () => (await storedDraft()) === null, { label: 'the draft to be cleared on save' });
+    });
+
+    test('PER-63: Discard removes the draft and leaves a blank form', async () => {
+        await openEditor(null, { stub: draftStub });
+        await ed.fill(page, 'tmName', 'Throw me away');
+        await waitFor(async () => (await storedDraft()) !== null, { timeout: 4000, label: 'the draft' });
+        await reloadAndReopen({ stub: draftStub });
+        await waitFor(async () => (await bannerText()) !== null, { label: 'the offer' });
+
+        await ed.click(page, 'tmDraftDiscard');
+        await waitFor(async () => (await storedDraft()) === null, { label: 'the draft to be cleared' });
+        expect(await bannerText()).toBeNull();
+        expect(await ed.value(page, 'tmName')).toBe('');
+        expect(await ed.activeElementId(page)).toBe('tmName');
+    });
+
+    test('PER-63: Cancel after typing clears the draft, and nothing is offered the next time', async () => {
+        await openEditor(null, { stub: draftStub });
+        await ed.fill(page, 'tmName', 'Cancelled');
+        await waitFor(async () => (await storedDraft()) !== null, { timeout: 4000, label: 'the draft' });
+        await ed.click(page, 'tmCancel');
+        await waitFor(async () => (await storedDraft()) === null, { label: 'the draft to be cleared on cancel' });
+        await reloadAndReopen({ stub: draftStub });
+        expect(await bannerText()).toBeNull();
+    });
+
+    test('PER-63: closing the offer\'s editor without answering is a clean close and clears it', async () => {
+        await openEditor(null, { stub: draftStub });
+        await ed.fill(page, 'tmName', 'Unanswered');
+        await waitFor(async () => (await storedDraft()) !== null, { timeout: 4000, label: 'the draft' });
+        await reloadAndReopen({ stub: draftStub });
+        await waitFor(async () => (await bannerText()) !== null, { label: 'the offer' });
+        await page.keyboard.press('Escape');
+        await waitFor(async () => !(await ed.isOpen(page)), { label: 'the editor to close' });
+        await waitFor(async () => (await storedDraft()) === null, { label: 'the draft to be cleared' });
+    });
+
+    test('PER-63: the banner is a labelled group with the question in a polite status, and Restore/Discard are buttons', async () => {
+        await openEditor(null, { stub: draftStub });
+        await ed.fill(page, 'tmName', 'Semantics');
+        await waitFor(async () => (await storedDraft()) !== null, { timeout: 4000, label: 'the draft' });
+        await reloadAndReopen({ stub: draftStub });
+        await waitFor(async () => (await bannerText()) !== null, { label: 'the offer' });
+        const shape = await ed.inShadow(page, (root) => {
+            const bar = root.getElementById('tmDraftBar');
+            const text = root.getElementById('tmDraftText');
+            return {
+                role: bar.getAttribute('role'),
+                labelledby: bar.getAttribute('aria-labelledby'),
+                live: text.getAttribute('aria-live'),
+                statusRole: text.getAttribute('role'),
+                buttons: Array.from(bar.querySelectorAll('button')).map((b) => [b.type, b.textContent])
+            };
+        });
+        expect(shape).toEqual({
+            role: 'group', labelledby: 'tmDraftText', live: 'polite', statusRole: 'status',
+            buttons: [['button', 'Restore'], ['button', 'Discard']]
+        });
+    });
+
+    afterMerge('PER-63: with the real background, a draft survives a reload and is offered back', async () => {
+        await openEditor();
+        await ed.fill(page, 'tmName', 'Real draft');
+        await sleep(1500); // the 800 ms debounce, and the round trip
+        await reloadAndReopen({ realBackground: true });
+        await waitFor(async () => (await bannerText()) !== null, { label: 'the offer' });
+        expect(await bannerText()).toBe("Restore your unsaved rule 'Real draft'?");
+        await ed.click(page, 'tmDraftDiscard');
+        await reloadAndReopen({ realBackground: true });
+        expect(await bannerText()).toBeNull();
+    });
+
     afterMerge('PER-59: with the real background, an earlier rule that also matches is named in a warning', async () => {
         await h.saveRule(seed({
             id: 'earlier', name: 'Earlier rule', type: 'mock',
@@ -468,9 +597,11 @@ describe('B2 editor fields — accessibility (options host, open shadow root)', 
     afterAll(async () => { if (h) await h.close(); });
     afterEach(async () => { if (page && !page.isClosed()) await page.close(); page = null; });
 
-    async function openOnOptionsPage(theme) {
+    async function openOnOptionsPage(theme, { draft } = {}) {
         await h.reset();
         await h.bg({ type: 'settingsUpdated', settings: { theme } });
+        // a kept draft for the restore offer, or none
+        await h.extensionEval((d) => (d ? chrome.storage.local.set({ b2StubDraft: d }) : chrome.storage.local.remove('b2StubDraft')), draft || null);
         page = await h.browser.newPage();
         await page.setViewport({ width: 1100, height: 900 });
         // a canned answer for "Try a URL": failed and passed checks, a network note, two shadowing rules
@@ -483,7 +614,7 @@ describe('B2 editor fields — accessibility (options host, open shadow root)', 
             ] },
             shadowedBy: [{ ruleId: 'a', ruleName: 'Earlier mock' }, { ruleId: 'b', ruleName: 'Another one' }],
             network: true
-        } } }));
+        } }, drafts: true }));
         await page.goto(h.extUrl('options/options.html?action=new'), { waitUntil: 'load' });
         await waitFor(() => ed.isOpen(page), { label: 'the editor to open' });
         await sleep(300);
@@ -508,6 +639,17 @@ describe('B2 editor fields — accessibility (options host, open shadow root)', 
         await sleep(150);
         await audit('try box, with a result', violations);
         expect(violations).toEqual([]);
+    });
+
+    test.each(['dark', 'light'])('the restore-draft offer has no WCAG A/AA violations (%s)', async (theme) => {
+        await openOnOptionsPage(theme, { draft: { v: 1, name: 'Offered', editingRule: null, values: { tmType: 'mock', tmName: 'Offered', tmUrl: '*/a*' } } });
+        await waitFor(async () => ed.inShadow(page, (root) => !root.getElementById('tmDraftBar').hidden && root.getElementById('tmDraftText').textContent !== ''), { label: 'the offer' });
+        const violations = [];
+        await audit('restore offer showing', violations);
+        await ed.click(page, 'tmDraftRestore');
+        await audit('after Restore', violations);
+        expect(violations).toEqual([]);
+        await h.extensionEval(() => chrome.storage.local.remove('b2StubDraft'));
     });
 
     test.each(['dark', 'light'])('the captured-response panel, expanded and collapsed, has no WCAG A/AA violations (%s)', async (theme) => {
