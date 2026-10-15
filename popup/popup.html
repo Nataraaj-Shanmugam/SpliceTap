@@ -175,6 +175,8 @@
 
         <div class="sub-panel" id="importPanel" hidden>
           <textarea id="importJson" rows="4" spellcheck="false" aria-label="Rules JSON to import" placeholder='{ "rules": [ ... ] }'></textarea>
+          <!-- B2-F6: shown when the pasted JSON is a Requestly export. -->
+          <p class="sub-warn import-offer" id="importOffer" hidden></p>
           <label class="check-row">
             <input type="checkbox" id="importMerge" checked>
             <span>Keep existing rules</span>
@@ -183,6 +185,7 @@
           <div class="sub-actions">
             <button type="button" class="mini-btn" id="importCancelBtn">Cancel</button>
             <button type="button" class="mini-btn is-primary" id="importConfirmBtn">Import</button>
+            <button type="button" class="mini-btn is-primary" id="importConvertBtn" hidden>Convert Requestly rules</button>
           </div>
         </div>
 
@@ -370,6 +373,10 @@
   <div id="toastContainer" class="toast-container"></div>
 
   <script src="../src/common.js"></script>
+  <!-- B2-F6: the Requestly converter (another file; popup.js reads
+       window.SpliceTapImporters.requestly when it is time to import). -->
+  <script src="../src/importers/requestly.js"></script>
+  <script src="popup-helpers.js"></script>
   <script src="popup.js"></script>
   <script src="popup-host.js"></script>
 </body>

@@ -43,6 +43,10 @@
   /* Danger as small text on a tinted surface. --danger itself measured
      4.48:1 on the red tint of .rule-error-chip in this theme. */
   --danger-text: #fca5a5;
+  /* B2: the warning tone for text on a faint amber tint (Shadowed chips, the
+     warnings in an import report). */
+  --caution-text: #fbbf5a;
+  --caution-bg: rgba(217, 119, 6, 0.16);
   --border: rgba(148, 163, 184, 0.12);
   --hairline: rgba(148, 163, 184, 0.09);
   --border-strong: rgba(148, 163, 184, 0.6);
@@ -76,6 +80,8 @@ body.theme-light {
   /* #dc2626 measured 4.46:1 as text on --bg-card, just under 4.5:1. */
   --danger: #b91c1c;
   --danger-text: #b91c1c;
+  --caution-text: #92400e;
+  --caution-bg: rgba(217, 119, 6, 0.14);
   --border: #e6ebf2;
   --hairline: #eef1f6;
   --border-strong: rgba(15, 23, 42, 0.5);
@@ -874,6 +880,52 @@ body.theme-light .set-note.is-warn {
 .ir-reason {
   color: var(--danger-text);
   overflow-wrap: anywhere;
+}
+
+/* B2-F6: a Requestly conversion report has three parts. The skipped list keeps
+   the danger tone above; warnings are the caution tone (the rule was kept, it
+   just behaves a little differently), and what converted folds away. */
+.ir-warn {
+  color: var(--caution-text);
+  overflow-wrap: anywhere;
+}
+
+.import-report-heading {
+  margin-top: 10px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.import-report-converted {
+  margin-top: 8px;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.import-report-converted summary {
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.import-report-converted summary:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+}
+
+.import-report-names {
+  list-style: none;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+
+/* B2-F6: the offer under the import box when the JSON is a Requestly export. */
+.import-offer {
+  margin-top: 8px;
 }
 
 .sub-warn {

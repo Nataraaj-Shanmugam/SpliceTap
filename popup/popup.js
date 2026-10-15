@@ -39,6 +39,9 @@ class SpliceTapPopup {
         this.importReport = null;
         // PER-62: replace-mode import needs a second, confirming click.
         this.replaceArmed = false;
+        // B2-F6: set while the pasted JSON is a Requestly export that the
+        // converter can take: { count } - the number of rules found in it.
+        this.requestlyOffer = null;
 
         this.init();
     }
@@ -302,7 +305,12 @@ class SpliceTapPopup {
         // PER-62: the confirm button's wording follows the mode, and changing
         // the mode or the JSON cancels a pending replace confirmation.
         this.addListener('importMerge', 'change', () => this.updateImportMode());
-        this.addListener('importJson', 'input', () => this.disarmReplace());
+        this.addListener('importJson', 'input', () => {
+            this.disarmReplace();
+            this.scheduleRequestlyCheck();
+        });
+        // B2-F6: the action that takes the place of the old "this is a Requestly export" message.
+        this.addListener('importConvertBtn', 'click', () => this.convertRequestly());
         this.addListener('resetAllBtn', 'click', () => this.togglePanel('resetPanel', 'resetAllBtn'));
         this.addListener('resetCancelBtn', 'click', () => this.togglePanel('resetPanel', 'resetAllBtn', false));
         this.addListener('resetConfirmBtn', 'click', () => this.confirmReset());
@@ -2306,20 +2314,90 @@ class SpliceTapPopup {
     updateImportMode() {
         const merge = document.getElementById('importMerge');
         const btn = document.getElementById('importConfirmBtn');
+        const convert = document.getElementById('importConvertBtn');
         const warn = document.getElementById('importReplaceWarn');
         const count = (this.rules || []).length;
         const replacing = !!merge && !merge.checked && count > 0;
+        const offer = this.requestlyOffer;
 
         this.replaceArmed = 0;
+        // B2-F6: while the pasted JSON is a Requestly export, "Convert N
+        // Requestly rules" is the primary action and the plain Import (which
+        // could only refuse it) steps aside.
+        const style = (button, label) => {
+            button.textContent = label;
+            button.classList.toggle('is-danger', replacing);
+            button.classList.toggle('is-primary', !replacing);
+        };
         if (btn) {
-            btn.textContent = replacing ? `Replace all ${count} rule${count === 1 ? '' : 's'}` : 'Import';
-            btn.classList.toggle('is-danger', replacing);
-            btn.classList.toggle('is-primary', !replacing);
+            btn.hidden = !!offer;
+            style(btn, replacing ? `Replace all ${count} rule${count === 1 ? '' : 's'}` : 'Import');
+        }
+        if (convert) {
+            convert.hidden = !offer;
+            if (offer) {
+                style(convert, replacing
+                    ? `Replace all ${count} with ${offer.count} converted`
+                    : window.SpliceTapPopupHelpers.convertLabel(offer.count));
+            }
+        }
+        const note = document.getElementById('importOffer');
+        if (note) {
+            note.hidden = !offer;
+            note.textContent = offer
+                ? `This looks like a Requestly export with ${offer.count} rule${offer.count === 1 ? '' : 's'}. SpliceTap converts what it can and lists anything it could not.`
+                : '';
         }
         if (warn) {
             warn.hidden = true;
             warn.textContent = '';
         }
+    }
+
+    /**
+     * B2-F6: look at the pasted text a moment after the last keystroke and, if
+     * it is a Requestly export, offer to convert it. Nothing here can throw: a
+     * half-typed paste is simply not JSON yet.
+     */
+    scheduleRequestlyCheck() {
+        clearTimeout(this._requestlyTimer);
+        this._requestlyTimer = setTimeout(() => this.refreshRequestlyOffer({ announce: true }), 150);
+    }
+
+    /** Parse the import box. Returns { parsed } or { error }. */
+    readImportJson() {
+        const ta = document.getElementById('importJson');
+        const raw = ((ta && ta.value) || '').trim();
+        if (!raw) return { empty: true };
+        try {
+            return { parsed: JSON.parse(raw) };
+        } catch (error) {
+            return { error };
+        }
+    }
+
+    /**
+     * Decide whether the box holds a Requestly export and show or hide the
+     * "Convert N Requestly rules" action to match. Returns the offer or null.
+     */
+    refreshRequestlyOffer({ announce = false } = {}) {
+        const helpers = window.SpliceTapPopupHelpers;
+        const read = this.readImportJson();
+        const importer = helpers.requestlyImporter();
+        let next = null;
+        if (read.parsed !== undefined && importer && helpers.detectRequestly(importer, read.parsed)) {
+            next = { count: helpers.countRequestlyRules(read.parsed) };
+        }
+        const was = this.requestlyOffer;
+        if (!next && !was) return null;
+        if (next && was && next.count === was.count) return next;
+        this.requestlyOffer = next;
+        // A replace confirmation was for the other action; start it over.
+        this.updateImportMode();
+        if (next && announce && (!was || was.count !== next.count)) {
+            this.announce(`This looks like a Requestly export with ${next.count} rule${next.count === 1 ? '' : 's'}. Use "${helpers.convertLabel(next.count)}" to import them.`, 'info');
+        }
+        return next;
     }
 
     /** Typing or toggling after the warning appeared cancels the confirmation. */
@@ -2329,7 +2407,8 @@ class SpliceTapPopup {
 
     /** First click of a replace-mode import: say what is about to be lost. */
     armReplace(count) {
-        const btn = document.getElementById('importConfirmBtn');
+        // B2-F6: the Convert button is the primary action while it is showing.
+        const btn = document.getElementById(this.requestlyOffer ? 'importConvertBtn' : 'importConfirmBtn');
         const warn = document.getElementById('importReplaceWarn');
         const noun = `${count} rule${count === 1 ? '' : 's'}`;
         this.replaceArmed = count;
@@ -2362,15 +2441,26 @@ class SpliceTapPopup {
         }
 
         const skipped = report.skipped || [];
+        const warnings = report.warnings || [];
+        const converted = report.converted || [];
         el.hidden = false;
         el.className = `import-report${skipped.length ? ' is-error' : ''}`;
         el.setAttribute('role', 'group');
         el.setAttribute('aria-labelledby', 'importReportTitle');
         const items = skipped.map((item) => `
             <li><span class="ir-name">${this.escapeHtml(item.name || '(unnamed rule)')}</span><span class="ir-reason">${this.escapeHtml((item.errors || []).join('; ') || 'not valid')}</span></li>`).join('');
+        // B2-F6: a conversion report has three parts - converted, skipped with
+        // reasons, and warnings (the rule was kept, but behaves a little
+        // differently from Requestly's). A plain import only ever had the middle one.
+        const sectioned = !!report.conversion;
+        const warningItems = warnings.map((item) => `
+            <li><span class="ir-name">${this.escapeHtml(item.name || '(unnamed rule)')}</span><span class="ir-warn">${this.escapeHtml(item.message)}</span></li>`).join('');
+        const convertedItems = converted.map((name) => `<li>${this.escapeHtml(name || '(unnamed rule)')}</li>`).join('');
         el.innerHTML = `
             <h3 class="import-report-title" id="importReportTitle">${this.escapeHtml(report.summary)}</h3>
-            ${items ? `<ul class="import-report-list">${items}</ul>` : ''}
+            ${sectioned && convertedItems ? `<details class="import-report-converted"><summary>Converted (${converted.length})</summary><ul class="import-report-names">${convertedItems}</ul></details>` : ''}
+            ${items ? `${sectioned ? `<h4 class="import-report-heading">Skipped (${skipped.length})</h4>` : ''}<ul class="import-report-list">${items}</ul>` : ''}
+            ${warningItems ? `<h4 class="import-report-heading">Warnings (${warnings.length})</h4><ul class="import-report-list">${warningItems}</ul>` : ''}
             <div class="sub-actions"><button type="button" class="mini-btn" id="importReportDismiss">Dismiss</button></div>`;
         const dismiss = document.getElementById('importReportDismiss');
         if (dismiss) {
@@ -2396,36 +2486,95 @@ class SpliceTapPopup {
      */
     async confirmImport() {
         const ta = document.getElementById('importJson');
-        const raw = (ta && ta.value || '').trim();
-        if (!raw) {
+        const read = this.readImportJson();
+        if (read.empty) {
             this.showError('Paste some JSON first');
             return;
         }
-
-        let incoming;
-        try {
-            const parsed = JSON.parse(raw);
-            incoming = Array.isArray(parsed) ? parsed : parsed && parsed.rules;
-        } catch (error) {
+        if (read.error) {
             this.showError('That is not valid JSON');
+            return;
+        }
+        const parsed = read.parsed;
+        const incoming = Array.isArray(parsed) ? parsed : parsed && parsed.rules;
+
+        // A Requestly export (rules with `ruleType` and `pairs`, plus group
+        // objects) is well-formed — just not SpliceTap's schema. It used to be
+        // reported as "Imported 0 rules, skipped N invalid", which tells
+        // someone switching tools their file is broken.
+        // B2-F6: and then it was explained but not converted. With the
+        // converter loaded, the explanation is now the "Convert N Requestly
+        // rules" action; this click shows it (the paste already did, if the
+        // box saw the input event) and hands focus to it.
+        const offer = this.refreshRequestlyOffer({ announce: false });
+        if (offer) {
+            const label = window.SpliceTapPopupHelpers.convertLabel(offer.count);
+            this.announce(`This looks like a Requestly export with ${offer.count} rule${offer.count === 1 ? '' : 's'}. Use "${label}" to import them.`, 'info');
+            const convert = document.getElementById('importConvertBtn');
+            if (convert) convert.focus();
             return;
         }
         if (!Array.isArray(incoming) || !incoming.length) {
             this.showError('No rules found in that JSON');
             return;
         }
-
-        // A Requestly export (rules with `ruleType` and `pairs`, plus group
-        // objects) is well-formed — just not SpliceTap's schema. It used to be
-        // reported as "Imported 0 rules, skipped N invalid", which tells
-        // someone switching tools their file is broken. Say what it is.
         const isRequestlyItem = (item) => item && typeof item === 'object'
             && (Array.isArray(item.pairs) && typeof item.ruleType === 'string' || item.objectType === 'group');
         if (incoming.some(isRequestlyItem)) {
-            this.showError('This looks like a Requestly export. SpliceTap uses its own rule format and cannot convert Requestly rules yet — nothing was imported.');
+            // The converter did not load (src/importers/requestly.js), so all that can be done is say what the file is.
+            this.showError('This looks like a Requestly export, but the converter is not available here — nothing was imported.');
             return;
         }
 
+        await this.importRules(incoming, { ta });
+    }
+
+    /**
+     * B2-F6: the "Convert N Requestly rules" action. Runs the converter over
+     * what is in the box now, then imports the result through the same
+     * append-and-dedupe path as any other import; the conversion report
+     * (converted / skipped with reasons / warnings) lands in the persistent
+     * import-report area.
+     */
+    async convertRequestly() {
+        const ta = document.getElementById('importJson');
+        const helpers = window.SpliceTapPopupHelpers;
+        const importer = helpers.requestlyImporter();
+        const read = this.readImportJson();
+        if (!importer || read.parsed === undefined || !helpers.detectRequestly(importer, read.parsed)) {
+            // The text changed under the button, or the converter is gone.
+            this.refreshRequestlyOffer({ announce: false });
+            this.showError('That is no longer a Requestly export');
+            return;
+        }
+
+        let result;
+        try {
+            result = helpers.normalizeConversion(importer.convert(read.parsed));
+        } catch (error) {
+            // Handled: the user is told below, so this is a warning, not a crash.
+            console.warn('Requestly conversion failed:', error);
+            this.showError(`Could not convert the Requestly rules: ${error && error.message ? error.message : 'unexpected error'}`);
+            return;
+        }
+
+        const found = helpers.countRequestlyRules(read.parsed);
+        const conversion = {
+            total: Math.max(found, result.rules.length + result.skipped.length),
+            converted: result.rules.length,
+            skipped: result.skipped.map((item) => ({ name: item.name, errors: [item.reason], notConverted: true })),
+            warnings: result.warnings,
+            names: result.rules.map((rule) => rule.name)
+        };
+        await this.importRules(result.rules, { ta, conversion });
+    }
+
+    /**
+     * The shared back half of every import: fresh ids on merge, exact
+     * duplicates skipped, the background's own validation, and the report.
+     * `conversion` is set when the rules came out of the Requestly converter.
+     */
+    async importRules(incoming, { ta, conversion = null } = {}) {
         const merge = document.getElementById('importMerge');
         const keepExisting = merge ? merge.checked : true;
 
@@ -2441,12 +2590,16 @@ class SpliceTapPopup {
             existing = this.rules || [];
         }
 
-        if (!keepExisting && existing.length > 0 && this.replaceArmed !== existing.length) {
+        // B2-F6: a conversion that produced nothing replaces nothing, so it
+        // has no loss to confirm.
+        const nothingToWrite = !!conversion && incoming.length === 0;
+        if (!keepExisting && existing.length > 0 && !nothingToWrite && this.replaceArmed !== existing.length) {
             this.armReplace(existing.length);
             return;
         }
 
-        const skipped = [];
+        // What the converter itself left out comes first in the report.
+        const skipped = conversion ? conversion.skipped.slice() : [];
         const known = new Map(); // fingerprint -> name of the rule that holds it
         if (keepExisting) {
             for (const rule of existing) {
@@ -2486,7 +2639,7 @@ class SpliceTapPopup {
 
         if (!prepared.length) {
             // Everything was a duplicate or malformed: nothing to write.
-            this.finishImport({ added: 0, skipped, replaced: 0, ta, dnrWarning: undefined });
+            this.finishImport({ added: 0, skipped, replaced: 0, ta, dnrWarning: undefined, conversion });
             return;
         }
 
@@ -2512,7 +2665,8 @@ class SpliceTapPopup {
                 skipped: skipped.concat(rejected),
                 replaced: keepExisting ? 0 : existing.length,
                 ta,
-                dnrWarning: response.dnrWarning
+                dnrWarning: response.dnrWarning,
+                conversion
             });
         } catch (error) {
             console.error('Import failed:', error);
@@ -2521,19 +2675,24 @@ class SpliceTapPopup {
     }
 
     /** Summarise an import: toast it, record the details, refresh the views. */
-    finishImport({ added, skipped, replaced, ta, dnrWarning }) {
+    finishImport({ added, skipped, replaced, ta, dnrWarning, conversion = null }) {
         const duplicates = skipped.filter((item) => item.duplicate).length;
-        const invalid = skipped.length - duplicates;
-        let summary = `Imported ${added} rule${added === 1 ? '' : 's'}`;
-        if (replaced) summary += `, replacing ${replaced}`;
-        if (skipped.length) {
-            const parts = [];
-            if (duplicates) parts.push(`${duplicates} duplicate${duplicates === 1 ? '' : 's'}`);
-            if (invalid) parts.push(`${invalid} invalid`);
-            summary += `, skipped ${skipped.length} (${parts.join(', ')})`;
-        }
+        const notConverted = skipped.filter((item) => item.notConverted).length;
+        const invalid = skipped.length - duplicates - notConverted;
+        const summary = window.SpliceTapPopupHelpers.importSummary({
+            added, replaced, duplicates, notConverted, invalid,
+            ...(conversion ? { total: conversion.total, converted: conversion.converted } : {})
+        });
 
-        this.importReport = skipped.length ? { summary, skipped } : null;
+        // B2-F6: a conversion always leaves a report (what became what, and any
+        // warnings), even when nothing was skipped; a plain import only when it skipped something.
+        this.importReport = (skipped.length || conversion)
+            ? {
+                summary,
+                skipped,
+                ...(conversion ? { conversion: true, warnings: conversion.warnings, converted: conversion.names } : {})
+            }
+            : null;
         this.renderImportReport();
 
         // CQ-3: an imported headers/queryparams rule can be stored yet
@@ -2549,6 +2708,7 @@ class SpliceTapPopup {
         }
 
         if (ta) ta.value = '';
+        this.refreshRequestlyOffer({ announce: false }); // the box is empty now: no offer
         this.togglePanel('importPanel', 'importToggleBtn', false);
         this.updateImportMode();
         this.applySearchFilter();
