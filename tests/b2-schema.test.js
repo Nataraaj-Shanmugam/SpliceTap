@@ -255,3 +255,68 @@ describe('B2-F7 the new fields coexist and change nothing else', () => {
         expect(S.LIMITS).toMatchObject({ PAGE_DOMAINS_MAX: 20, PAYLOAD_PATH_MAX: 200, PAYLOAD_VALUE_MAX: 1000 });
     });
 });
+
+// -- F8 -----------------------------------------------------------------
+
+describe('B2-F8 response.patchStatus', () => {
+    const patchMock = (extra = {}) => mock({}, { mode: 'patch', patch: { ok: true }, statusCode: undefined, ...extra });
+
+    test.each([200, 201, 204, 301, 404, 418, 500, 503, 599])('accepts %i in patch mode', (patchStatus) => {
+        expect(S.validateRule(patchMock({ patchStatus }))).toEqual({ valid: true, errors: [] });
+    });
+
+    test('a patch response without it is unchanged', () => {
+        expect(S.validateRule(patchMock())).toEqual({ valid: true, errors: [] });
+    });
+
+    test('it may sit beside a statusCode, which patch mode ignores', () => {
+        expect(isValid(patchMock({ statusCode: 200, patchStatus: 503 }))).toBe(true);
+    });
+
+    test.each([
+        ['199', 199], ['100', 100], ['0', 0], ['600', 600], ['negative', -200],
+        ['a fraction', 503.5], ['text', '503'], ['NaN', NaN], ['Infinity', Infinity],
+        ['null', null], ['a boolean', true], ['an object', {}]
+    ])('refuses %s in patch mode', (label, patchStatus) => {
+        const rule = patchMock({ patchStatus });
+        expect(isValid(rule)).toBe(false);
+        const messages = errorsOf(rule);
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatch(/^Patch status must be a whole number between 200 and 599/);
+    });
+
+    test.each(['static', 'code'])('refuses it in %s mode', (mode) => {
+        const response = mode === 'code'
+            ? { mode, code: 'return { body: 1 };', patchStatus: 503 }
+            : { mode, patchStatus: 503 };
+        const rule = mock({}, response);
+        expect(isValid(rule)).toBe(false);
+        expect(errorsOf(rule)).toHaveLength(1);
+        expect(errorsOf(rule)[0]).toMatch(new RegExp(`^Patch status only applies to a response in patch mode, not ${mode} mode`));
+    });
+
+    test('refuses it when the response has no mode (static by default)', () => {
+        const rule = mk('mock', { response: { statusCode: 200, body: {}, patchStatus: 503 } });
+        expect(joined(rule)).toMatch(/^Patch status only applies to a response in patch mode, not static mode/);
+    });
+
+    test('refuses it on a non-mock rule that carries a response object', () => {
+        const rule = block();
+        rule.response = { patchStatus: 503 };
+        expect(errorsOf(rule)).toHaveLength(1);
+        expect(errorsOf(rule)[0]).toMatch(/^Patch status is only available on mock rules in patch mode, not block rules/);
+    });
+
+    test('an unknown mode gets the mode error and no patch-status noise', () => {
+        const rule = mock({}, { mode: 'telepathy', patchStatus: 503 });
+        expect(errorsOf(rule).every((m) => !/^Patch status/.test(m))).toBe(true);
+        expect(joined(rule)).toMatch(/Response mode must be/);
+    });
+
+    test('no message mentions "status code", which the editor maps to the static status field', () => {
+        for (const patchStatus of [100, 700, 'x']) {
+            for (const m of errorsOf(patchMock({ patchStatus }))) expect(m).not.toMatch(/status code/i);
+        }
+        expect(joined(mock({}, { mode: 'static', patchStatus: 503 }))).not.toMatch(/status code/i);
+    });
+});

@@ -709,6 +709,17 @@
                 if (mode === 'patch' && r.patch !== undefined && !isPlainObject(r.patch)) {
                     errors.push('A response patch must be a JSON object');
                 }
+                // B2-F8: patch mode keeps the real response's status unless
+                // the rule overrides it. Opens "Patch status" (and avoids the
+                // words "status code") so it lands on its own field.
+                if (r.patchStatus !== undefined && RESPONSE_MODES.includes(mode)) {
+                    if (mode !== 'patch') {
+                        errors.push(`Patch status only applies to a response in patch mode, not ${mode} mode. Remove it, or switch the response to "patch".`);
+                    } else if (typeof r.patchStatus !== 'number' || !Number.isInteger(r.patchStatus)
+                        || r.patchStatus < STATUS_MIN || r.patchStatus > LIMITS.STATUS_MAX) {
+                        errors.push(`Patch status must be a whole number between ${STATUS_MIN} and ${LIMITS.STATUS_MAX}, like 503 — or leave it empty to keep the real response's status`);
+                    }
+                }
                 // F4: the code is the response, so it is the one thing code
                 // mode needs. The schema cannot compile it — extension pages
                 // forbid eval — so only its presence and size are checked here.
@@ -764,6 +775,11 @@
         // runs code never quietly runs nothing.
         if (type !== 'mock' && isPlainObject(rule.response) && rule.response.mode === 'code') {
             errors.push(`Code response is only available on mock rules, not ${type} rules`);
+        }
+        // B2-F8: likewise a status override, which belongs to a mock rule's
+        // patch-mode response.
+        if (type !== 'mock' && isPlainObject(rule.response) && rule.response.patchStatus !== undefined) {
+            errors.push(`Patch status is only available on mock rules in patch mode, not ${type} rules`);
         }
 
         // headers/queryparams are applied by declarativeNetRequest, which
