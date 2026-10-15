@@ -487,7 +487,7 @@ describe('batch 2: popup and DevTools panel', () => {
             const cdp = await popup.createCDPSession();
             await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'forced-colors', value: 'active' }] });
             await waitFor(async () => (await chips()).some((c) => c.chip), { label: 'a chip' });
-            expect(await popup.$eval('.rule-shadow-chip', (c) => getComputedStyle(c).borderTopWidth)).toBe('1px');
+            expect(await popup.$eval('.rule-shadow-chip', (c) => window.getComputedStyle(c).borderTopWidth)).toBe('1px');
         });
 
         afterMerge('with the real background: a broad rule above a narrow one puts the chip on the narrow one', async () => {
