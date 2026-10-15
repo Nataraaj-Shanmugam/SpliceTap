@@ -64,7 +64,14 @@
         DELAY_MAX: 30000,
         DELAY_MS_MIN: 1,     // the delay rule type's own wait
         DELAY_MS_MAX: 30000,
-        CODE_MAX: 20000      // F4: characters of a mock rule's code response
+        CODE_MAX: 20000,     // F4: characters of a mock rule's code response
+        // B2-F7: targeting filters on a rule's `match`.
+        PAGE_DOMAINS_MAX: 20,    // hostnames in match.pageDomains
+        PAYLOAD_PATH_MAX: 200,   // characters of match.payload.path
+        PAYLOAD_VALUE_MAX: 1000, // characters of match.payload.value
+        // B2-PER-66: match.callFilter.n
+        CALL_FILTER_N_MIN: 1,
+        CALL_FILTER_N_MAX: 1000
     };
 
     const api = { escapeHtml, generateId, LIMITS };
