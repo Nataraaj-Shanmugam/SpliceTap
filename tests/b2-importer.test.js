@@ -19,7 +19,7 @@ const importer = require('../src/importers/requestly');
 // payload, removeAll, header append) are not validated in this tree, so tests
 // that need the merged validator are marked here. The coordinator flips this
 // to `test` after merging.
-const afterMerge = test.failing; // coordinator flips
+const afterMerge = test; // flipped after the schema merge
 
 const fixture = (name) => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'requestly', name), 'utf8'));
 
@@ -262,9 +262,10 @@ describe('rule types', () => {
             expect(warnings).toEqual(['Requestly applies this to every resource type; this rule affects fetch and XHR requests only unless you add resource types in the editor.']);
             expect(S.validateRule(rule).valid).toBe(true);
         });
-        test('Add on a response header is an append in Requestly: warned about, or mapped to append with the option', () => {
+        test('Add on a response header is an append in Requestly: append by default, set (warned) with the option off', () => {
             const record = headers({ Response: [{ header: 'X-A', type: 'Add', value: '1' }], Request: [{ header: 'Accept-Language', type: 'Add', value: 'fr' }] });
-            const plain = one(record);
+            expect(one(record).rule.headersMod.response).toEqual([{ op: 'append', name: 'X-A', value: '1' }]);
+            const plain = one(record, { appendResponseAdd: false });
             expect(plain.rule.headersMod.response).toEqual([{ op: 'set', name: 'X-A', value: '1' }]);
             expect(plain.warnings).toContain('Requestly appends added headers to an existing value (Accept-Language, X-A); SpliceTap sets them, replacing any existing value.');
 
@@ -287,7 +288,7 @@ describe('rule types', () => {
                 { header: 'Access-Control-Allow-Origin', type: 'Add', value: 'rq_request_initiator_origin()' },
                 { header: 'X-Keep', type: 'Add', value: 'yes' }
             ] }));
-            expect(rule.headersMod).toEqual({ response: [{ op: 'set', name: 'X-Keep', value: 'yes' }] });
+            expect(rule.headersMod).toEqual({ response: [{ op: 'append', name: 'X-Keep', value: 'yes' }] });
             expect(warnings).toContain('Dropped header operation(s): Access-Control-Allow-Origin (its value is filled in with the page\'s origin at request time by Requestly, which SpliceTap cannot do; set a fixed value in the editor).');
         });
         test('security headers, bad names, duplicates and unknown operations are dropped; nothing usable means a skip', () => {
@@ -315,7 +316,7 @@ describe('rule types', () => {
         });
         test('version-1 header rules (one header per pair, with a target) are read too', () => {
             const { rule } = one(rec('Headers', pair(src('Url', 'Contains', 'a.test'), { target: 'Response', header: 'X-Old', type: 'Add', value: 'v' })));
-            expect(rule.headersMod).toEqual({ response: [{ op: 'set', name: 'X-Old', value: 'v' }] });
+            expect(rule.headersMod).toEqual({ response: [{ op: 'append', name: 'X-Old', value: 'v' }] });
         });
         test('credentialed CORS without a host in the pattern is refused by the schema, and the reason is shown', () => {
             const reason = skipOf(headers({ Response: [{ header: 'Access-Control-Allow-Credentials', type: 'Add', value: 'true' }] }, src('Url', 'Contains', 'requestly')));

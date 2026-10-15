@@ -19,16 +19,15 @@
  *
  *   convert(json[, options]) -> { rules, skipped: [{name, reason}], warnings: [{name, message}] }
  *   options.appendResponseAdd  Requestly's response-header "Add" appends to an
- *                              existing header; true maps it to op 'append'
- *                              (needs the F9 schema), false (default) to 'set'
- *                              with a warning.
+ *                              existing header; true (default) maps it to op
+ *                              'append', false to 'set' with a warning.
  *   options.validate           run the shared schema over every result (default
  *                              true) and skip what it refuses, with its reason.
  */
 (function (global) {
     'use strict';
 
-    const DEFAULTS = { appendResponseAdd: false, validate: true };
+    const DEFAULTS = { appendResponseAdd: true, validate: true };
     const FILE_LABEL = 'Requestly file';
     const SUPPORTED_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
     const DYNAMIC_ORIGIN = 'rq_request_initiator_origin()';
