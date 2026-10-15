@@ -85,8 +85,20 @@ function createRelay(options = {}) {
         nonce = event && event.detail && event.detail.nonce;
     }, true);
 
-    const factory = new Function('window', 'document', 'chrome', 'crypto', 'console', RELAY_SRC);
-    factory(win, doc, chrome, globalThis.crypto, quietConsole);
+    // B2 (Jest exit warning): the relay's own timers outlive a test. A
+    // getRules that fails schedules a retry every 2 s, up to five times, so
+    // the "rejected sendMessage" test left ~10 s of timers behind, and the
+    // worker running this file "failed to exit gracefully". The relay's
+    // timers are un-ref'd: they still fire while a test waits on them, but
+    // never keep the worker alive on their own.
+    const relaySetTimeout = (fn, ms, ...args) => {
+        const timer = setTimeout(fn, ms, ...args);
+        if (timer && typeof timer.unref === 'function') timer.unref();
+        return timer;
+    };
+
+    const factory = new Function('window', 'document', 'chrome', 'crypto', 'console', 'setTimeout', RELAY_SRC);
+    factory(win, doc, chrome, globalThis.crypto, quietConsole, relaySetTimeout);
 
     return {
         window: win,

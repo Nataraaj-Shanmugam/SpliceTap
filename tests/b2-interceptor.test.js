@@ -686,3 +686,28 @@ describe('PER-66: call filters in the interceptor', () => {
         expect(Object.getOwnPropertyNames(h.window).sort()).toEqual(before);
     });
 });
+
+// ---------------------------------------------------------------------------
+// Jest's "worker failed to exit gracefully" warning
+
+describe('B2: test harnesses leave no timer holding the worker open', () => {
+    const { createRelay } = require('./helpers/relay-harness');
+    const activeTimers = () => process.getActiveResourcesInfo().filter((kind) => kind === 'Timeout').length;
+
+    test("a relay whose getRules keeps failing does not keep its retry timers ref'd", async () => {
+        const before = activeTimers();
+        const relay = createRelay({ onMessage: async () => { throw new Error('Receiving end does not exist'); } });
+        await relay.wait(20); // the failed getRules has scheduled its 2 s retry
+        expect(relay.sentOfType('getRules')).toHaveLength(1);
+        expect(activeTimers()).toBe(before);
+    });
+
+    test('an interceptor at rest holds no timer', async () => {
+        const before = activeTimers();
+        const h = withRules([mockRule('m', {}, { delay: 0 })]);
+        await pageFetch(h, 'https://example.test/api/x');
+        await sendXHR(h);
+        await h.flush();
+        expect(activeTimers()).toBe(before);
+    });
+});
