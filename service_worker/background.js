@@ -45,10 +45,27 @@ const INTERCEPTOR_TYPES = new Set(['mock', 'block', 'delay', 'redirect', 'reques
 // PER-6: the only messages content scripts send — the relay (content.js:
 // getRules, logInterceptionBatch, logCapture; logInterception is its older
 // single-entry form) and the in-page editor (rule-editor.js via overlay.js:
-// getRules, saveRule). Everything else is for extension pages only.
+// getRules, saveRule; B2-F10: explainMatch). Everything else is for extension
+// pages only.
 const CONTENT_SCRIPT_MESSAGES = new Set([
-    'getRules', 'saveRule', 'logInterception', 'logInterceptionBatch', 'logCapture'
+    'getRules', 'saveRule', 'logInterception', 'logInterceptionBatch', 'logCapture', 'explainMatch',
+    'saveEditorDraft', 'getEditorDraft', 'clearEditorDraft' // PER-63
 ]);
+// The in-page editor only ever runs in the top frame, so its messages are
+// refused from any other frame.
+const TOP_FRAME_MESSAGES = new Set(['saveRule', 'explainMatch', 'saveEditorDraft', 'getEditorDraft', 'clearEditorDraft']);
+
+// PER-63: unsaved editor drafts, in session storage, one per tab (or the
+// options page). Each is capped and expires; the oldest go past the count.
+const DRAFTS_KEY = 'spliceTapDrafts';
+const DRAFT_MAX_BYTES = 200 * 1024;
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+const DRAFTS_MAX = 20;
+
+// B2-F10: explainMatch's bounds on what a caller can hand it.
+const EXPLAIN_URL_MAX = 4096;
+const EXPLAIN_BODY_MAX = 1024 * 1024;
+const EXPLAIN_HOST = 'https://example.test';
 
 // SEC2-7: size caps for what a page-side relay can make the background keep.
 // CAPTURE_MAX_BODY matches the interceptor's own limit (injected.js).
@@ -445,7 +462,7 @@ class SpliceTapBackground {
                 const type = request && request.type;
                 // The in-page editor only ever runs in the top frame.
                 const allowed = CONTENT_SCRIPT_MESSAGES.has(type)
-                    && (type !== 'saveRule' || (sender && sender.frameId === 0));
+                    && (!TOP_FRAME_MESSAGES.has(type) || (sender && sender.frameId === 0));
                 if (!allowed) {
                     console.warn(`SpliceTap: "${type}" is not accepted from a web page`);
                     return { success: false, error: 'This request is not available to web pages' };
@@ -629,6 +646,7 @@ class SpliceTapBackground {
                     this.stats = { intercepted: 0, lastReset: new Date().toISOString() };
                     this.dnrRejected = new Map();
                     this._logClearedAt = Date.now();
+                    this._draftsFallback = null; // PER-63: drafts are in session storage, cleared below
 
                     const cleared = await this.storage.clearAll();
                     try {
@@ -649,6 +667,14 @@ class SpliceTapBackground {
                         throw new Error('Rule data is required');
                     }
                     return await this.validateRule(request.rule);
+
+                case 'explainMatch':
+                    return this._explainMatch(request);
+
+                case 'saveEditorDraft':
+                case 'getEditorDraft':
+                case 'clearEditorDraft':
+                    return this._editorDraft(request, sender);
 
                 case 'settingsUpdated': {
                     if (request.settings) {
@@ -1089,6 +1115,227 @@ class SpliceTapBackground {
     }
 
     /**
+     * B2-F10: "Try a URL". Would this rule match this request, condition by
+     * condition, and which earlier rules would win it instead?
+     *
+     * In:  { rule? | ruleId?, url?, method?, pageUrl?, resourceType?, body? }
+     * Out: { success, url, result, shadowedBy: [{ ruleId, ruleName }], network }
+     *
+     * With no url, one is made from a wildcard pattern (each * becomes x,
+     * https://example.test in front when there is no scheme), and the rest of
+     * the request from the rule — its method, page domain, resource type,
+     * header conditions and GraphQL/payload filter — so it describes a request
+     * the rule targets. A regex pattern cannot be turned into a URL:
+     * needsUrl:true.
+     *
+     * shadowedBy: earlier enabled rules, in stored order, of the same family
+     * (in-page: mock/block/delay/redirect; requestBody among its own kind;
+     * network: headers/queryparams/all-request — see familyFor) that also
+     * match. A rule not yet stored would be saved last, so every stored rule
+     * is earlier. network: the rule is applied by Chrome, so the result is
+     * SpliceTap's own judgement of what Chrome does.
+     */
+    _explainMatch(request) {
+        let rule = request.rule;
+        if (rule === undefined && request.ruleId !== undefined) {
+            rule = typeof request.ruleId === 'string' ? this._ruleById(request.ruleId) : null;
+            if (!rule) return { success: false, error: 'Rule not found' };
+        }
+        if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+            return { success: false, error: 'A rule or ruleId is required' };
+        }
+
+        const match = (rule.match && typeof rule.match === 'object') ? rule.match : {};
+        const network = ruleFamily(rule) === 'network';
+        const resourceTypes = Array.isArray(match.resourceTypes) ? match.resourceTypes : [];
+        // A request of a type the rule targets: the one named, else the
+        // rule's first, else a fetch/XHR call.
+        const resourceType = (typeof request.resourceType === 'string' && request.resourceType)
+            || (typeof resourceTypes[0] === 'string' ? resourceTypes[0] : 'fetch-xhr');
+        const family = familyFor(rule, resourceType);
+
+        if (request.url !== undefined && (typeof request.url !== 'string' || request.url.length > EXPLAIN_URL_MAX)) {
+            return { success: false, error: `The URL must be text of at most ${EXPLAIN_URL_MAX} characters` };
+        }
+        const given = typeof request.url === 'string' ? request.url.trim() : '';
+        const synthesized = !given;
+        let example = null;
+        if (synthesized) {
+            example = synthesizeUrl(match.url, family);
+            if (!example) {
+                return {
+                    success: false,
+                    needsUrl: true,
+                    error: RuleSchema.isRegexPattern(match.url)
+                        ? 'Enter a URL to try: an example cannot be made from a regex pattern'
+                        : 'Enter a URL to try',
+                    url: null,
+                    result: null,
+                    shadowedBy: [],
+                    network
+                };
+            }
+        }
+
+        const pageUrl = typeof request.pageUrl === 'string' ? request.pageUrl.slice(0, EXPLAIN_URL_MAX) : '';
+        let forms = example;
+        if (!forms) {
+            // A relative URL is resolved against the page, as the page would.
+            try {
+                forms = { absolute: new URL(given, hostOf(pageUrl) ? pageUrl : EXPLAIN_HOST + '/').href, raw: given };
+            } catch (error) {
+                return { success: false, error: 'That is not a URL that can be tried' };
+            }
+        }
+        const absolute = forms.absolute;
+
+        let bodyText = request.body;
+        if (bodyText !== undefined && bodyText !== null && typeof bodyText !== 'string') {
+            try {
+                bodyText = JSON.stringify(bodyText);
+            } catch (error) {
+                bodyText = undefined;
+            }
+        }
+        if (typeof bodyText !== 'string') bodyText = synthesized ? synthesizedBody(match) : undefined;
+        if (bodyText !== undefined && bodyText.length > EXPLAIN_BODY_MAX) {
+            return { success: false, error: 'The request body is too large to try' };
+        }
+
+        const methodGiven = typeof request.method === 'string' && request.method.trim();
+        const ruleMethod = String(match.method || '*').toUpperCase();
+        const pageDomains = Array.isArray(match.pageDomains) ? match.pageDomains : [];
+        const req = {
+            method: methodGiven ? request.method.trim().toUpperCase().slice(0, 16) : (ruleMethod !== '*' ? ruleMethod : 'GET'),
+            headers: (request.headers && typeof request.headers === 'object' && !Array.isArray(request.headers))
+                ? request.headers
+                : (synthesized ? synthesizedHeaders(match) : {}),
+            bodyText,
+            // The page making the request: the one named, else one the rule
+            // targets, else the request's own host (a same-origin call).
+            pageHost: hostOf(pageUrl)
+                || (typeof pageDomains[0] === 'string' ? pageDomains[0].toLowerCase() : '')
+                || hostOf(absolute),
+            resourceType
+        };
+
+        let result;
+        try {
+            result = explainRule(rule, req, forms);
+        } catch (error) {
+            return { success: false, error: 'This rule could not be tried: ' + String((error && error.message) || error) };
+        }
+
+        const stored = this.rules || [];
+        const ownIndex = typeof rule.id === 'string' ? stored.findIndex((r) => r && r.id === rule.id) : -1;
+        const earlier = ownIndex === -1 ? stored : stored.slice(0, ownIndex);
+        const shadowedBy = [];
+        for (const other of earlier) {
+            if (!family || !other || other.enabled !== true || other.id === rule.id || familyFor(other, resourceType) !== family) continue;
+            let hit = false;
+            try {
+                hit = !!explainRule(other, req, forms).matches;
+            } catch (error) {
+                hit = false; // a malformed stored rule matches nothing
+            }
+            if (hit) shadowedBy.push({ ruleId: other.id, ruleName: other.name });
+        }
+
+        return { success: true, url: absolute, result, shadowedBy, network };
+    }
+
+    /**
+     * PER-63: saveEditorDraft {draft} / getEditorDraft / clearEditorDraft.
+     *
+     * A content script's draft is keyed by the tab it runs in — never by a
+     * tab id it names, so a page cannot read or overwrite another tab's
+     * draft. Extension pages name the tab explicitly (`tabId`), or 'options'.
+     * Drafts live in chrome.storage.session under spliceTapDrafts — gone
+     * when the browser closes, not readable from content scripts — each at
+     * most DRAFT_MAX_BYTES and DRAFT_TTL_MS old.
+     */
+    async _editorDraft(request, sender) {
+        let key;
+        if (this._isContentScript(sender)) {
+            if (!sender || !sender.tab || typeof sender.tab.id !== 'number') {
+                return { success: false, error: 'Drafts need a tab' };
+            }
+            key = String(sender.tab.id);
+        } else if (request.tabId === 'options') {
+            key = 'options';
+        } else if (Number.isInteger(request.tabId) && request.tabId >= 0) {
+            key = String(request.tabId);
+        } else {
+            return { success: false, error: 'tabId must be a tab id or "options"' };
+        }
+
+        if (request.type === 'getEditorDraft') {
+            let found = null;
+            await this._updateDrafts((drafts) => { found = drafts[key] || null; });
+            return { success: true, draft: found ? found.draft : null, savedAt: found ? found.ts : null };
+        }
+
+        if (request.type === 'clearEditorDraft') {
+            await this._updateDrafts((drafts) => { delete drafts[key]; });
+            return { success: true };
+        }
+
+        const draft = request.draft;
+        if (!draft || typeof draft !== 'object' || Array.isArray(draft)) {
+            return { success: false, error: 'The draft must be an object' };
+        }
+        let size;
+        try {
+            size = new TextEncoder().encode(JSON.stringify(draft)).length;
+        } catch (error) {
+            return { success: false, error: 'The draft cannot be stored' };
+        }
+        if (size > DRAFT_MAX_BYTES) {
+            return { success: false, error: `The draft is too large to keep (over ${DRAFT_MAX_BYTES / 1024} KB)` };
+        }
+        const ts = Date.now();
+        await this._updateDrafts((drafts) => {
+            drafts[key] = { draft, ts };
+            // Past the count, the least recently saved go (tab-id keys are
+            // integer-like, so key order says nothing about age).
+            const byAge = Object.keys(drafts).sort((a, b) => drafts[a].ts - drafts[b].ts || (a === key) - (b === key));
+            for (const old of byAge.slice(0, Math.max(0, byAge.length - DRAFTS_MAX))) delete drafts[old];
+        });
+        return { success: true, savedAt: ts };
+    }
+
+    /**
+     * PER-63: read-modify-write the drafts map, one at a time, dropping
+     * expired drafts on the way. `change` edits the map in place.
+     */
+    _updateDrafts(change) {
+        const run = (this._draftChain || Promise.resolve()).then(async () => {
+            let stored = {};
+            try {
+                stored = (await chrome.storage.session.get(DRAFTS_KEY))[DRAFTS_KEY] || {};
+            } catch (error) {
+                stored = this._draftsFallback || {};
+            }
+            const now = Date.now();
+            const drafts = {};
+            for (const [key, entry] of Object.entries(stored)) {
+                if (entry && typeof entry.ts === 'number' && now - entry.ts < DRAFT_TTL_MS && entry.ts <= now) drafts[key] = entry;
+            }
+            const before = JSON.stringify(stored);
+            change(drafts);
+            if (JSON.stringify(drafts) === before) return;
+            this._draftsFallback = drafts;
+            try {
+                await chrome.storage.session.set({ [DRAFTS_KEY]: drafts });
+            } catch (error) {
+                // Kept in memory for this worker's lifetime instead.
+            }
+        });
+        this._draftChain = run.catch(() => undefined);
+        return run;
+    }
+
+    /**
      * Broadcast current rules/settings to all content scripts with retry logic
      */
     /**
@@ -1124,7 +1371,7 @@ class SpliceTapBackground {
      */
     _interceptorRules() {
         return (this.rules || []).filter((rule) =>
-            rule && rule.enabled && INTERCEPTOR_TYPES.has(rule.type || 'mock'));
+            rule && rule.enabled && INTERCEPTOR_TYPES.has(rule.type || 'mock') && !networkOnly(rule));
     }
 
     /**
@@ -1326,6 +1573,8 @@ class SpliceTapBackground {
         // Clean up retry counts when tabs close
         chrome.tabs.onRemoved.addListener((tabId) => {
             this.broadcastRetryCount.delete(tabId);
+            // PER-63: a closed tab's draft can never be restored.
+            this._updateDrafts((drafts) => { delete drafts[String(tabId)]; }).catch(() => undefined);
         });
     }
 
@@ -1446,9 +1695,11 @@ class SpliceTapBackground {
                     pattern: rule.match && rule.match.url,
                     types: new Set(condition.resourceTypes),
                     methods: condition.requestMethods ? new Set(condition.requestMethods) : null,
-                    queryTransform: action.redirect && action.redirect.transform
-                        ? action.redirect.transform.queryTransform
-                        : null
+                    // B2-F7: the DNR rule's initiatorDomains (match.pageDomains).
+                    domains: condition.initiatorDomains || null,
+                    // A query-param rule's transform (queryTransform, or
+                    // B2-F9's whole-query replacement).
+                    transform: action.redirect && action.redirect.transform ? action.redirect.transform : null
                 };
                 if (rule.type === 'headers') {
                     if (action.requestHeaders) candidates.sendHeaders.push(candidate);
@@ -1504,10 +1755,11 @@ class SpliceTapBackground {
         for (const candidate of candidates) {
             if (!candidate.types.has(details.type)) continue;
             if (candidate.methods && !candidate.methods.has(method)) continue;
+            if (candidate.domains && !initiatorInDomains(details.initiator, candidate.domains)) continue;
             if (!observedUrlMatches(url, candidate.pattern)) continue;
             // Chrome skips a query transform that would not change the URL —
             // including on the request it just redirected.
-            if (candidate.queryTransform && !queryTransformChanges(url, candidate.queryTransform)) continue;
+            if (candidate.transform && !queryTransformChanges(url, candidate.transform)) continue;
 
             if (this._markObserved(details.requestId, candidate.rule.id) && this._logObserved(candidate.rule, phase, details)) {
                 logged++;
@@ -1563,29 +1815,234 @@ class SpliceTapBackground {
  * condition anchors it (PER-21) and the interceptor matches a relative URL.
  */
 function observedUrlMatches(url, pattern) {
-    if (typeof url !== 'string' || !pattern) return false;
-    if (matchUrl(url, pattern)) return true;
-    if (pattern[0] !== '/' || RuleSchema.isRegexPattern(pattern) || pattern.indexOf('*') === -1) return false;
-    const scheme = /^[a-z][a-z0-9+.-]*:/i.exec(url);
-    if (!scheme) return false;
-    const afterScheme = url.slice(scheme[0].length);
-    if (pattern.startsWith('//')) return matchUrl(afterScheme, pattern);
-    const path = afterScheme.replace(/^\/\/[^/?#]*/, '');
-    return matchUrl(path, pattern);
+    return networkUrlForm(url, pattern) !== null;
 }
 
-/** F2: would Chrome's queryTransform change this URL? */
+/**
+ * The form of `url` a network rule's pattern matches, as the DNR condition
+ * judges it — the URL itself, or for a wildcard pattern starting with '/' its
+ * path ('//': from after the scheme) — or null when it does not match.
+ */
+function networkUrlForm(url, pattern) {
+    if (typeof url !== 'string' || !pattern) return null;
+    if (matchUrl(url, pattern)) return url;
+    if (pattern[0] !== '/' || RuleSchema.isRegexPattern(pattern) || pattern.indexOf('*') === -1) return null;
+    const scheme = /^[a-z][a-z0-9+.-]*:/i.exec(url);
+    if (!scheme) return null;
+    const afterScheme = url.slice(scheme[0].length);
+    const form = pattern.startsWith('//') ? afterScheme : afterScheme.replace(/^\/\/[^/?#]*/, '');
+    return matchUrl(form, pattern) ? form : null;
+}
+
+// ---- B2-F10: explainMatch -----------------------------------------------------
+
+const PAGE_FAMILY_TYPES = new Set(['mock', 'block', 'delay', 'redirect']);
+
+/**
+ * B2-F10: which rules can shadow which. 'page': the interceptor's
+ * first-match (mock/block/delay/redirect); 'requestBody': its own pass;
+ * 'network': what Chrome applies (headers, queryparams, all-request
+ * redirect/block). null for a type SpliceTap does not know.
+ */
+function ruleFamily(rule) {
+    const type = (rule && rule.type) || 'mock';
+    if (type === 'requestBody') return 'requestBody';
+    if (type === 'headers' || type === 'queryparams' || isNetworkRule(rule)) return 'network';
+    return PAGE_FAMILY_TYPES.has(type) ? 'page' : null;
+}
+
+/**
+ * The family a rule competes in for a request of this resource type. An
+ * all-request redirect/block is a network rule, except for a fetch/XHR call
+ * the interceptor runs it for: there it is in the page's first-match, where
+ * an earlier mock wins over it and it wins over a later one.
+ */
+function familyFor(rule, resourceType) {
+    const family = ruleFamily(rule);
+    if (family === 'network' && resourceType === 'fetch-xhr' && isNetworkRule(rule) && !networkOnly(rule)) return 'page';
+    return family;
+}
+
+/**
+ * The form of the tried URL a rule's pattern is judged on: the interceptor
+ * tries the absolute URL and the URL as the page wrote it (PER-8); Chrome
+ * judges the absolute URL, a '/'-wildcard from the path (PER-21). The
+ * absolute URL when no form matches, so the url check says so.
+ */
+function urlFormFor(rule, forms, family) {
+    const pattern = rule.match && rule.match.url;
+    if (family === 'network') return networkUrlForm(forms.absolute, pattern) || forms.absolute;
+    if (matchUrl(forms.absolute, pattern)) return forms.absolute;
+    if (forms.raw && forms.raw !== forms.absolute && matchUrl(forms.raw, pattern)) return forms.raw;
+    return forms.absolute;
+}
+
+/**
+ * One rule against one request: { matches, checks }. Uses the matcher's
+ * explainRuleMatch (B2-F10, src/matcher.js) when it exists; until then, a
+ * url and method check built here.
+ */
+function explainRule(rule, req, forms) {
+    const full = { ...req, url: urlFormFor(rule, forms, familyFor(rule, req.resourceType)) };
+    const matcher = globalThis.SpliceTapMatcher;
+    if (matcher && typeof matcher.explainRuleMatch === 'function') {
+        return matcher.explainRuleMatch(rule, full);
+    }
+    const match = rule.match || {};
+    const urlOk = matchUrl(full.url, match.url);
+    const ruleMethod = String(match.method || '*').toUpperCase();
+    const methodOk = ruleMethod === '*' || ruleMethod === String(full.method || '').toUpperCase();
+    const checks = [
+        {
+            condition: 'url',
+            ok: urlOk,
+            detail: urlOk ? `The URL matches "${match.url}".` : `The URL does not match "${match.url}".`
+        },
+        {
+            condition: 'method',
+            ok: methodOk,
+            detail: ruleMethod === '*'
+                ? 'Any method matches.'
+                : (methodOk ? `The method is ${ruleMethod}.` : `The rule needs ${ruleMethod}, not ${full.method}.`)
+        }
+    ];
+    return { matches: urlOk && methodOk, checks };
+}
+
+/**
+ * B2-F10: an example request URL for a wildcard or substring pattern, as
+ * { absolute, raw } (raw: the URL as a page would write it). Each * becomes
+ * x, with https://example.test in front when there is no scheme. A pattern
+ * starting with '/' is a call the page makes to its own origin ('/api/x'),
+ * and one starting with '//' a scheme-relative call (https:). '*://host/*'
+ * is tried as https://host/x, whose scheme the rule matches. null for a
+ * regex pattern, which has no example.
+ */
+function synthesizeUrl(pattern, family) {
+    if (typeof pattern !== 'string' || !pattern.trim() || RuleSchema.isRegexPattern(pattern)) return null;
+    const trimmed = pattern.trim();
+    const filled = trimmed.replace(/\*/g, 'x');
+    const parse = (u) => {
+        try {
+            return new URL(u).href;
+        } catch (error) {
+            return null;
+        }
+    };
+
+    if (filled.startsWith('/')) {
+        const absolute = parse(filled.startsWith('//') ? 'https:' + filled : EXPLAIN_HOST + filled);
+        return absolute ? { absolute, raw: filled } : null;
+    }
+
+    const candidates = [];
+    if (trimmed.startsWith('*://')) candidates.push('https://' + filled.slice(4));
+    candidates.push(/^[a-z][a-z0-9+.-]*:/i.test(filled) ? filled : EXPLAIN_HOST + filled);
+    let first = null;
+    for (const candidate of candidates) {
+        const absolute = parse(candidate);
+        if (!absolute) continue;
+        const forms = { absolute, raw: candidate };
+        if (!first) first = forms;
+        const hit = family === 'network'
+            ? networkUrlForm(absolute, trimmed) !== null
+            : matchUrl(absolute, trimmed) || matchUrl(candidate, trimmed);
+        if (hit) return forms;
+    }
+    return first;
+}
+
+/** B2-F10: the rule's own header conditions, as a request that meets them. */
+function synthesizedHeaders(match) {
+    const headers = {};
+    if (match.headers && typeof match.headers === 'object' && !Array.isArray(match.headers)) {
+        for (const [name, value] of Object.entries(match.headers)) {
+            if (typeof value === 'string') headers[name] = value;
+        }
+    }
+    return headers;
+}
+
+/**
+ * B2-F10: a JSON body meeting the rule's GraphQL operation and payload
+ * filter (a dot path holding the value), or undefined when it has neither.
+ */
+function synthesizedBody(match) {
+    const body = {};
+    let any = false;
+    if (match.graphql && typeof match.graphql.operationName === 'string' && match.graphql.operationName) {
+        body.operationName = match.graphql.operationName;
+        any = true;
+    }
+    const payload = match.payload;
+    if (payload && typeof payload.path === 'string' && payload.path && typeof payload.value === 'string') {
+        const keys = payload.path.split('.');
+        let at = body;
+        for (let i = 0; i < keys.length - 1; i++) {
+            const key = keys[i];
+            if (key === '__proto__' || key === 'constructor' || key === 'prototype') return any ? JSON.stringify(body) : undefined;
+            if (!at[key] || typeof at[key] !== 'object') at[key] = {};
+            at = at[key];
+        }
+        const last = keys[keys.length - 1];
+        if (last !== '__proto__' && last !== 'constructor' && last !== 'prototype') {
+            at[last] = payload.value;
+            any = true;
+        }
+    }
+    return any ? JSON.stringify(body) : undefined;
+}
+
+/**
+ * B2-F7: an appliesTo:'all' rule whose resource types leave out 'fetch-xhr'
+ * is Chrome's alone — the interceptor has nothing to do with it, so it is not
+ * sent to tabs (PER-34).
+ */
+function networkOnly(rule) {
+    const types = rule.match && rule.match.resourceTypes;
+    return isNetworkRule(rule) && Array.isArray(types) && !types.includes('fetch-xhr');
+}
+
+/**
+ * B2-F7: is the request's initiator (an origin, as webRequest reports it) on
+ * one of these domains or a subdomain, as DNR's initiatorDomains judges it?
+ * No initiator (a navigation from the address bar) or an opaque one never is.
+ */
+function initiatorInDomains(initiator, domains) {
+    const host = hostOf(initiator);
+    if (!host) return false;
+    return domains.some((domain) => host === domain || host.endsWith('.' + domain));
+}
+
+/** Lowercase hostname of a URL or origin, or '' when it has none. */
+function hostOf(url) {
+    if (typeof url !== 'string' || !url || url === 'null') return '';
+    try {
+        return new URL(url).hostname.toLowerCase();
+    } catch (error) {
+        return '';
+    }
+}
+
+/** F2: would Chrome's queryTransform (B2-F9: or query replacement) change this URL? */
 function queryTransformChanges(url, transform) {
+    if (typeof transform.query === 'string') {
+        // B2-F9: removeAll. The query as the URL spells it, '?' included.
+        const noFragment = String(url).split('#')[0];
+        const at = noFragment.indexOf('?');
+        return (at === -1 ? '' : noFragment.slice(at)) !== transform.query;
+    }
+    const queryTransform = transform.queryTransform || {};
     let params;
     try {
         params = new URL(url).searchParams;
     } catch (error) {
         return true;
     }
-    for (const key of transform.removeParams || []) {
+    for (const key of queryTransform.removeParams || []) {
         if (params.has(key)) return true;
     }
-    for (const param of transform.addOrReplaceParams || []) {
+    for (const param of queryTransform.addOrReplaceParams || []) {
         if (params.get(param.key) !== param.value) return true;
     }
     return false;

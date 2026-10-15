@@ -32,6 +32,69 @@
     // F1: earlier rules win, as in the interceptor's first-match.
     const NETWORK_PRIORITY_BASE = 100000;
 
+    // B2-F7: match.resourceTypes names -> Chrome's resource types.
+    const RESOURCE_TYPE_MAP = {
+        'fetch-xhr': ['xmlhttprequest'],
+        document: ['main_frame'],
+        subdocument: ['sub_frame'],
+        script: ['script'],
+        stylesheet: ['stylesheet'],
+        image: ['image'],
+        font: ['font'],
+        media: ['media'],
+        websocket: ['websocket'],
+        ping: ['ping'],
+        other: ['other', 'object', 'csp_report', 'webtransport', 'webbundle']
+    };
+    // B2-F7: emitted in one fixed order, whatever order the rule lists them
+    // in, so a rule compiles to the same DNR rule every time (PER-37).
+    const CANONICAL_RESOURCE_TYPES = ['xmlhttprequest'].concat(ALL_RESOURCE_TYPES);
+
+    /**
+     * B2-F7: the DNR resource types for a rule. Absent match.resourceTypes
+     * keeps today's defaults: every type for an appliesTo:'all' rule, API
+     * traffic for headers/queryparams. An appliesTo:'all' rule never gets
+     * xmlhttprequest: 'fetch-xhr' in its list means the interceptor handles
+     * fetch/XHR, never DNR (no request is handled twice). May be empty — the
+     * rule then has nothing for DNR to do.
+     */
+    function dnrResourceTypes(match, networkRule) {
+        const wanted = match ? match.resourceTypes : undefined;
+        if (wanted === undefined) return (networkRule ? ALL_RESOURCE_TYPES : API_RESOURCE_TYPES).slice();
+        // Absent is undefined only, as the schema has it: null or any other
+        // non-list names no type, so the rule compiles to nothing.
+        if (!Array.isArray(wanted)) return [];
+        // A Set: 'other' expands to several, and Chrome refuses a repeated
+        // type (taking the whole batch with it).
+        const chosen = new Set();
+        for (const type of wanted) {
+            if (typeof type !== 'string' || !Object.prototype.hasOwnProperty.call(RESOURCE_TYPE_MAP, type)) continue;
+            for (const dnrType of RESOURCE_TYPE_MAP[type]) chosen.add(dnrType);
+        }
+        if (networkRule) chosen.delete('xmlhttprequest');
+        return CANONICAL_RESOURCE_TYPES.filter((type) => chosen.has(type));
+    }
+
+    /**
+     * B2-F7: match.pageDomains -> initiatorDomains (the page or frame making
+     * the request; a name covers its subdomains, as in DNR). Returns
+     * undefined when absent (undefined only, as the schema has it), and null
+     * when present but holding no usable name — null included — since
+     * compiling that without the condition would widen the rule.
+     */
+    function initiatorDomains(match) {
+        const domains = match ? match.pageDomains : undefined;
+        if (domains === undefined) return undefined;
+        if (!Array.isArray(domains)) return null;
+        const names = [];
+        for (const name of domains) {
+            if (typeof name !== 'string' || !name.trim()) continue;
+            const lower = name.trim().toLowerCase();
+            if (!names.includes(lower)) names.push(lower);
+        }
+        return names.length ? names : null;
+    }
+
     const isNetworkRule = (rule) => !!rule && NETWORK_TYPES.indexOf(rule.type) !== -1 && rule.appliesTo === 'all';
 
     /** Does this rule compile to a DNR rule (and so need a dnrRuleId)? */
@@ -102,11 +165,15 @@
      *   script, or image loads (C-11) — narrower blast radius, and it also
      *   matches what this product is actually for (mocking/modifying API
      *   calls, not general page resources). F1: appliesTo:'all' rules pass
-     *   ALL_RESOURCE_TYPES instead.
+     *   ALL_RESOURCE_TYPES instead. B2-F7: match.resourceTypes narrows either
+     *   (see dnrResourceTypes).
+     * - B2-F7: match.pageDomains -> initiatorDomains
      */
     function buildCondition(match, resourceTypes = API_RESOURCE_TYPES) {
         const condition = {};
         const pattern = match && match.url;
+        const domains = initiatorDomains(match);
+        if (domains) condition.initiatorDomains = domains;
 
         if (pattern) {
             Object.assign(condition, urlCondition(pattern));
@@ -165,7 +232,7 @@
      * F1: an appliesTo:'all' redirect or block rule -> its DNR action and
      * condition, or null when DNR cannot express it faithfully.
      */
-    function buildNetworkRule(rule) {
+    function buildNetworkRule(rule, resourceTypes) {
         const match = rule.match || {};
         // DNR has no header or GraphQL conditions. Compiling without them
         // would redirect or block more than the rule says, so such a rule
@@ -173,7 +240,7 @@
         const hasHeaders = match.headers && typeof match.headers === 'object' && Object.keys(match.headers).length > 0;
         if (hasHeaders || (match.graphql && match.graphql.operationName)) return null;
 
-        const condition = buildCondition(match, ALL_RESOURCE_TYPES);
+        const condition = buildCondition(match, resourceTypes);
         if (rule.type === 'block') return { condition, action: { type: 'block' } };
 
         const destination = rule.redirect && rule.redirect.destination;
@@ -200,16 +267,20 @@
         if (op.op === 'remove') {
             return { header: op.name, operation: 'remove' };
         }
-        return { header: op.name, operation: 'set', value: op.value };
+        // B2-F9: 'append' adds a value alongside any the server sent.
+        return { header: op.name, operation: op.op === 'append' ? 'append' : 'set', value: op.value };
     }
 
     // Anything but a well-formed set/remove is dropped rather than coerced:
     // an unknown op used to be mapped to 'set', and a 'set' without a value is
     // a rule Chrome rejects. The save boundary rejects both now; this keeps a
     // rule stored before that from reaching the browser malformed.
-    const isApplicableOp = (op) => op && typeof op.name === 'string' && op.name
+    // B2-F9: 'append' too, on the response side only — Chrome 120 cannot
+    // append request headers.
+    const isApplicableOp = (op, side) => op && typeof op.name === 'string' && op.name
         && !FORBIDDEN_HEADER_NAMES.has(op.name.toLowerCase())
-        && (op.op === 'remove' || (op.op === 'set' && typeof op.value === 'string'));
+        && (op.op === 'remove'
+            || ((op.op === 'set' || (op.op === 'append' && side === 'response')) && typeof op.value === 'string'));
 
     /**
      * Build the `action` object for a 'headers' rule: modifyHeaders with
@@ -223,8 +294,10 @@
         const mod = rule.headersMod || {};
         const action = { type: 'modifyHeaders' };
 
-        const requestHeaders = (Array.isArray(mod.request) ? mod.request : []).filter(isApplicableOp).map(mapHeaderOp);
-        const responseHeaders = (Array.isArray(mod.response) ? mod.response : []).filter(isApplicableOp).map(mapHeaderOp);
+        const requestHeaders = (Array.isArray(mod.request) ? mod.request : [])
+            .filter((op) => isApplicableOp(op, 'request')).map(mapHeaderOp);
+        const responseHeaders = (Array.isArray(mod.response) ? mod.response : [])
+            .filter((op) => isApplicableOp(op, 'response')).map(mapHeaderOp);
 
         if (requestHeaders.length > 0) action.requestHeaders = requestHeaders;
         if (responseHeaders.length > 0) action.responseHeaders = responseHeaders;
@@ -235,9 +308,21 @@
     /**
      * Build the `action` object for a 'queryparams' rule: a redirect action
      * with a queryTransform.
+     *
+     * B2-F9: removeAll replaces the whole query instead — '' drops it, and
+     * with params to add it becomes exactly those ('?k=v&…', encoded). The
+     * remove list has nothing left to remove then.
      */
     function buildQueryParamsAction(rule) {
         const qp = rule.queryParams || {};
+        if (qp.removeAll === true) {
+            const add = (Array.isArray(qp.add) ? qp.add : [])
+                .filter((p) => p && typeof p.key === 'string' && p.key && typeof p.value === 'string');
+            const query = add.length
+                ? '?' + add.map((p) => encodeURIComponent(p.key) + '=' + encodeURIComponent(p.value)).join('&')
+                : '';
+            return { type: 'redirect', redirect: { transform: { query } } };
+        }
         return {
             type: 'redirect',
             redirect: {
@@ -265,8 +350,16 @@
             return null;
         }
 
-        if (isNetworkRule(rule)) {
-            const built = buildNetworkRule(rule);
+        // B2-F7: no resource type left for DNR (an all-request rule limited
+        // to fetch-xhr is the interceptor's alone), or page domains that name
+        // nothing usable: no DNR rule, rather than a wider one.
+        const match = rule.match || {};
+        const networkRule = isNetworkRule(rule);
+        const resourceTypes = dnrResourceTypes(match, networkRule);
+        if (resourceTypes.length === 0 || initiatorDomains(match) === null) return null;
+
+        if (networkRule) {
+            const built = buildNetworkRule(rule, resourceTypes);
             if (!built) return null;
             return {
                 id: rule.dnrRuleId,
@@ -276,7 +369,7 @@
             };
         }
 
-        const condition = buildCondition(rule.match || {});
+        const condition = buildCondition(match, resourceTypes);
         const action = rule.type === 'headers' ? buildHeadersAction(rule) : buildQueryParamsAction(rule);
 
         return {
@@ -591,7 +684,8 @@
 
     const api = {
         ruleToDnr, syncDnrRules, dnrRuleEqual, validateHeadersMod, FORBIDDEN_HEADER_NAMES, deepEqual,
-        isDnrRule, isNetworkRule, ALL_RESOURCE_TYPES, API_RESOURCE_TYPES
+        isDnrRule, isNetworkRule, ALL_RESOURCE_TYPES, API_RESOURCE_TYPES,
+        RESOURCE_TYPE_MAP, dnrResourceTypes, initiatorDomains
     };
 
     if (typeof module !== 'undefined' && module.exports) {
