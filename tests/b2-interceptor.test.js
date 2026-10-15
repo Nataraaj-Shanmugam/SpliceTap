@@ -201,6 +201,16 @@ describe('B2-F7: matchPayload', () => {
         }
     });
 
+    test('constructor and __proto__ resolve only as own keys of the body', () => {
+        const condition = (path, value) => ({ path, operator: 'equals', value });
+        expect(matchPayload('{"a":{}}', condition('a.constructor.name', 'Object'))).toBe(false);
+        expect(matchPayload('{"a":[]}', condition('a.constructor.name', 'Array'))).toBe(false);
+        expect(matchPayload('{"a":"text"}', condition('a.length', '4'))).toBe(false);
+        expect(matchPayload('{"a":{}}', condition('a.__proto__', '[object Object]'))).toBe(false);
+        expect(matchPayload('{"constructor":{"name":"mine"}}', condition('constructor.name', 'mine'))).toBe(true);
+        expect(matchPayload('{"__proto__":{"x":"own"}}', condition('__proto__.x', 'own'))).toBe(true);
+    });
+
     test('in findMatchingRule, a non-matching payload falls through', () => {
         const admin = mockRule('admin', { payload: { path: 'user.id', operator: 'equals', value: '1' } });
         const rest = mockRule('rest');
