@@ -776,6 +776,44 @@ describe('batch 2: popup and DevTools panel', () => {
         });
     });
 
+    // ================================================ fix-up: badge colour ===
+    describe('fix-up: a disabled rule\'s type badge is neutral in both themes', () => {
+        const TYPES = ['mock', 'block', 'delay', 'redirect', 'headers', 'queryparams', 'requestBody'];
+        const sample = (type) => ({
+            mock: rule('mock'),
+            block: { id: 'block', name: 'Block', enabled: true, type: 'block', match: { url: '*/b*', method: 'GET' } },
+            delay: { id: 'delay', name: 'Delay', enabled: true, type: 'delay', delayMs: 100, match: { url: '*/d*', method: 'GET' } },
+            redirect: { id: 'redirect', name: 'Redirect', enabled: true, type: 'redirect', redirect: { destination: 'https://example.test/x' }, match: { url: '*/r*', method: 'GET' } },
+            headers: { id: 'headers', name: 'Headers', enabled: true, type: 'headers', headersMod: { request: [], response: [{ op: 'set', name: 'X-A', value: '1' }] }, match: { url: '*/h*', method: 'GET' } },
+            queryparams: { id: 'queryparams', name: 'Query', enabled: true, type: 'queryparams', queryParams: { add: [{ key: 'a', value: '1' }], remove: [] }, match: { url: '*/q*', method: 'GET' } },
+            requestBody: { id: 'requestBody', name: 'Body', enabled: true, type: 'requestBody', requestBody: { mode: 'static', body: { a: 1 } }, match: { url: '*/rb*', method: 'POST' } }
+        })[type];
+        const badgeColours = () => popup.$$eval('.rule-card', (cards) => cards.map((c) => {
+            const b = c.querySelector('.rule-type-badge');
+            const chip = document.createElement('span');
+            chip.style.color = 'var(--text-muted)';
+            document.body.appendChild(chip);
+            const muted = window.getComputedStyle(chip).color;
+            chip.remove();
+            return { id: c.dataset.ruleId, disabled: c.classList.contains('disabled'), color: window.getComputedStyle(b).color, muted };
+        }));
+
+        test.each(['light', 'dark'])('every type, %s theme: disabled is the muted colour, enabled keeps its own', async (theme) => {
+            const rules = [];
+            for (const t of TYPES) {
+                rules.push({ ...sample(t), enabled: true, id: `${t}-on`, name: `${t} on` });
+                rules.push({ ...sample(t), enabled: false, id: `${t}-off`, name: `${t} off` });
+            }
+            await openPopup(rules, { settings: { theme } });
+            const seen = await badgeColours();
+            expect(seen).toHaveLength(rules.length);
+            for (const s of seen) {
+                if (s.disabled) expect({ id: s.id, neutral: s.color === s.muted }).toEqual({ id: s.id, neutral: true });
+                else expect({ id: s.id, neutral: s.color === s.muted }).toEqual({ id: s.id, neutral: false });
+            }
+        });
+    });
+
     test('ran without errors', async () => {
         await openPopup([rule('a')]);
         // Until the importer group merges, popup.html's <script src="../src/importers/requestly.js"> 404s on

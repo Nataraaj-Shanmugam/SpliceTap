@@ -845,7 +845,16 @@ describe('fix: popup', () => {
         await popup.$eval('#importJson', (el) => { el.value = '[{"name":"Z","type":"block","match":{"url":"*/z*","method":"GET"}}]'; });
         await popup.click('#importConfirmBtn');
         await popup.waitForSelector('#importReplaceWarn:not([hidden])');
-        await sleep(400);
+        // B2 fix-up: this was flaky in the dark theme. The pointer was still over the Replace button it
+        // had just clicked, and the hover tint (and its 0.15s transition) put the danger text at 4.41:1
+        // in some runs and 4.9:1 in others. Move the pointer off everything and let every transition
+        // finish before reading colours.
+        await popup.mouse.move(0, 0);
+        await popup.evaluate(() => Promise.race([
+            Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))),
+            new Promise((resolve) => setTimeout(resolve, 2000))
+        ]));
+        await sleep(100);
         expect(await auditA11y(popup)).toEqual([]);
     });
 

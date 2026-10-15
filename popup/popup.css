@@ -1247,8 +1247,14 @@ body.theme-light .set-note.is-warn {
    They go neutral instead — the colour coding is what says "this rule is
    live", so dropping it is the disabled signal, and the text keeps the same
    muted colour the rest of the row uses, which meets 4.5:1 in both themes. */
+/* B2 fix-up: the light theme colours each type with `body.theme-light
+   .rule-type-badge[data-type="block"]` (0,3,1), which out-specified the
+   `.rule-card.disabled .rule-type-badge` (0,3,0) that is meant to neutralise it,
+   so in the light theme a disabled rule's Block badge stayed red. The
+   [data-type] here (0,4,0) wins in both themes. */
 .rule-card.disabled .method-badge,
-.rule-card.disabled .rule-type-badge {
+.rule-card.disabled .rule-type-badge,
+.rule-card.disabled .rule-type-badge[data-type] {
   background: var(--bg-chip);
   color: var(--text-muted);
   border-color: transparent;
