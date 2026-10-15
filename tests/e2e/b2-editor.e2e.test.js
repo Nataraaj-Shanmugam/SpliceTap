@@ -18,6 +18,58 @@ const HOSTS = ['overlay', 'options'];
 // merge. Do not put a test that already passes behind it.
 const afterMerge = test.failing; // coordinator flips
 
+// ---- stubbing the background's side of the conversation ------------------------
+// explainMatch and the draft messages are G1's. Until that merges, the editor's
+// side is tested against a stub of chrome.runtime.sendMessage in the world the
+// editor itself runs in: the extension page for the options host, the content
+// script's ISOLATED world for the overlay (reached through CDP — page.evaluate
+// runs in the page's own world and cannot see it).
+
+const STUB_SOURCE = `(() => {
+    if (globalThis.__b2Stub) return 'already';
+    const real = chrome.runtime.sendMessage.bind(chrome.runtime);
+    const stub = globalThis.__b2Stub = { calls: [], canned: {}, drafts: false };
+    chrome.runtime.sendMessage = (message, ...rest) => {
+        const type = message && message.type;
+        stub.calls.push(JSON.parse(JSON.stringify(message)));
+        if (type && stub.canned[type] !== undefined) return Promise.resolve(stub.canned[type]);
+        if (stub.drafts && type === 'saveEditorDraft') {
+            return chrome.storage.local.set({ b2StubDraft: message.draft }).then(() => ({ success: true }));
+        }
+        if (stub.drafts && type === 'getEditorDraft') {
+            return chrome.storage.local.get('b2StubDraft').then((r) => ({ success: true, draft: r.b2StubDraft || null }));
+        }
+        if (stub.drafts && type === 'clearEditorDraft') {
+            return chrome.storage.local.remove('b2StubDraft').then(() => ({ success: true }));
+        }
+        return real(message, ...rest);
+    };
+    return 'installed';
+})()`;
+
+const setupStub = (stub) => `${STUB_SOURCE}; Object.assign(globalThis.__b2Stub, ${JSON.stringify(stub)});`;
+
+/** Evaluate in the world the editor runs in: the content script's, or the extension page's. */
+async function inEditorWorld(page, hostKind, extensionId, expression) {
+    if (hostKind === 'options') return page.evaluate(expression);
+    const client = await page.createCDPSession();
+    try {
+        const contexts = [];
+        client.on('Runtime.executionContextCreated', (e) => contexts.push(e.context));
+        await client.send('Runtime.enable');
+        const ctx = contexts.find((c) => c.auxData && c.auxData.type === 'isolated'
+            && String(c.origin).startsWith('chrome-extension://' + extensionId));
+        if (!ctx) throw new Error('no content-script world on the page');
+        const { result, exceptionDetails } = await client.send('Runtime.evaluate', {
+            contextId: ctx.id, expression, awaitPromise: true, returnByValue: true
+        });
+        if (exceptionDetails) throw new Error('evaluation in the content script failed: ' + (exceptionDetails.exception && exceptionDetails.exception.description || exceptionDetails.text));
+        return result.value;
+    } finally {
+        await client.detach().catch(() => {});
+    }
+}
+
 describe.each(HOSTS)('B2 editor fields — %s host', (hostKind) => {
     let h;
     let page;
@@ -30,14 +82,20 @@ describe.each(HOSTS)('B2 editor fields — %s host', (hostKind) => {
         page = null;
     });
 
-    async function openEditor(rule) {
+    const inWorld = (expression) => inEditorWorld(page, hostKind, h.extensionId, expression);
+    const stubCalls = async () => JSON.parse(await inWorld('JSON.stringify(globalThis.__b2Stub.calls)'));
+
+    /** @param {{stub?: {canned?: object, drafts?: boolean}}} [extra] stand in for the background's side of explainMatch / the draft messages */
+    async function openEditor(rule, { stub, payload } = {}) {
         if (rule) await h.saveRule(rule);
         if (hostKind === 'overlay') {
             page = await h.openPage();
-            await h.openOverlay(page, rule ? { mode: 'edit', rule } : { mode: 'new' });
+            if (stub) await inWorld(setupStub(stub));
+            await h.openOverlay(page, payload || (rule ? { mode: 'edit', rule } : { mode: 'new' }));
         } else {
             page = await h.browser.newPage();
             await page.setViewport({ width: 1100, height: 900 });
+            if (stub) await page.evaluateOnNewDocument(setupStub(stub));
             const query = rule ? `?editRule=${encodeURIComponent(rule.id)}` : '?action=new';
             await page.goto(h.extUrl('options/options.html' + query), { waitUntil: 'load' });
         }
@@ -232,6 +290,87 @@ describe.each(HOSTS)('B2 editor fields — %s host', (hostKind) => {
         expect(state.focused).toBe(true);
         expect(await stored()).toEqual([]);
     });
+
+    // ---- F10 / PER-59: Try a URL ---------------------------------------------
+
+    const tryText = () => ed.inShadow(page, (root) => root.getElementById('tmTryResult').textContent);
+
+    test('F10: Check sends explainMatch with the form\'s rule, the URL and the method, and the answer is listed', async () => {
+        await openEditor(null, { stub: { canned: { explainMatch: {
+            success: true,
+            url: 'http://127.0.0.1/api/users/7',
+            result: { matches: true, checks: [
+                { condition: 'url', ok: true, detail: 'The URL matches the pattern.' },
+                { condition: 'method', ok: false, detail: 'The rule is for POST, but this request is GET.' }
+            ] },
+            shadowedBy: [{ ruleId: 'e1', ruleName: 'Earlier mock' }],
+            network: true
+        } } } });
+        await ed.fill(page, 'tmName', 'Users');
+        await ed.fill(page, 'tmUrl', '*/api/users/*');
+        await ed.fill(page, 'tmTryUrl', 'http://127.0.0.1/api/users/7');
+        await ed.fill(page, 'tmTryMethod', 'GET');
+        await ed.click(page, 'tmTryCheck');
+        await waitFor(async () => /would handle/.test(await tryText()), { label: 'the result' });
+
+        const text = await tryText();
+        expect(text).toContain('This rule would handle http://127.0.0.1/api/users/7');
+        expect(text).toContain('✓Passed: The URL matches the pattern.');
+        expect(text).toContain('✗Failed: The rule is for POST, but this request is GET.');
+        expect(text).toContain("Would be handled by Chrome's network layer");
+        expect(text).toContain('An earlier rule, Earlier mock, also matches this request and takes precedence');
+
+        const [call] = (await stubCalls()).filter((m) => m.type === 'explainMatch');
+        expect(call.url).toBe('http://127.0.0.1/api/users/7');
+        expect(call.method).toBe('GET');
+        expect(call.rule).toMatchObject({ name: 'Users', type: 'mock', match: { url: '*/api/users/*' } });
+        // nothing was saved by trying
+        expect(await stored()).toEqual([]);
+    });
+
+    test('F10: the result sits in a polite live region, and typing in the box does not make the form dirty', async () => {
+        await openEditor(null, { stub: { canned: { explainMatch: { success: true, url: 'http://x/', result: { matches: false, checks: [] }, shadowedBy: [], network: false } } } });
+        const region = await ed.inShadow(page, (root) => {
+            const el = root.getElementById('tmTryResult');
+            return { role: el.getAttribute('role'), live: el.getAttribute('aria-live') };
+        });
+        expect(region).toEqual({ role: 'status', live: 'polite' });
+
+        await ed.fill(page, 'tmTryUrl', 'http://x/');
+        await ed.click(page, 'tmTryCheck');
+        await waitFor(async () => /would not handle/.test(await tryText()), { label: 'the result' });
+        await page.keyboard.press('Escape'); // a clean form closes at once
+        await waitFor(async () => !(await ed.isOpen(page)), { label: 'the editor to close' });
+    });
+
+    afterMerge('F10: with the real background, a matching and a non-matching URL are told apart', async () => {
+        await openEditor();
+        await ed.fill(page, 'tmName', 'Users');
+        await ed.fill(page, 'tmUrl', '*/api/users/*');
+        await ed.fill(page, 'tmTryUrl', 'http://127.0.0.1/api/users/7');
+        await ed.click(page, 'tmTryCheck');
+        await waitFor(async () => /would handle/.test(await tryText()), { label: 'the match' });
+        expect(await tryText()).toMatch(/✓/);
+
+        await ed.fill(page, 'tmTryUrl', 'http://127.0.0.1/other');
+        await ed.click(page, 'tmTryCheck');
+        await waitFor(async () => /would not handle/.test(await tryText()), { label: 'the non-match' });
+        expect(await tryText()).toMatch(/✗/);
+    });
+
+    afterMerge('PER-59: with the real background, an earlier rule that also matches is named in a warning', async () => {
+        await h.saveRule(seed({
+            id: 'earlier', name: 'Earlier rule', type: 'mock',
+            match: { url: '*/api/users/*', method: '*' },
+            response: { statusCode: 200, headers: {}, body: {}, delay: 0, mode: 'static' }
+        }));
+        await openEditor();
+        await ed.fill(page, 'tmName', 'Later rule');
+        await ed.fill(page, 'tmUrl', '*/api/users/*');
+        await ed.fill(page, 'tmTryUrl', 'http://127.0.0.1/api/users/7');
+        await ed.click(page, 'tmTryCheck');
+        await waitFor(async () => /An earlier rule, Earlier rule, also matches this request and takes precedence/.test(await tryText()), { label: 'the warning' });
+    });
 });
 
 describe('B2 editor fields — accessibility (options host, open shadow root)', () => {
@@ -247,6 +386,17 @@ describe('B2 editor fields — accessibility (options host, open shadow root)', 
         await h.bg({ type: 'settingsUpdated', settings: { theme } });
         page = await h.browser.newPage();
         await page.setViewport({ width: 1100, height: 900 });
+        // a canned answer for "Try a URL": failed and passed checks, a network note, two shadowing rules
+        await page.evaluateOnNewDocument(setupStub({ canned: { explainMatch: {
+            success: true,
+            url: 'https://example.com/api/users/1',
+            result: { matches: true, checks: [
+                { condition: 'url', ok: true, detail: 'The URL matches the pattern.' },
+                { condition: 'method', ok: false, detail: 'The rule is for POST, but this request is GET.' }
+            ] },
+            shadowedBy: [{ ruleId: 'a', ruleName: 'Earlier mock' }, { ruleId: 'b', ruleName: 'Another one' }],
+            network: true
+        } } }));
         await page.goto(h.extUrl('options/options.html?action=new'), { waitUntil: 'load' });
         await waitFor(() => ed.isOpen(page), { label: 'the editor to open' });
         await sleep(300);
@@ -255,6 +405,23 @@ describe('B2 editor fields — accessibility (options host, open shadow root)', 
     const audit = async (label, violations) => {
         for (const v of await auditA11y(page)) violations.push({ state: label, ...v });
     };
+
+    test.each(['dark', 'light'])('"Try a URL" — empty, expanded and with a result — has no WCAG A/AA violations (%s)', async (theme) => {
+        await openOnOptionsPage(theme);
+        const violations = [];
+        await audit('try box, empty', violations);
+
+        await ed.inShadow(page, (root) => { root.querySelector('#tmTry details').open = true; });
+        await audit('try box, more details open', violations);
+
+        await ed.fill(page, 'tmUrl', '*/api/users/*');
+        await ed.fill(page, 'tmTryUrl', 'https://example.com/api/users/1');
+        await ed.click(page, 'tmTryCheck');
+        await waitFor(async () => ed.inShadow(page, (root) => /would handle/.test(root.getElementById('tmTryResult').textContent)), { label: 'the result' });
+        await sleep(150);
+        await audit('try box, with a result', violations);
+        expect(violations).toEqual([]);
+    });
 
     test.each(['dark', 'light'])('every new field and its error state has no WCAG A/AA violations (%s)', async (theme) => {
         await openOnOptionsPage(theme);

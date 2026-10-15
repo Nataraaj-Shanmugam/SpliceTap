@@ -533,6 +533,43 @@
            follows, so they need less room below than a field of their own. */
         .tm-subrow .tm-field { margin-bottom: 4px; }
 
+        /* B2-F10: "Try a URL". The result region has no font size of its own
+           (its children carry theirs), so the amber .tm-note inside it is not
+           shrunk twice — em compounds (PER-73). */
+        .tm-try-actions { display: flex; align-items: center; gap: 10px; }
+        .tm-try-result { display: flex; flex-direction: column; gap: 6px; }
+        .tm-try-result:empty { display: none; }
+        .tm-try-sum, .tm-try-net { font-size: 0.75em; line-height: 1.45; }
+        .tm-try-sum { font-weight: 600; }
+        .tm-try-list {
+            list-style: none;
+            display: flex; flex-direction: column; gap: 3px;
+            font-size: 0.75em; line-height: 1.45;
+        }
+        .tm-try-list li { display: flex; gap: 8px; align-items: baseline; }
+        .tm-try-mark { flex-shrink: 0; width: 1em; font-weight: 700; text-align: center; }
+        .tm-try-ok { color: #6ee7a0; }
+        .tm-try-no { color: #f87171; }
+        /* Visually hidden, still read: the glyph alone must not carry pass/fail. */
+        .tm-sr {
+            position: absolute;
+            width: 1px; height: 1px;
+            margin: -1px; padding: 0;
+            overflow: hidden;
+            clip: rect(0 0 0 0);
+            white-space: nowrap;
+            border: 0;
+        }
+        .tm-more summary {
+            font-size: 0.6875em;
+            color: #8b9ab3;
+            cursor: pointer;
+            padding: 2px 0;
+            border-radius: 4px;
+        }
+        .tm-more summary:focus-visible { outline: 2px solid #2f7dfa; outline-offset: 2px; }
+        .tm-more[open] summary { margin-bottom: 8px; }
+
         .tm-check {
             display: flex; align-items: center; gap: 8px;
             min-height: 24px;
@@ -624,6 +661,9 @@
         }
         .tm-light .tm-req,
         .tm-light .tm-field-err { color: #b91c1c; }
+        .tm-light .tm-try-ok { color: #15803d; }
+        .tm-light .tm-try-no { color: #b91c1c; }
+        .tm-light .tm-more summary { color: #5d6a80; }
         .tm-light .tm-field [aria-invalid="true"] { border-color: #b91c1c !important; }
         .tm-light .tm-check { color: #101828; }
         .tm-light .tm-x { color: #5d6a80; }
@@ -696,6 +736,15 @@
             || [];
         const templateOptions = ['<option value="">Blank rule</option>']
             .concat(templates.map((t) => `<option value="${t.id}" title="${t.description}">${t.label}</option>`))
+            .join('');
+
+        // B2-F10: the "Try a URL" selects. An empty method means the rule's own;
+        // an empty type leaves the resource type unsaid.
+        const tryMethodOptions = ['<option value="">Rule\'s method</option>']
+            .concat(METHODS.filter((m) => m !== '*').map((m) => `<option value="${m}">${m}</option>`))
+            .join('');
+        const tryTypeOptions = ['<option value="">Not specified</option>']
+            .concat(RESOURCE_TYPES.map(([v, l]) => `<option value="${v}">${l}</option>`))
             .join('');
 
         // B2-F7: one labelled checkbox per resource type.
@@ -989,6 +1038,44 @@
                 <input type="text" id="tmQpRemove" placeholder="token, session_id">
               </div>
 
+              <!-- B2-F10 / PER-59: ask the background whether this rule, as the
+                   form describes it now (saved or not), would handle a given
+                   request, and whether an earlier rule would get there first. -->
+              <div class="tm-field" id="tmTry" role="group" aria-labelledby="tmTryLegend">
+                <span class="tm-glabel" id="tmTryLegend">Try a URL</span>
+                <div class="tm-row tm-subrow">
+                  <div class="tm-field" style="flex:3">
+                    <label for="tmTryUrl">URL to test (optional)</label>
+                    <input type="text" id="tmTryUrl" placeholder="https://example.com/api/users/1" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" aria-describedby="tmTryHint">
+                  </div>
+                  <div class="tm-field" style="flex:1">
+                    <label for="tmTryMethod">Method</label>
+                    <select id="tmTryMethod" aria-describedby="tmTryHint">${tryMethodOptions}</select>
+                  </div>
+                </div>
+                <details class="tm-more">
+                  <summary>More about the request</summary>
+                  <div class="tm-field">
+                    <label for="tmTryPage">Made by the page (URL)</label>
+                    <input type="text" id="tmTryPage" placeholder="https://app.example.com/dashboard" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr">
+                  </div>
+                  <div class="tm-field">
+                    <label for="tmTryType">Resource type</label>
+                    <select id="tmTryType">${tryTypeOptions}</select>
+                  </div>
+                  <div class="tm-field">
+                    <label for="tmTryBody">Request body</label>
+                    <textarea id="tmTryBody" rows="2" spellcheck="false" dir="ltr" placeholder='{"user": {"id": 42}}'></textarea>
+                  </div>
+                </details>
+                <div class="tm-try-actions">
+                  <button type="button" class="tm-btn tm-btn-secondary" id="tmTryCheck">Check</button>
+                </div>
+                <span class="tm-hint" id="tmTryHint">Leave the URL empty to try one made up from the pattern. Nothing is sent to the network.</span>
+                <!-- Polite live region: it exists (empty) before its text does, so a screen reader says the result. -->
+                <div class="tm-try-result" id="tmTryResult" role="status" aria-live="polite"></div>
+              </div>
+
               <div class="tm-field">
                 <label class="tm-check"><input type="checkbox" id="tmEnabled" checked> Rule enabled</label>
               </div>
@@ -1131,6 +1218,14 @@
             $('tmAppliesAll').addEventListener('change', () => applyTypeVisibility());
             $('tmCallMode').addEventListener('change', () => applyTypeVisibility());
             $('tmHintClose').addEventListener('click', dismissHint);
+            // B2-F10: not a trusted-click matter like Save: it changes nothing.
+            $('tmTryCheck').addEventListener('click', tryUrl);
+            $('tmTryUrl').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    tryUrl();
+                }
+            });
 
             // Close on backdrop click (but not when clicking inside the panel).
             shadow.querySelector('.tm-backdrop').addEventListener('click', (e) => {
@@ -1141,6 +1236,8 @@
             // dismissal can be told apart from a deliberate one.
             const panel = shadow.querySelector('.tm-panel');
             const onEdit = (e) => {
+                // B2-F10: what is typed into "Try a URL" is not part of the rule.
+                if (e.target && e.target.closest && e.target.closest('#tmTry')) return;
                 markDirty();
                 disarmClose();
                 // PER-77: editing a field answers its error.
@@ -1523,6 +1620,10 @@
             $('tmQpRemove').value = (qp.remove || []).join(', ');
             $('tmQpRemoveAll').checked = qp.removeAll === true; // B2-F9
 
+            // B2-F10: a fresh "Try a URL" for every rule opened.
+            for (const id of ['tmTryUrl', 'tmTryPage', 'tmTryBody', 'tmTryMethod', 'tmTryType']) $(id).value = '';
+            showTryResult([]);
+
             applyTypeVisibility();
         }
 
@@ -1772,6 +1873,139 @@
                     .map((message) => ({ message, fieldId: fieldForError(message, rule) }));
                 reportProblems(rejected, 'Failed to save: ' + e.message);
                 setSaving(false);
+            }
+        }
+
+        // ---- Try a URL (B2-F10 / PER-59) ------------------------------------
+
+        function tryNode(tag, className, text) {
+            const node = document.createElement(tag);
+            if (className) node.className = className;
+            if (text !== undefined) node.textContent = text;
+            return node;
+        }
+
+        /** A name or URL that may be right-to-left must not reorder the sentence around it. */
+        function tryQuoted(text) {
+            return tryNode('bdi', '', String(text));
+        }
+
+        function showTryResult(nodes) {
+            const out = $('tmTryResult');
+            if (!out) return;
+            // Replace in one go so the live region announces the result once.
+            const fragment = document.createDocumentFragment();
+            nodes.forEach((n) => fragment.appendChild(n));
+            while (out.firstChild) out.removeChild(out.firstChild);
+            out.appendChild(fragment);
+        }
+
+        function tryMessage(text, className) {
+            return tryNode('p', className || 'tm-try-sum', text);
+        }
+
+        /**
+         * What the background said about one request, as plain sentences: the
+         * verdict, a pass/fail line per condition (the glyph is decoration; a
+         * hidden word carries the meaning), a note when Chrome's network layer
+         * would be the one acting, and a warning for each earlier rule that
+         * would take the request first.
+         */
+        function renderTryResult(response, typedUrl) {
+            if (response && response.needsUrl) {
+                showTryResult([tryMessage('This URL pattern is a regular expression, so there is nothing to make a URL from. Enter a URL to try.')]);
+                return;
+            }
+            if (!response || response.success === false) {
+                showTryResult([tryMessage((response && response.error) || 'SpliceTap could not check that URL.', 'tm-try-sum tm-field-err')]);
+                return;
+            }
+
+            const result = response.result || {};
+            const nodes = [];
+
+            const sum = tryNode('p', 'tm-try-sum');
+            sum.append(result.matches ? 'This rule would handle ' : 'This rule would not handle ');
+            if (response.url) sum.appendChild(tryQuoted(response.url));
+            else sum.append('that request');
+            if (!typedUrl && response.url) sum.append(' (made up from the pattern)');
+            nodes.push(sum);
+
+            if (response.network) nodes.push(tryMessage("Would be handled by Chrome's network layer", 'tm-try-net'));
+
+            const checks = Array.isArray(result.checks) ? result.checks : [];
+            if (checks.length) {
+                const list = tryNode('ul', 'tm-try-list');
+                for (const check of checks) {
+                    const ok = !!(check && check.ok);
+                    const item = tryNode('li');
+                    const mark = tryNode('span', 'tm-try-mark ' + (ok ? 'tm-try-ok' : 'tm-try-no'), ok ? '✓' : '✗');
+                    mark.setAttribute('aria-hidden', 'true');
+                    item.appendChild(mark);
+                    item.appendChild(tryNode('span', 'tm-sr', ok ? 'Passed: ' : 'Failed: '));
+                    item.appendChild(tryNode('span', '', String((check && check.detail) || (check && check.condition) || '')));
+                    list.appendChild(item);
+                }
+                nodes.push(list);
+            }
+
+            for (const shadow of Array.isArray(response.shadowedBy) ? response.shadowedBy : []) {
+                const warning = tryNode('p', 'tm-note');
+                warning.append('An earlier rule, ', tryQuoted((shadow && (shadow.ruleName || shadow.ruleId)) || 'another rule'),
+                    ', also matches this request and takes precedence');
+                nodes.push(warning);
+            }
+
+            showTryResult(nodes);
+        }
+
+        async function tryUrl() {
+            const button = $('tmTryCheck');
+            if (!button || button.disabled) return;
+
+            // The rule as the form describes it now: saved or not, valid or not.
+            // Only JSON the form cannot read at all is a reason not to ask.
+            let rule;
+            try {
+                const collected = collect();
+                if (collected.problems.length) {
+                    showTryResult([tryMessage('Fix this first: ' + collected.problems.map((p) => p.message).join(' · '), 'tm-try-sum tm-field-err')]);
+                    return;
+                }
+                rule = collected.rule;
+            } catch (e) {
+                showTryResult([tryMessage(e.message, 'tm-try-sum tm-field-err')]);
+                return;
+            }
+            if (!rule.name) rule.name = 'Untitled rule'; // a rule still being named can be tried
+
+            const message = { type: 'explainMatch', rule };
+            const typedUrl = $('tmTryUrl').value.trim();
+            if (typedUrl) message.url = typedUrl;
+            const method = $('tmTryMethod').value;
+            if (method) message.method = method;
+            const pageUrl = $('tmTryPage').value.trim();
+            if (pageUrl) message.pageUrl = pageUrl;
+            const resourceType = $('tmTryType').value;
+            if (resourceType) message.resourceType = resourceType;
+            const body = $('tmTryBody').value;
+            if (body) message.body = body;
+
+            button.disabled = true;
+            button.textContent = 'Checking…';
+            try {
+                const response = await send(message);
+                if (!shadow) return; // closed while waiting
+                renderTryResult(response, typedUrl);
+            } catch (e) {
+                if (!shadow) return;
+                showTryResult([tryMessage('SpliceTap could not check that URL: ' + e.message, 'tm-try-sum tm-field-err')]);
+            } finally {
+                const again = $('tmTryCheck');
+                if (again) {
+                    again.disabled = false;
+                    again.textContent = 'Check';
+                }
             }
         }
 

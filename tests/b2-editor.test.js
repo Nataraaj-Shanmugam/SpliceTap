@@ -572,3 +572,256 @@ describe('B2 problems are marked on the new fields', () => {
         expect(h.$(id).getAttribute('aria-describedby')).toContain(id + 'Err');
     });
 });
+
+// ---- F10 / PER-59: Try a URL --------------------------------------------------
+
+describe('B2-F10 Try a URL', () => {
+    const verdict = (over = {}) => ({
+        success: true,
+        url: 'https://example.com/api/users/1',
+        result: {
+            matches: true,
+            checks: [
+                { condition: 'url', ok: true, detail: 'The URL matches the pattern.' },
+                { condition: 'method', ok: false, detail: 'The rule is for POST, but this request is GET.' }
+            ]
+        },
+        shadowedBy: [],
+        network: false,
+        ...over
+    });
+    const explainCalls = (hh) => hh.sent.filter((m) => m.type === 'explainMatch');
+    const click = (id) => h.$(id).click();
+    const flush = async () => { for (let i = 0; i < 5; i++) await settle(); };
+
+    function mountWith(response) {
+        h = mount({ handlers: { explainMatch: jest.fn(async () => (typeof response === 'function' ? response() : response)) } });
+        h.editor.open({});
+        h.set('tmName', 'Users');
+        h.set('tmUrl', '*/api/users/*');
+        return h;
+    }
+
+    test('the box is there: labelled controls, a Check button and a polite live region that exists before any result', async () => {
+        h = mount();
+        h.editor.open({});
+        await settle();
+        expect(h.$('tmTry').getAttribute('role')).toBe('group');
+        expect(h.root().querySelector('label[for="tmTryUrl"]')).toBeTruthy();
+        expect(h.root().querySelector('label[for="tmTryMethod"]')).toBeTruthy();
+        expect(h.$('tmTryCheck').type).toBe('button');
+        expect(h.$('tmTryCheck').textContent).toBe('Check');
+        const region = h.$('tmTryResult');
+        expect(region.getAttribute('role')).toBe('status');
+        expect(region.getAttribute('aria-live')).toBe('polite');
+        expect(region.childNodes.length).toBe(0);
+        // the method list: the rule's own first, then real methods
+        expect(Array.from(h.$('tmTryMethod').options).map((o) => o.value)).toEqual(['', 'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD']);
+    });
+
+    test('Check sends explainMatch with the rule the form describes now, the URL and the method', async () => {
+        mountWith(verdict());
+        h.set('tmTryUrl', ' https://example.com/api/users/1 ');
+        h.set('tmTryMethod', 'GET');
+        click('tmTryCheck');
+        await flush();
+        const [call] = explainCalls(h);
+        expect(call.type).toBe('explainMatch');
+        expect(call.url).toBe('https://example.com/api/users/1');
+        expect(call.method).toBe('GET');
+        expect(call.rule).toEqual(expect.objectContaining({
+            name: 'Users', type: 'mock', match: expect.objectContaining({ url: '*/api/users/*' })
+        }));
+        expect(Object.keys(call).sort()).toEqual(['method', 'rule', 'type', 'url']);
+    });
+
+    test('an empty URL and method are left out, so the background makes the URL up and uses the rule\'s method', async () => {
+        mountWith(verdict());
+        click('tmTryCheck');
+        await flush();
+        const [call] = explainCalls(h);
+        expect(call).not.toHaveProperty('url');
+        expect(call).not.toHaveProperty('method');
+        expect(h.$('tmTryResult').textContent).toMatch(/made up from the pattern/);
+    });
+
+    test('the page, resource type and body are sent when given', async () => {
+        mountWith(verdict());
+        h.set('tmTryPage', 'https://app.example.com/home');
+        h.set('tmTryType', 'script');
+        h.set('tmTryBody', '{"user":{"id":42}}');
+        click('tmTryCheck');
+        await flush();
+        const [call] = explainCalls(h);
+        expect(call.pageUrl).toBe('https://app.example.com/home');
+        expect(call.resourceType).toBe('script');
+        expect(call.body).toBe('{"user":{"id":42}}');
+    });
+
+    test('an unsaved rule with no name yet can still be tried', async () => {
+        h = mount({ handlers: { explainMatch: async () => verdict() } });
+        h.editor.open({});
+        h.set('tmUrl', '*/api/*');
+        click('tmTryCheck');
+        await flush();
+        expect(explainCalls(h)[0].rule.name).toBe('Untitled rule');
+        expect(h.editor.collect().rule.name).toBe(''); // the form itself is untouched
+    });
+
+    test('the verdict and each check are listed with a glyph and a hidden pass/fail word', async () => {
+        mountWith(verdict());
+        click('tmTryCheck');
+        await flush();
+        const out = h.$('tmTryResult');
+        expect(out.querySelector('.tm-try-sum').textContent).toBe('This rule would handle https://example.com/api/users/1 (made up from the pattern)');
+        const items = Array.from(out.querySelectorAll('li'));
+        expect(items.map((li) => li.textContent)).toEqual([
+            '✓Passed: The URL matches the pattern.',
+            '✗Failed: The rule is for POST, but this request is GET.'
+        ]);
+        expect(items.map((li) => li.querySelector('.tm-try-mark').getAttribute('aria-hidden'))).toEqual(['true', 'true']);
+        expect(items[0].querySelector('.tm-try-ok')).toBeTruthy();
+        expect(items[1].querySelector('.tm-try-no')).toBeTruthy();
+    });
+
+    test('a request the rule would not handle says so', async () => {
+        mountWith(verdict({ result: { matches: false, checks: [{ condition: 'url', ok: false, detail: 'The URL does not match.' }] } }));
+        h.set('tmTryUrl', 'https://example.com/other');
+        click('tmTryCheck');
+        await flush();
+        expect(h.$('tmTryResult').querySelector('.tm-try-sum').textContent).toBe('This rule would not handle https://example.com/api/users/1');
+    });
+
+    test('"Would be handled by Chrome\'s network layer" appears when network is true, and only then', async () => {
+        mountWith(verdict({ network: true }));
+        click('tmTryCheck');
+        await flush();
+        expect(h.$('tmTryResult').textContent).toContain("Would be handled by Chrome's network layer");
+        h.cleanup();
+        mountWith(verdict({ network: false }));
+        click('tmTryCheck');
+        await flush();
+        expect(h.$('tmTryResult').textContent).not.toContain('network layer');
+    });
+
+    test('each shadowing rule gets a warning naming it, built from text and never markup', async () => {
+        mountWith(verdict({ shadowedBy: [
+            { ruleId: 'a', ruleName: 'Earlier mock' },
+            { ruleId: 'b', ruleName: '<img src=x onerror=alert(1)>' }
+        ] }));
+        click('tmTryCheck');
+        await flush();
+        const warnings = Array.from(h.$('tmTryResult').querySelectorAll('.tm-note')).map((n) => n.textContent);
+        expect(warnings).toEqual([
+            'An earlier rule, Earlier mock, also matches this request and takes precedence',
+            'An earlier rule, <img src=x onerror=alert(1)>, also matches this request and takes precedence'
+        ]);
+        expect(h.$('tmTryResult').querySelector('img')).toBeNull();
+    });
+
+    test('a second Check replaces the first result rather than adding to it', async () => {
+        mountWith(verdict({ shadowedBy: [{ ruleId: 'a', ruleName: 'One' }] }));
+        click('tmTryCheck');
+        await flush();
+        expect(h.$('tmTryResult').querySelectorAll('.tm-note').length).toBe(1);
+        window.chrome.runtime.sendMessage.mockImplementation(async (m) => (m.type === 'explainMatch' ? verdict() : { success: true }));
+        click('tmTryCheck');
+        await flush();
+        expect(h.$('tmTryResult').querySelectorAll('.tm-note').length).toBe(0);
+        expect(h.$('tmTryResult').querySelectorAll('li').length).toBe(2);
+    });
+
+    test('a regex pattern with no URL entered asks for one', async () => {
+        mountWith({ success: false, needsUrl: true });
+        click('tmTryCheck');
+        await flush();
+        expect(h.$('tmTryResult').textContent).toMatch(/regular expression.*Enter a URL/);
+    });
+
+    test('a refusal from the background is shown as the result', async () => {
+        mountWith({ success: false, error: 'Unknown message type: explainMatch' });
+        click('tmTryCheck');
+        await flush();
+        expect(h.$('tmTryResult').textContent).toBe('Unknown message type: explainMatch');
+    });
+
+    test('a failed send is shown as the result and the button comes back', async () => {
+        h = mount({ handlers: { explainMatch: async () => { throw new Error('Extension context invalidated.'); } } });
+        h.editor.open({});
+        h.set('tmUrl', '*/a*');
+        click('tmTryCheck');
+        await flush();
+        expect(h.$('tmTryResult').textContent).toBe('SpliceTap could not check that URL: Extension context invalidated.');
+        expect(h.$('tmTryCheck').disabled).toBe(false);
+        expect(h.$('tmTryCheck').textContent).toBe('Check');
+    });
+
+    test('JSON the form cannot read stops the check before anything is sent', async () => {
+        mountWith(verdict());
+        h.set('tmType', 'headers');
+        h.set('tmHdrReq', '[{');
+        click('tmTryCheck');
+        await flush();
+        expect(explainCalls(h)).toEqual([]);
+        expect(h.$('tmTryResult').textContent).toMatch(/^Fix this first: Request Headers: invalid JSON/);
+    });
+
+    test('the button is disabled while the answer is awaited, then restored', async () => {
+        let release;
+        mountWith(() => new Promise((resolve) => { release = () => resolve(verdict()); }));
+        click('tmTryCheck');
+        await settle();
+        expect(h.$('tmTryCheck').disabled).toBe(true);
+        expect(h.$('tmTryCheck').textContent).toBe('Checking…');
+        click('tmTryCheck'); // a second press while waiting sends nothing more
+        await settle();
+        expect(explainCalls(h).length).toBe(1);
+        release();
+        await flush();
+        expect(h.$('tmTryCheck').disabled).toBe(false);
+        expect(h.$('tmTryCheck').textContent).toBe('Check');
+    });
+
+    test('Enter in the URL box checks, like pressing the button', async () => {
+        mountWith(verdict());
+        h.set('tmTryUrl', 'https://example.com/x');
+        h.$('tmTryUrl').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+        await flush();
+        expect(explainCalls(h).length).toBe(1);
+    });
+
+    test('what is typed into the box is not an edit to the rule: Escape still closes at once', async () => {
+        h = mount();
+        h.editor.open({});
+        h.set('tmTryUrl', 'https://example.com/x');
+        h.set('tmTryMethod', 'POST');
+        h.set('tmTryBody', '{}');
+        document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        expect(h.editor.isOpen()).toBe(false);
+    });
+
+    test('each time a rule is opened the box starts empty', async () => {
+        mountWith(verdict());
+        h.set('tmTryUrl', 'https://example.com/x');
+        h.set('tmTryMethod', 'POST');
+        click('tmTryCheck');
+        await flush();
+        expect(h.$('tmTryResult').childNodes.length).toBeGreaterThan(0);
+        h.editor.close();
+        h.editor.open({});
+        expect(h.$('tmTryUrl').value).toBe('');
+        expect(h.$('tmTryMethod').value).toBe('');
+        expect(h.$('tmTryResult').childNodes.length).toBe(0);
+    });
+
+    test('closing the editor while a check is in flight is harmless', async () => {
+        let release;
+        mountWith(() => new Promise((resolve) => { release = () => resolve(verdict()); }));
+        click('tmTryCheck');
+        await settle();
+        h.editor.close();
+        release();
+        await flush();
+        expect(h.editor.isOpen()).toBe(false);
+    });
+});
