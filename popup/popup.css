@@ -1327,6 +1327,27 @@ body.theme-light .set-note.is-warn {
   padding: 0 5px;
 }
 
+/* PER-59: an earlier rule answers this rule's requests first. Warning tone,
+   on the detail line with the other chips (the name line has no room). */
+.rule-shadow-chip {
+  display: inline-block;
+  max-width: 14em;
+  margin-right: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.59375rem;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  vertical-align: bottom;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--caution-bg);
+  color: var(--caution-text);
+  cursor: help;
+}
+
 .rule-header {
   display: flex;
   align-items: center;
@@ -1940,6 +1961,7 @@ body.theme-light .rules-list {
 
   .disabled-chip,
   .rule-scope-chip,
+  .rule-shadow-chip,
   .set-note {
     border: 1px solid CanvasText;
   }

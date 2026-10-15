@@ -404,6 +404,99 @@ describe('batch 2: popup and DevTools panel', () => {
         });
     });
 
+    // ============================================================ PER-59 ===
+    describe('PER-59: "Shadowed by" chips', () => {
+        // Stands in for the background's explainMatch (another group) by answering it
+        // in the popup page, and notes how many rows were on screen when each question was asked.
+        const stubExplain = (cfg) => {
+            const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+            window.__explainCalls = [];
+            chrome.runtime.sendMessage = (message, ...rest) => {
+                if (message && message.type === 'explainMatch') {
+                    window.__explainCalls.push({ ruleId: message.ruleId, cards: document.querySelectorAll('.rule-card').length });
+                    const answer = (cfg.needsUrl || []).includes(message.ruleId)
+                        ? { success: true, needsUrl: true, shadowedBy: [] }
+                        : { success: true, url: 'https://example.test/x', result: {}, shadowedBy: (cfg.shadows || {})[message.ruleId] || [], network: false };
+                    return new Promise((resolve) => setTimeout(() => resolve(answer), cfg.delayMs || 0));
+                }
+                return original(message, ...rest);
+            };
+        };
+        const calls = () => popup.evaluate(() => window.__explainCalls);
+        const chips = () => popup.$$eval('.rule-card', (cards) => cards.map((c) => {
+            const chip = c.querySelector('.rule-shadow-chip');
+            return { id: c.dataset.ruleId, chip: chip ? chip.textContent : null };
+        }));
+        const RULES = [rule('broad', { name: 'Broad', match: { url: '*/api/*', method: 'GET' } }), rule('users', { name: 'Users' }), rule('rx', { name: 'Regex', match: { url: '/api\\/rx/', method: 'GET' } })];
+        const CFG = { shadows: { users: [{ ruleId: 'broad', ruleName: 'Broad' }] }, needsUrl: ['rx'] };
+
+        test('a shadowed rule\'s row says "Shadowed by <name>"; the rest do not, and a regex rule is never asked about', async () => {
+            await openPopup(RULES, { beforeLoad: stubExplain, beforeLoadArg: CFG });
+            await waitFor(async () => (await chips()).some((c) => c.chip), { label: 'a chip' });
+            expect(await chips()).toEqual([
+                { id: 'broad', chip: null },
+                { id: 'users', chip: 'Shadowed by Broad' },
+                { id: 'rx', chip: null }
+            ]);
+            expect((await calls()).map((c) => c.ruleId).sort()).toEqual(['broad', 'users']);
+            // The chip sits on the detail line with the other chips, before the URL.
+            expect(await popup.$eval('.rule-card[data-rule-id="users"] .rule-details', (d) =>
+                d.querySelector('.rule-shadow-chip').nextElementSibling.classList.contains('rule-url'))).toBe(true);
+        });
+
+        test('it is asked after the rows are on screen: the first render does not wait for it', async () => {
+            await openPopup(RULES, { beforeLoad: stubExplain, beforeLoadArg: { ...CFG, delayMs: 1500 } });
+            // All three rows are drawn while the answers are still 1.5 s away...
+            expect(await popup.$$eval('.rule-card', (c) => c.length)).toBe(3);
+            expect((await chips()).every((c) => c.chip === null)).toBe(true);
+            await waitFor(async () => (await calls()).length >= 1, { label: 'the first question' });
+            // ...and every question was asked with all of them already there.
+            expect((await calls()).every((c) => c.cards === 3)).toBe(true);
+            await waitFor(async () => (await chips()).some((c) => c.chip), { label: 'the chip', timeout: 6000 });
+        });
+
+        test('typing in the search box does not ask again, and the chip survives the redraw', async () => {
+            await openPopup(RULES, { beforeLoad: stubExplain, beforeLoadArg: CFG });
+            await waitFor(async () => (await chips()).some((c) => c.chip), { label: 'a chip' });
+            const before = (await calls()).length;
+            await popup.type('#searchInput', 'users');
+            await sleep(500);
+            expect(await chips()).toEqual([{ id: 'users', chip: 'Shadowed by Broad' }]);
+            expect((await calls()).length).toBe(before);
+        });
+
+        test('switching a rule on or off asks again, because who shadows whom has changed', async () => {
+            await openPopup(RULES, { beforeLoad: stubExplain, beforeLoadArg: CFG });
+            await waitFor(async () => (await calls()).length >= 2, { label: 'first pass' });
+            const before = (await calls()).length;
+            await popup.click('.rule-checkbox[data-rule-id="broad"]');
+            await waitFor(async () => (await calls()).length >= before + 2, { label: 'a second pass' });
+        });
+
+        test.each(['dark', 'light'])('axe: shadow chips on an enabled and a disabled row (%s)', async (theme) => {
+            await openPopup([RULES[0], { ...RULES[1], enabled: false }], {
+                settings: { theme }, beforeLoad: stubExplain, beforeLoadArg: CFG
+            });
+            await waitFor(async () => (await chips()).some((c) => c.chip), { label: 'a chip' });
+            await settle(popup);
+            expect(await auditA11y(popup)).toEqual([]);
+        });
+
+        test('in forced colours the chip keeps an outline', async () => {
+            await openPopup(RULES, { beforeLoad: stubExplain, beforeLoadArg: CFG });
+            const cdp = await popup.createCDPSession();
+            await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'forced-colors', value: 'active' }] });
+            await waitFor(async () => (await chips()).some((c) => c.chip), { label: 'a chip' });
+            expect(await popup.$eval('.rule-shadow-chip', (c) => getComputedStyle(c).borderTopWidth)).toBe('1px');
+        });
+
+        afterMerge('with the real background: a broad rule above a narrow one puts the chip on the narrow one', async () => {
+            await openPopup([rule('broad', { name: 'Broad', match: { url: '*/api/*', method: 'GET' } }), rule('users', { name: 'Users' })]);
+            await waitFor(async () => (await chips()).some((c) => c.chip), { label: 'a chip', timeout: 4000 });
+            expect(await chips()).toEqual([{ id: 'broad', chip: null }, { id: 'users', chip: 'Shadowed by Broad' }]);
+        });
+    });
+
     test('ran without errors', async () => {
         await openPopup([rule('a')]);
         // Until the importer group merges, popup.html's <script src="../src/importers/requestly.js"> 404s on

@@ -536,6 +536,78 @@ class SpliceTapPopup {
 
         // Attach event listeners to newly rendered cards
         this.attachRuleEventListeners();
+
+        // PER-59: chips already worked out go back on at once; anything not
+        // yet known is asked for after this render has painted.
+        this.applyShadowChips();
+        this.scheduleShadowChips();
+    }
+
+    /**
+     * PER-59: "Shadowed by <name>" on a row whose rule an earlier enabled rule
+     * answers first. The background's explainMatch does the matching; the
+     * popup only asks, and only after the list is on screen. Results are kept
+     * until the rule set changes, so typing in the search box does not ask again.
+     */
+    shadowSignature() {
+        return (this.rules || []).map((r) => `${r && r.id}:${r && r.enabled ? 1 : 0}:${(r && r.lastModified) || ''}`).join('|');
+    }
+
+    scheduleShadowChips() {
+        clearTimeout(this._shadowTimer);
+        // A timeout rather than requestAnimationFrame: a popup in a background tab never gets a frame.
+        this._shadowTimer = setTimeout(() => this.computeShadowChips(), 30);
+    }
+
+    async computeShadowChips() {
+        const helpers = window.SpliceTapPopupHelpers;
+        const signature = this.shadowSignature();
+        if (this._shadowSignature !== signature) {
+            this._shadowSignature = signature;
+            this._shadowCache = new Map();
+        }
+        const cache = this._shadowCache;
+        const generation = (this._shadowGeneration = (this._shadowGeneration || 0) + 1);
+        // A regex pattern has no sample URL; skip it without asking.
+        const queue = (this.rules || []).filter((r) => r && r.id && !cache.has(r.id)
+            && !helpers.isRegexPattern(r.match && r.match.url));
+
+        const work = async () => {
+            while (queue.length && generation === this._shadowGeneration) {
+                const target = queue.shift();
+                const response = await this.sendMessage({ type: 'explainMatch', ruleId: target.id });
+                if (generation !== this._shadowGeneration || cache !== this._shadowCache) return;
+                const usable = response && response.success && !response.needsUrl && Array.isArray(response.shadowedBy);
+                cache.set(target.id, usable ? response.shadowedBy : []);
+                this.applyShadowChip(target.id);
+            }
+        };
+        await Promise.all([work(), work(), work(), work()]);
+    }
+
+    applyShadowChips() {
+        if (!this._shadowCache || this._shadowSignature !== this.shadowSignature()) return;
+        for (const id of this._shadowCache.keys()) this.applyShadowChip(id);
+    }
+
+    /** Put (or take off) one row's chip from what is known about it. */
+    applyShadowChip(ruleId) {
+        const card = this.findRuleCard(ruleId);
+        const details = card && card.querySelector('.rule-details');
+        if (!details) return;
+        const existing = details.querySelector('.rule-shadow-chip');
+        if (existing) existing.remove();
+        const shadowedBy = this._shadowCache && this._shadowCache.get(ruleId);
+        const text = window.SpliceTapPopupHelpers.shadowChipText(shadowedBy);
+        if (!text) return;
+        const names = shadowedBy.map((s) => s && s.ruleName).filter(Boolean).join(', ');
+        const chip = document.createElement('span');
+        chip.className = 'rule-shadow-chip';
+        chip.textContent = text;
+        chip.title = `An earlier rule (${names}) matches the same requests, so this rule never answers them. Move this rule above it to change that.`;
+        const url = details.querySelector('.rule-url');
+        if (url) details.insertBefore(chip, url);
+        else details.appendChild(chip);
     }
 
     /**
@@ -1139,6 +1211,8 @@ class SpliceTapPopup {
                 }
 
                 this.updateStatus();
+                // PER-59: which rules shadow which depends on what is enabled.
+                this.scheduleShadowChips();
                 if (response.dnrWarning) {
                     // The toggle is stored, but Chrome did not apply part of
                     // the network ruleset — say so rather than "enabled".
