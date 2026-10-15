@@ -510,6 +510,28 @@
         return { valid: errors.length === 0, errors };
     }
 
+    /**
+     * B2-PER-66: `match.callFilter` — apply a rule to only some of its
+     * matching calls: the first n, all but the first n, or every nth. Shape
+     * only; validateRule decides which rules may carry it. Every message
+     * opens "Call filter".
+     */
+    function validateCallFilter(filter) {
+        const errors = [];
+        if (!isPlainObject(filter)) {
+            return { valid: false, errors: ['Call filter must be an object like {"mode": "first", "n": 3}'] };
+        }
+        if (!CALL_FILTER_MODES.includes(filter.mode)) {
+            errors.push('Call filter mode must be "first", "after" or "every"');
+        }
+        const min = LIMITS.CALL_FILTER_N_MIN;
+        const max = LIMITS.CALL_FILTER_N_MAX;
+        if (typeof filter.n !== 'number' || !Number.isInteger(filter.n) || filter.n < min || filter.n > max) {
+            errors.push(`Call filter count (n) must be a whole number from ${min} to ${max}`);
+        }
+        return { valid: errors.length === 0, errors };
+    }
+
     function validateRedirectDestination(destination) {
         if (typeof destination !== 'string' || destination.trim() === '') {
             return 'Redirect destination is required';
@@ -703,6 +725,17 @@
                     errors.push(...validatePayload(match.payload).errors);
                 }
             }
+            // B2-PER-66: calls are counted by the page's interceptor, so the
+            // filter has the same reach as the payload filter.
+            if (match.callFilter !== undefined && RULE_TYPES.includes(type)) {
+                if (allRequests) {
+                    errors.push('Call filter is not available on rules that apply to all requests, because calls are only counted in the page. Untick "all requests", or remove the filter.');
+                } else if (type === 'headers' || type === 'queryparams') {
+                    errors.push(`Call filter only works on rules handled in the page (mock, block, delay, redirect and request body rules), not on ${type} rules, because the browser applies those without counting calls`);
+                } else {
+                    errors.push(...validateCallFilter(match.callFilter).errors);
+                }
+            }
         }
 
         if (type === 'mock') {
@@ -847,6 +880,7 @@
         validatePageDomains,
         validateResourceTypes,
         validatePayload,
+        validateCallFilter,
         isRegexPattern,
         patternNamesHost,
         RULE_TYPES,

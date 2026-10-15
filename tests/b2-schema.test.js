@@ -443,3 +443,84 @@ describe('B2-F9 queryParams.removeAll', () => {
         expect(S.validateQueryParams({ removeAll: 'x' }).valid).toBe(false);
     });
 });
+
+// -- PER-66 -------------------------------------------------------------
+
+describe('B2-PER-66 match.callFilter', () => {
+    const filter = (overrides = {}) => ({ mode: 'first', n: 3, ...overrides });
+    const withFilter = (f, make = mock) => make({ callFilter: f });
+
+    test('the modes are first, after and every', () => {
+        expect(S.CALL_FILTER_MODES).toEqual(['first', 'after', 'every']);
+    });
+
+    test.each(['first', 'after', 'every'])('accepts mode %s on every page-handled rule', (mode) => {
+        for (const make of [mock, block, delay, redirect, requestBody]) {
+            expect(S.validateRule(withFilter(filter({ mode }), make))).toEqual({ valid: true, errors: [] });
+        }
+        expect(isValid(block({ callFilter: filter({ mode }) }, 'page'))).toBe(true);
+        expect(isValid(redirect({ callFilter: filter({ mode }) }, 'page'))).toBe(true);
+    });
+
+    test.each([1, 2, 999, 1000])('accepts n = %i', (n) => {
+        expect(isValid(withFilter(filter({ n })))).toBe(true);
+    });
+
+    test('a rule without it is unchanged', () => {
+        expect(isValid(mock())).toBe(true);
+    });
+
+    test.each([
+        ['a block that applies to all requests', () => block({ callFilter: filter() }, 'all'), /^Call filter is not available on rules that apply to all requests/],
+        ['a redirect that applies to all requests', () => redirect({ callFilter: filter() }, 'all'), /^Call filter is not available on rules that apply to all requests/],
+        ['a headers rule', () => headers({ callFilter: filter() }), /^Call filter only works on rules handled in the page.* not on headers rules/],
+        ['a queryparams rule', () => queryparams({ callFilter: filter() }), /^Call filter only works on rules handled in the page.* not on queryparams rules/]
+    ])('refuses the filter on %s', (label, make, opening) => {
+        const rule = make();
+        expect(isValid(rule)).toBe(false);
+        expect(errorsOf(rule)).toHaveLength(1);
+        expect(errorsOf(rule)[0]).toMatch(opening);
+    });
+
+    test.each([
+        ['a non-object', 3, /^Call filter must be an object/],
+        ['a string', 'first', /^Call filter must be an object/],
+        ['an array', [], /^Call filter must be an object/],
+        ['null (omit the field instead)', null, /^Call filter must be an object/],
+        ['no mode', filter({ mode: undefined }), /^Call filter mode must be "first", "after" or "every"/],
+        ['an unknown mode', filter({ mode: 'last' }), /^Call filter mode must be/],
+        ['an uppercase mode', filter({ mode: 'First' }), /^Call filter mode must be/],
+        ['no n', filter({ n: undefined }), /^Call filter count \(n\) must be a whole number from 1 to 1000/],
+        ['n = 0', filter({ n: 0 }), /^Call filter count \(n\) must be a whole number from 1 to 1000/],
+        ['a negative n', filter({ n: -1 }), /^Call filter count \(n\)/],
+        ['n = 1001', filter({ n: 1001 }), /^Call filter count \(n\)/],
+        ['a fractional n', filter({ n: 2.5 }), /^Call filter count \(n\)/],
+        ['a text n', filter({ n: '3' }), /^Call filter count \(n\)/],
+        ['NaN', filter({ n: NaN }), /^Call filter count \(n\)/],
+        ['Infinity', filter({ n: Infinity }), /^Call filter count \(n\)/]
+    ])('refuses %s', (label, value, opening) => {
+        const rule = withFilter(value);
+        expect(isValid(rule)).toBe(false);
+        for (const m of errorsOf(rule)) expect(m).toMatch(/^Call filter/);
+        expect(errorsOf(rule)[0]).toMatch(opening);
+    });
+
+    test('reports a bad mode and a bad n together', () => {
+        expect(errorsOf(withFilter({ mode: 'x', n: 0 }))).toHaveLength(2);
+    });
+
+    test('coexists with the other filters on a page-scoped rule', () => {
+        const rule = mock({
+            pageDomains: ['example.com'],
+            payload: { path: 'a.b', operator: 'contains', value: 'x' },
+            callFilter: filter({ mode: 'every', n: 2 })
+        });
+        expect(S.validateRule(rule)).toEqual({ valid: true, errors: [] });
+    });
+
+    test('the standalone validator agrees', () => {
+        expect(S.validateCallFilter(filter())).toEqual({ valid: true, errors: [] });
+        expect(S.validateCallFilter({}).valid).toBe(false);
+        expect(S.LIMITS).toMatchObject({ CALL_FILTER_N_MIN: 1, CALL_FILTER_N_MAX: 1000 });
+    });
+});
