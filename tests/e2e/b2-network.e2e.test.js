@@ -17,7 +17,7 @@ const { launch, pageFetch, sleep } = require('./harness');
 
 // Tests that need the schema group's (G3) validation of the new fields: the
 // save boundary refuses them until it merges.
-const afterMerge = test.failing; // coordinator flips
+const afterMerge = test; // flipped after the batch-2 merge
 
 /** Load an <img> and report whether it loaded. */
 function loadImage(page, src) {

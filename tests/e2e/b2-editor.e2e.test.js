@@ -16,7 +16,7 @@ const HOSTS = ['overlay', 'options'];
 // once they are merged is marked with this: it must FAIL here (test.failing
 // passes when it does), and the coordinator flips it to a plain `test` after the
 // merge. Do not put a test that already passes behind it.
-const afterMerge = test.failing; // coordinator flips
+const afterMerge = test; // flipped after the batch-2 merge
 
 // ---- stubbing the background's side of the conversation ------------------------
 // explainMatch and the draft messages are G1's. Until that merges, the editor's
