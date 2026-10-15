@@ -848,7 +848,7 @@
               <div class="tm-field">
                 <label for="tmPageDomains">Only on these sites (optional)</label>
                 <textarea id="tmPageDomains" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" placeholder="example.com, app.example.com" aria-describedby="tmPageDomainsHint"></textarea>
-                <span class="tm-hint" id="tmPageDomainsHint">Separate with commas or new lines. A site includes its subdomains. Leave empty to apply on every site. Judged by the page that makes the request, not the URL it asks for.</span>
+                <span class="tm-hint" id="tmPageDomainsHint">Separate with commas or new lines (up to ${L().PAGE_DOMAINS_MAX}). A site includes its subdomains. Leave empty to apply on every site. Judged by the page that makes the request, not the URL it asks for.</span>
               </div>
 
               <!-- mock -->
@@ -893,7 +893,7 @@
                 <div class="tm-row tm-subrow">
                   <div class="tm-field" style="flex:2">
                     <label for="tmPayloadPath">JSON path</label>
-                    <input type="text" id="tmPayloadPath" placeholder="user.id or items.0.sku" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" aria-describedby="tmPayloadHint">
+                    <input type="text" id="tmPayloadPath" maxlength="${L().PAYLOAD_PATH_MAX}" placeholder="user.id or items.0.sku" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" aria-describedby="tmPayloadHint">
                   </div>
                   <div class="tm-field" style="flex:1">
                     <label for="tmPayloadOp">Comparison</label>
@@ -904,7 +904,7 @@
                   </div>
                   <div class="tm-field" style="flex:2">
                     <label for="tmPayloadValue">Value</label>
-                    <input type="text" id="tmPayloadValue" placeholder="42" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" aria-describedby="tmPayloadHint">
+                    <input type="text" id="tmPayloadValue" maxlength="${L().PAYLOAD_VALUE_MAX}" placeholder="42" spellcheck="false" autocapitalize="off" autocomplete="off" dir="ltr" aria-describedby="tmPayloadHint">
                   </div>
                 </div>
                 <span class="tm-hint" id="tmPayloadHint">Compared as text against the value at that dot path in a JSON request body. A request whose body is not JSON never matches.</span>
@@ -925,8 +925,8 @@
                     </select>
                   </div>
                   <div class="tm-field" style="flex:1" id="tmCallNField">
-                    <label for="tmCallN">N (1&ndash;1000)</label>
-                    <input type="number" id="tmCallN" value="3" min="1" max="1000" aria-describedby="tmCallHint">
+                    <label for="tmCallN">N (${L().CALL_FILTER_N_MIN}&ndash;${L().CALL_FILTER_N_MAX})</label>
+                    <input type="number" id="tmCallN" value="3" min="${L().CALL_FILTER_N_MIN}" max="${L().CALL_FILTER_N_MAX}" aria-describedby="tmCallHint">
                   </div>
                 </div>
                 <span class="tm-hint" id="tmCallHint">Counted per page, from when it loads; the count starts again when the page reloads or your rules change. Calls the rule skips go on to later rules.</span>
@@ -1709,8 +1709,13 @@
                 }
                 const mode = $('tmCallMode').value;
                 if (mode) {
-                    // A blank number is left to the schema ("Call filter n …").
-                    match.callFilter = { mode, n: readInteger('tmCallN', 'Call filter N', problems) };
+                    // A blank number would reach the schema as null, which it
+                    // refuses; say so here, on the field, instead.
+                    const n = readInteger('tmCallN', 'Call filter N', problems);
+                    if (Number.isNaN(n) && !problems.some((p) => p.fieldId === 'tmCallN')) {
+                        problems.push({ fieldId: 'tmCallN', message: 'Call filter N is required once a mode is chosen' });
+                    }
+                    match.callFilter = { mode, n };
                 }
             }
             rule.match = match;

@@ -204,6 +204,16 @@ describe('B2-F7 the fields exist, labelled, and show only where they are valid',
         }
     });
 
+    test('input limits come from the shared limits (with a fallback when common.js lacks them)', () => {
+        h = mount();
+        h.editor.open({});
+        expect(h.$('tmPayloadPath').getAttribute('maxlength')).toBe('200');
+        expect(h.$('tmPayloadValue').getAttribute('maxlength')).toBe('1000');
+        expect(h.$('tmCallN').getAttribute('min')).toBe('1');
+        expect(h.$('tmCallN').getAttribute('max')).toBe('1000');
+        expect(h.$('tmPageDomainsHint').textContent).toContain('up to 20');
+    });
+
     test('page domains are offered on every rule type', () => {
         h = mount();
         h.editor.open({});
@@ -407,7 +417,7 @@ describe('B2 collect and fill (populate)', () => {
         expect(h.editor.collect().rule.match.callFilter).toEqual({ mode, n });
     });
 
-    test('call filter: a fraction is a problem on its field; a blank number reaches the schema', () => {
+    test('call filter: a fraction is a problem on its field; a blank number is a problem on its field', () => {
         h = mount();
         h.editor.open({});
         fillBasics('delay');
@@ -415,9 +425,9 @@ describe('B2 collect and fill (populate)', () => {
         h.set('tmCallN', '2.5');
         expect(h.editor.collect().problems.map((p) => p.fieldId)).toEqual(['tmCallN']);
         h.set('tmCallN', '');
-        const { rule, problems } = h.editor.collect();
-        expect(problems).toEqual([]);
-        expect(Number.isNaN(rule.match.callFilter.n)).toBe(true);
+        expect(h.editor.collect().problems).toEqual([
+            { fieldId: 'tmCallN', message: 'Call filter N is required once a mode is chosen' }
+        ]);
     });
 
     test('call filter is dropped where the rule is handled by the network layer', () => {
