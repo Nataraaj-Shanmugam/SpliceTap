@@ -573,7 +573,7 @@ describe('B2-F10: explainMatch — shadowedBy', () => {
         expect(await shadows([mock(), body({ id: 'rb1' }), body({ id: 't' })], { ruleId: 't' })).toEqual(['rb1']);
     });
 
-    test('network rules shadow network rules', async () => {
+    test('headers rules combine with every other network rule, so they never shadow or are shadowed', async () => {
         const rules = [
             queryRule({ match: { url: '*/echo*', method: '*' } }),
             mock({ match: { url: '*/echo*', method: '*' } }),
@@ -581,7 +581,14 @@ describe('B2-F10: explainMatch — shadowedBy', () => {
         ];
         const { send } = await setup({ initial: { spliceTapRules: rules } });
         const response = await withExplain(recordingExplain(), () => send({ type: 'explainMatch', ruleId: 't' }));
-        expect(response).toMatchObject({ network: true, shadowedBy: [{ ruleId: 'qp', ruleName: 'Add flag' }] });
+        expect(response).toMatchObject({ network: true, shadowedBy: [] });
+        const later = [headersRule({ id: 'h0', match: { url: '*/echo*', method: '*' } }), queryRule({ id: 't', match: { url: '*/echo*', method: '*' } })];
+        expect(await shadows(later, { ruleId: 't' })).toEqual([]);
+    });
+
+    test('query transforms compete, so an earlier query rule shadows a later one', async () => {
+        const rules = [queryRule({ id: 'q1', name: 'First', match: { url: '*/echo*', method: '*' } }), queryRule({ id: 't', match: { url: '*/echo*', method: '*' } })];
+        expect(await shadows(rules, { ruleId: 't' })).toEqual(['q1']);
     });
 
     test('an all-request block is a page rule for fetch/XHR and a network rule for an image', async () => {
@@ -591,7 +598,8 @@ describe('B2-F10: explainMatch — shadowedBy', () => {
             blockAll({ id: 't', match: { url: '*/api/*', method: '*' } })
         ];
         expect(await shadows(rules, { ruleId: 't' })).toEqual(['m1']);
-        expect(await shadows(rules, { ruleId: 't', resourceType: 'image' })).toEqual(['h1']);
+        // A headers rule applies alongside the block, so it does not shadow it.
+        expect(await shadows(rules, { ruleId: 't', resourceType: 'image' })).toEqual([]);
         // Limited to images, it never meets the interceptor at all.
         const imageOnly = [mock({ id: 'm1' }), blockAll({ id: 't', match: { url: '*/api/*', method: '*', resourceTypes: ['image'] } })];
         expect(await shadows(imageOnly, { ruleId: 't', resourceType: 'fetch-xhr' })).toEqual([]);

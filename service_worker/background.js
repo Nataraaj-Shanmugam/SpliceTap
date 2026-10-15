@@ -1230,8 +1230,15 @@ class SpliceTapBackground {
         const ownIndex = typeof rule.id === 'string' ? stored.findIndex((r) => r && r.id === rule.id) : -1;
         const earlier = ownIndex === -1 ? stored : stored.slice(0, ownIndex);
         const shadowedBy = [];
+        // Chrome applies every matching modifyHeaders rule on top of whatever
+        // else wins, so a headers rule neither hides nor is hidden by another
+        // network rule; reporting it would put false "Shadowed by" chips in
+        // the popup. Query transforms and all-request block/redirect do
+        // compete — only one of those actions applies to a request.
+        const combines = (r) => r && r.type === 'headers';
         for (const other of earlier) {
             if (!family || !other || other.enabled !== true || other.id === rule.id || familyFor(other, resourceType) !== family) continue;
+            if (family === 'network' && (combines(rule) || combines(other))) continue;
             let hit = false;
             try {
                 hit = !!explainRule(other, req, forms).matches;
