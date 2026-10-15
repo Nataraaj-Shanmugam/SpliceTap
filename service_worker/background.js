@@ -1124,7 +1124,7 @@ class SpliceTapBackground {
      */
     _interceptorRules() {
         return (this.rules || []).filter((rule) =>
-            rule && rule.enabled && INTERCEPTOR_TYPES.has(rule.type || 'mock'));
+            rule && rule.enabled && INTERCEPTOR_TYPES.has(rule.type || 'mock') && !networkOnly(rule));
     }
 
     /**
@@ -1446,6 +1446,8 @@ class SpliceTapBackground {
                     pattern: rule.match && rule.match.url,
                     types: new Set(condition.resourceTypes),
                     methods: condition.requestMethods ? new Set(condition.requestMethods) : null,
+                    // B2-F7: the DNR rule's initiatorDomains (match.pageDomains).
+                    domains: condition.initiatorDomains || null,
                     queryTransform: action.redirect && action.redirect.transform
                         ? action.redirect.transform.queryTransform
                         : null
@@ -1504,6 +1506,7 @@ class SpliceTapBackground {
         for (const candidate of candidates) {
             if (!candidate.types.has(details.type)) continue;
             if (candidate.methods && !candidate.methods.has(method)) continue;
+            if (candidate.domains && !initiatorInDomains(details.initiator, candidate.domains)) continue;
             if (!observedUrlMatches(url, candidate.pattern)) continue;
             // Chrome skips a query transform that would not change the URL —
             // including on the request it just redirected.
@@ -1572,6 +1575,37 @@ function observedUrlMatches(url, pattern) {
     if (pattern.startsWith('//')) return matchUrl(afterScheme, pattern);
     const path = afterScheme.replace(/^\/\/[^/?#]*/, '');
     return matchUrl(path, pattern);
+}
+
+/**
+ * B2-F7: an appliesTo:'all' rule whose resource types leave out 'fetch-xhr'
+ * is Chrome's alone — the interceptor has nothing to do with it, so it is not
+ * sent to tabs (PER-34).
+ */
+function networkOnly(rule) {
+    const types = rule.match && rule.match.resourceTypes;
+    return isNetworkRule(rule) && Array.isArray(types) && !types.includes('fetch-xhr');
+}
+
+/**
+ * B2-F7: is the request's initiator (an origin, as webRequest reports it) on
+ * one of these domains or a subdomain, as DNR's initiatorDomains judges it?
+ * No initiator (a navigation from the address bar) or an opaque one never is.
+ */
+function initiatorInDomains(initiator, domains) {
+    const host = hostOf(initiator);
+    if (!host) return false;
+    return domains.some((domain) => host === domain || host.endsWith('.' + domain));
+}
+
+/** Lowercase hostname of a URL or origin, or '' when it has none. */
+function hostOf(url) {
+    if (typeof url !== 'string' || !url || url === 'null') return '';
+    try {
+        return new URL(url).hostname.toLowerCase();
+    } catch (error) {
+        return '';
+    }
 }
 
 /** F2: would Chrome's queryTransform change this URL? */
