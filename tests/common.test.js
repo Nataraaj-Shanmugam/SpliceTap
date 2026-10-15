@@ -61,7 +61,13 @@ describe('LIMITS', () => {
             DELAY_MAX: 30000,
             DELAY_MS_MIN: 1,
             DELAY_MS_MAX: 30000,
-            CODE_MAX: 20000
+            CODE_MAX: 20000,
+            // B2: targeting filters and the call filter
+            PAGE_DOMAINS_MAX: 20,
+            PAYLOAD_PATH_MAX: 200,
+            PAYLOAD_VALUE_MAX: 1000,
+            CALL_FILTER_N_MIN: 1,
+            CALL_FILTER_N_MAX: 1000
         });
     });
 

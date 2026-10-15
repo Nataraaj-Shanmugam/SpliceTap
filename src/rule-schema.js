@@ -30,11 +30,15 @@
 
     const common = global.SpliceTapCommon
         || (typeof require === 'function' ? require('./common.js') : null);
-    const LIMITS = (common && common.LIMITS) || {
+    // B2-F7 / B2-PER-66: the filter bounds are defaulted here as well, so a
+    // page that loaded an older common.js still validates the new fields.
+    const LIMITS = Object.assign({
         NAME_MAX: 100, URL_MAX: 500, STATUS_MIN: 200, STATUS_MAX: 599,
         DELAY_MIN: 0, DELAY_MAX: 30000, DELAY_MS_MIN: 1, DELAY_MS_MAX: 30000,
-        CODE_MAX: 20000
-    };
+        CODE_MAX: 20000,
+        PAGE_DOMAINS_MAX: 20, PAYLOAD_PATH_MAX: 200, PAYLOAD_VALUE_MAX: 1000,
+        CALL_FILTER_N_MIN: 1, CALL_FILTER_N_MAX: 1000
+    }, (common && common.LIMITS) || {});
 
     // PER-52: 1xx statuses are interim ("100 Continue", "103 Early Hints"):
     // they precede the real response and can never BE it, and fetch and XHR
@@ -66,6 +70,19 @@
     // field is absent) is fetch/XHR only, handled in the page; 'all' adds every
     // other resource type through declarativeNetRequest.
     const APPLIES_TO = ['page', 'all'];
+
+    // B2-F7: the resource types a block/redirect ('all') or headers/queryparams
+    // rule can be limited to. Friendlier than declarativeNetRequest's names:
+    // 'document' is main_frame, 'subdocument' is sub_frame and 'fetch-xhr' is
+    // xmlhttprequest; the DNR layer owns the mapping.
+    const RESOURCE_TYPES = ['fetch-xhr', 'document', 'subdocument', 'script', 'stylesheet',
+        'image', 'font', 'media', 'websocket', 'ping', 'other'];
+
+    // B2-F7: match.payload compares a value in the JSON request body.
+    const PAYLOAD_OPERATORS = ['equals', 'contains'];
+
+    // B2-PER-66: match.callFilter limits a rule to some of its matching calls.
+    const CALL_FILTER_MODES = ['first', 'after', 'every'];
 
     // RFC 9110 field-name: a token. Anything else is rejected by `new
     // Headers()` in the page and by declarativeNetRequest in the browser.
@@ -235,6 +252,9 @@
 
     const hasLineBreak = (v) => /[\r\n]/.test(v);
 
+    // B2-F9: "set" and "append" both put `value` on the wire; "remove" doesn't.
+    const addsValue = (op) => !!op && (op.op === 'set' || op.op === 'append');
+
     /**
      * Header operations for a 'headers' rule. Every op must be complete,
      * because Chrome validates a whole updateDynamicRules batch at once: one
@@ -265,8 +285,17 @@
                     errors.push(`${where}: must be an object like {"op": "set", "name": "X-Example", "value": "1"}`);
                     return;
                 }
-                if (op.op !== 'set' && op.op !== 'remove') {
-                    errors.push(`${where}: "op" must be "set" or "remove"`);
+                // B2-F9: "append" adds a value beside the existing one and is
+                // response-side only — Chrome 120's declarativeNetRequest
+                // cannot append to a request header. The refusal keeps the
+                // `"op" must be "set" or "remove"` wording request-side
+                // callers already match on.
+                if (op.op === 'append' && side === 'request') {
+                    errors.push(`${where}: "op" must be "set" or "remove" — "append" works on response headers only, because Chrome cannot append to a request header. Use "set" to replace the value.`);
+                } else if (op.op !== 'set' && op.op !== 'remove' && op.op !== 'append') {
+                    errors.push(side === 'request'
+                        ? `${where}: "op" must be "set" or "remove"`
+                        : `${where}: "op" must be "set", "append" or "remove"`);
                 }
                 const nameError = validateHeaderName(op.name, where);
                 if (nameError) errors.push(nameError);
@@ -277,9 +306,9 @@
                     }
                     seen.add(key);
                 }
-                if (op.op === 'set') {
+                if (op.op === 'set' || op.op === 'append') {
                     if (typeof op.value !== 'string') {
-                        errors.push(`${where}: a "set" operation needs a string "value"`);
+                        errors.push(`${where}: ${op.op === 'append' ? 'an "append"' : 'a "set"'} operation needs a string "value"`);
                     } else if (hasLineBreak(op.value)) {
                         errors.push(`${where}: header values cannot contain line breaks`);
                     } else if (ABOVE_LATIN1_RE.test(op.value)) {
@@ -299,10 +328,10 @@
             // Browsers reject a wildcard origin combined with credentials at
             // fetch time anyway; say so at save time instead of shipping a
             // rule that can never work.
-            if (name === 'access-control-allow-origin' && op.op === 'set' && String(op.value).trim() === '*') {
+            if (name === 'access-control-allow-origin' && addsValue(op) && String(op.value).trim() === '*') {
                 const credentials = allOps.some((o) => o !== op && o && typeof o.name === 'string'
                     && o.name.toLowerCase() === 'access-control-allow-credentials'
-                    && o.op === 'set' && String(o.value).trim().toLowerCase() === 'true');
+                    && addsValue(o) && String(o.value).trim().toLowerCase() === 'true');
                 if (credentials) {
                     errors.push('Access-Control-Allow-Origin: * cannot be combined with Access-Control-Allow-Credentials: true.');
                 }
@@ -318,7 +347,7 @@
         if (urlPattern !== undefined) {
             const credentials = responseOps.some((o) => o && typeof o.name === 'string'
                 && o.name.toLowerCase() === 'access-control-allow-credentials'
-                && o.op === 'set' && String(o.value).trim().toLowerCase() === 'true');
+                && addsValue(o) && String(o.value).trim().toLowerCase() === 'true');
             if (credentials && !patternNamesHost(urlPattern)) {
                 errors.push('Access-Control-Allow-Credentials: true needs a URL pattern that names a host, such as "https://api.example.com/*" or "http://localhost:3000/*". A pattern like "*/api/*" would send credentialed CORS headers to every site it matches.');
             }
@@ -361,8 +390,144 @@
             errors.push('Every parameter to remove must be a non-empty name');
         }
 
-        if (errors.length === 0 && add.length === 0 && remove.length === 0) {
-            errors.push('At least one query parameter to add or remove is required');
+        // B2-F9: "remove all" strips every parameter, so it is a change on its
+        // own. The message opens "Query parameters", the words the editor maps.
+        if (queryParams.removeAll !== undefined && typeof queryParams.removeAll !== 'boolean') {
+            errors.push('Query parameters: "removeAll" must be true or false');
+        }
+
+        if (errors.length === 0 && add.length === 0 && remove.length === 0 && queryParams.removeAll !== true) {
+            errors.push('At least one query parameter to add or remove, or "remove all", is required');
+        }
+        return { valid: errors.length === 0, errors };
+    }
+
+    // B2-F7: one DNS label, as declarativeNetRequest's initiatorDomains wants.
+    const HOST_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+    const shownText = (v, max = 40) => {
+        const text = String(v);
+        return text.length > max ? `${text.slice(0, max)}…` : text;
+    };
+
+    // Why `name` is not an acceptable page domain, or null when it is. The
+    // causes people actually hit — pasting a URL, adding a port, typing a
+    // capital — each get their own sentence.
+    function hostnameProblem(name) {
+        if (name.includes('://')) return 'includes a scheme — use just the hostname, like "example.com"';
+        if (/[/?#\\@]/.test(name)) return 'includes a path or other URL parts — use just the hostname, like "example.com"';
+        if (name.includes(':')) return 'includes a port — leave it off, a name matches every port';
+        if (name.includes('*')) return 'contains a wildcard, which is not needed — "example.com" already covers its subdomains';
+        if (/[^\x20-\x7e]/.test(name)) return 'contains characters other than plain ASCII — use the punycode form (xn--…)';
+        if (/[A-Z]/.test(name)) return 'must be lowercase';
+        if (name.length > 253 || !name.split('.').every((label) => HOST_LABEL_RE.test(label))) {
+            return 'is not a valid hostname';
+        }
+        return null;
+    }
+
+    /**
+     * B2-F7: `match.pageDomains` — the domain of the page or frame that makes
+     * the request. A name matches itself and its subdomains (DNR's
+     * initiatorDomains semantics). Every message opens "Page domains".
+     */
+    function validatePageDomains(list) {
+        const errors = [];
+        const max = LIMITS.PAGE_DOMAINS_MAX;
+        if (!Array.isArray(list)) {
+            return { valid: false, errors: [`Page domains must be a list of 1 to ${max} hostnames, like ["example.com", "localhost"]`] };
+        }
+        if (list.length === 0) {
+            return { valid: false, errors: [`Page domains cannot be an empty list — list 1 to ${max} hostnames, or remove the field to apply on every page`] };
+        }
+        if (list.length > max) {
+            errors.push(`Page domains can list at most ${max} hostnames (found ${list.length})`);
+        }
+        const seen = new Set();
+        list.slice(0, max).forEach((name, i) => {
+            if (typeof name !== 'string' || name === '') {
+                errors.push(`Page domains: entry #${i + 1} must be a hostname like "example.com"`);
+                return;
+            }
+            const problem = hostnameProblem(name);
+            if (problem) {
+                errors.push(`Page domains: "${shownText(name)}" ${problem}`);
+            } else if (seen.has(name)) {
+                errors.push(`Page domains: "${name}" is listed twice`);
+            }
+            seen.add(name);
+        });
+        return { valid: errors.length === 0, errors };
+    }
+
+    /**
+     * B2-F7: `match.resourceTypes` — shape only. Which rules may carry the
+     * field is validateRule's decision. Every message opens "Resource types".
+     */
+    function validateResourceTypes(list) {
+        const errors = [];
+        if (!Array.isArray(list) || list.length === 0) {
+            return { valid: false, errors: [`Resource types must be a non-empty list of: ${RESOURCE_TYPES.join(', ')}`] };
+        }
+        const seen = new Set();
+        for (const type of list) {
+            if (typeof type !== 'string' || !RESOURCE_TYPES.includes(type)) {
+                errors.push(`Resource types: "${shownText(type)}" is not a known type — use ${RESOURCE_TYPES.join(', ')}`);
+            } else if (seen.has(type)) {
+                errors.push(`Resource types: "${type}" is listed twice`);
+            }
+            seen.add(type);
+        }
+        return { valid: errors.length === 0, errors };
+    }
+
+    /**
+     * B2-F7: `match.payload` — compares the value at a dot path in the JSON
+     * request body. Shape only; validateRule decides which rules may carry
+     * it. Every message opens "Payload filter".
+     */
+    function validatePayload(payload) {
+        const errors = [];
+        if (!isPlainObject(payload)) {
+            return { valid: false, errors: ['Payload filter must be an object like {"path": "user.id", "operator": "equals", "value": "42"}'] };
+        }
+        const pathMax = LIMITS.PAYLOAD_PATH_MAX;
+        const valueMax = LIMITS.PAYLOAD_VALUE_MAX;
+        if (typeof payload.path !== 'string' || payload.path === '') {
+            errors.push(`Payload filter path is required: a dot path of 1 to ${pathMax} characters, like "user.id" or "items.0.sku"`);
+        } else if (payload.path.length > pathMax) {
+            errors.push(`Payload filter path is too long (max ${pathMax} characters)`);
+        } else if (payload.path.split('.').some((part) => part === '')) {
+            errors.push('Payload filter path cannot have empty parts — no leading, trailing or doubled dots (use "user.id", not "user..id")');
+        }
+        if (!PAYLOAD_OPERATORS.includes(payload.operator)) {
+            errors.push('Payload filter operator must be "equals" or "contains"');
+        }
+        if (typeof payload.value !== 'string') {
+            errors.push(`Payload filter value must be text of up to ${valueMax} characters — numbers and booleans are compared as text, so use "42" or "true"`);
+        } else if (payload.value.length > valueMax) {
+            errors.push(`Payload filter value is too long (max ${valueMax} characters)`);
+        }
+        return { valid: errors.length === 0, errors };
+    }
+
+    /**
+     * B2-PER-66: `match.callFilter` — apply a rule to only some of its
+     * matching calls: the first n, all but the first n, or every nth. Shape
+     * only; validateRule decides which rules may carry it. Every message
+     * opens "Call filter".
+     */
+    function validateCallFilter(filter) {
+        const errors = [];
+        if (!isPlainObject(filter)) {
+            return { valid: false, errors: ['Call filter must be an object like {"mode": "first", "n": 3}'] };
+        }
+        if (!CALL_FILTER_MODES.includes(filter.mode)) {
+            errors.push('Call filter mode must be "first", "after" or "every"');
+        }
+        const min = LIMITS.CALL_FILTER_N_MIN;
+        const max = LIMITS.CALL_FILTER_N_MAX;
+        if (typeof filter.n !== 'number' || !Number.isInteger(filter.n) || filter.n < min || filter.n > max) {
+            errors.push(`Call filter count (n) must be a whole number from ${min} to ${max}`);
         }
         return { valid: errors.length === 0, errors };
     }
@@ -536,6 +701,41 @@
                     }
                 }
             }
+
+            // B2-F7: targeting filters. An unknown type already has its own
+            // error, so the per-type refusals below wait for a known one.
+            if (match.pageDomains !== undefined) {
+                errors.push(...validatePageDomains(match.pageDomains).errors);
+            }
+            if (match.resourceTypes !== undefined && RULE_TYPES.includes(type)) {
+                if (type === 'headers' || type === 'queryparams' || allRequests) {
+                    errors.push(...validateResourceTypes(match.resourceTypes).errors);
+                } else if (type === 'block' || type === 'redirect') {
+                    errors.push(`Resource types need "all requests" on a ${type} rule — without it the rule only acts on fetch and XHR calls in the page. Tick "all requests", or remove the list.`);
+                } else {
+                    errors.push(`Resource types only apply to block and redirect rules that apply to all requests, and to headers and query-parameter rules, not to ${type} rules`);
+                }
+            }
+            if (match.payload !== undefined && RULE_TYPES.includes(type)) {
+                if (allRequests) {
+                    errors.push('Payload filter is not available on rules that apply to all requests, because only fetch and XHR bodies can be read. Untick "all requests", or remove the filter.');
+                } else if (type === 'headers' || type === 'queryparams') {
+                    errors.push(`Payload filter only works on rules handled in the page (mock, block, delay, redirect and request body rules), not on ${type} rules, because the browser applies those before the body can be read`);
+                } else {
+                    errors.push(...validatePayload(match.payload).errors);
+                }
+            }
+            // B2-PER-66: calls are counted by the page's interceptor, so the
+            // filter has the same reach as the payload filter.
+            if (match.callFilter !== undefined && RULE_TYPES.includes(type)) {
+                if (allRequests) {
+                    errors.push('Call filter is not available on rules that apply to all requests, because calls are only counted in the page. Untick "all requests", or remove the filter.');
+                } else if (type === 'headers' || type === 'queryparams') {
+                    errors.push(`Call filter only works on rules handled in the page (mock, block, delay, redirect and request body rules), not on ${type} rules, because the browser applies those without counting calls`);
+                } else {
+                    errors.push(...validateCallFilter(match.callFilter).errors);
+                }
+            }
         }
 
         if (type === 'mock') {
@@ -559,6 +759,17 @@
                 if (r.delay !== undefined) validateDelay(r.delay, LIMITS.DELAY_MIN, LIMITS.DELAY_MAX, errors);
                 if (mode === 'patch' && r.patch !== undefined && !isPlainObject(r.patch)) {
                     errors.push('A response patch must be a JSON object');
+                }
+                // B2-F8: patch mode keeps the real response's status unless
+                // the rule overrides it. Opens "Patch status" (and avoids the
+                // words "status code") so it lands on its own field.
+                if (r.patchStatus !== undefined && RESPONSE_MODES.includes(mode)) {
+                    if (mode !== 'patch') {
+                        errors.push(`Patch status only applies to a response in patch mode, not ${mode} mode. Remove it, or switch the response to "patch".`);
+                    } else if (typeof r.patchStatus !== 'number' || !Number.isInteger(r.patchStatus)
+                        || r.patchStatus < STATUS_MIN || r.patchStatus > LIMITS.STATUS_MAX) {
+                        errors.push(`Patch status must be a whole number between ${STATUS_MIN} and ${LIMITS.STATUS_MAX}, like 503 — or leave it empty to keep the real response's status`);
+                    }
                 }
                 // F4: the code is the response, so it is the one thing code
                 // mode needs. The schema cannot compile it — extension pages
@@ -616,6 +827,11 @@
         if (type !== 'mock' && isPlainObject(rule.response) && rule.response.mode === 'code') {
             errors.push(`Code response is only available on mock rules, not ${type} rules`);
         }
+        // B2-F8: likewise a status override, which belongs to a mock rule's
+        // patch-mode response.
+        if (type !== 'mock' && isPlainObject(rule.response) && rule.response.patchStatus !== undefined) {
+            errors.push(`Patch status is only available on mock rules in patch mode, not ${type} rules`);
+        }
 
         // headers/queryparams are applied by declarativeNetRequest, which
         // cannot express header or GraphQL conditions. Redirect is
@@ -661,10 +877,17 @@
         validateHeadersMod,
         validateQueryParams,
         validateRedirectDestination,
+        validatePageDomains,
+        validateResourceTypes,
+        validatePayload,
+        validateCallFilter,
         isRegexPattern,
         patternNamesHost,
         RULE_TYPES,
         APPLIES_TO,
+        RESOURCE_TYPES,
+        PAYLOAD_OPERATORS,
+        CALL_FILTER_MODES,
         METHODS,
         FORBIDDEN_HEADER_NAMES,
         // The limits this validator enforces: the shared ones, with the
