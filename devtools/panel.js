@@ -66,6 +66,16 @@
 
     let filterState = { text: '', type: 'all' };
 
+    // PER-57: captured responses (for "View response"), the rules this panel
+    // has switched off (so their button reads "Enable rule"), and which rows
+    // have their response open. Captures are fetched when new rows arrive, not
+    // on every poll: they can be large.
+    let captures = [];
+    let capturesKeySignature = null;
+    let disabledRuleIds = new Set();
+    let openResponseKeys = new Set();
+    let toolSeq = 0;
+
     // Gives each row's note a unique id for the URL button's aria-describedby.
     let noteSeq = 0;
 
@@ -241,7 +251,7 @@
 
     function pruneKeySets() {
         const valid = entryByKey; // Map keyed the same way
-        [dismissedKeys, revealedKeys, knownKeys].forEach((set) => {
+        [dismissedKeys, revealedKeys, knownKeys, openResponseKeys].forEach((set) => {
             Array.from(set).forEach((key) => {
                 if (!valid.has(key)) set.delete(key);
             });
@@ -283,6 +293,25 @@
         }
         renderEntries();
         updateBufferStats();
+        refreshCapturesIfNeeded();
+    }
+
+    // PER-57: a capture is only offered for a row that exists, so look again
+    // when the set of rows changes (and the first time), not every 3 s.
+    function refreshCapturesIfNeeded(force) {
+        const signature = entries.map(entryKey).join('\n');
+        if (!force && signature === capturesKeySignature) return;
+        capturesKeySignature = signature;
+        if (entries.length === 0) {
+            captures = [];
+            refreshAllTools();
+            return;
+        }
+        sendMessage({ type: 'getCaptures' }).then((response) => {
+            if (!response || !response.success) return;
+            captures = Array.isArray(response.captures) ? response.captures : [];
+            refreshAllTools();
+        });
     }
 
     async function fetchRuleStats() {
@@ -375,6 +404,154 @@
         const key = row.dataset.key;
         updateUrlCell(row.querySelector('.url-toggle'), entry, revealedKeys.has(key));
         updateTimestampCell(row.querySelector('.timestamp'), entry);
+        updateRowTools(row, entry);
+    }
+
+    function refreshAllTools() {
+        rowElements.forEach((row, key) => {
+            const entry = entryByKey.get(key);
+            if (entry) updateRowTools(row, entry);
+        });
+    }
+
+    // PER-57: the row's own actions. "View response" exists only while a capture
+    // for the same method and URL does; "Disable rule" (which turns into "Enable
+    // rule" once this panel has used it) only for a row that came from a rule.
+    // Rebuilt only when what it shows changes, so a poll tick leaves a focused
+    // button, and an open response a reader is scrolling, alone.
+    function updateRowTools(row, entry) {
+        const toolsEl = row.querySelector('.row-tools');
+        if (!toolsEl) return;
+        const key = row.dataset.key;
+        const capture = window.SpliceTapHar.findCapture(entry, captures);
+        const hasRule = !!entry.ruleId && entry.kind !== 'chaos';
+        const disabled = hasRule && disabledRuleIds.has(entry.ruleId);
+        const open = !!capture && openResponseKeys.has(key);
+        const signature = [capture ? capture.id : '', hasRule ? 1 : 0, disabled ? 1 : 0, open ? 1 : 0].join('|');
+        if (toolsEl.dataset.sig === signature) return;
+        toolsEl.dataset.sig = signature;
+
+        const focusedTool = toolsEl.contains(document.activeElement) ? document.activeElement.dataset.tool : null;
+        toolsEl.replaceChildren();
+        toolsEl.hidden = !capture && !hasRule;
+        if (toolsEl.hidden) return;
+
+        const target = (entry.method || 'GET') + ' ' + truncateUrl(stripQueryAndHash(entry.url), 60);
+        let viewer = null;
+        if (capture) {
+            const viewId = 'responseView' + (++toolSeq);
+            const viewBtn = document.createElement('button');
+            viewBtn.type = 'button';
+            viewBtn.className = 'row-tool-btn';
+            viewBtn.dataset.tool = 'view';
+            viewBtn.dataset.key = key;
+            viewBtn.textContent = 'View response';
+            viewBtn.setAttribute('aria-label', 'View response, ' + target);
+            viewBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            viewBtn.setAttribute('aria-controls', viewId);
+            toolsEl.appendChild(viewBtn);
+            viewer = buildResponseView(capture, viewId, target);
+            viewer.hidden = !open;
+        }
+        if (hasRule) {
+            const ruleBtn = document.createElement('button');
+            ruleBtn.type = 'button';
+            ruleBtn.className = 'row-tool-btn';
+            ruleBtn.dataset.tool = 'toggle';
+            ruleBtn.dataset.ruleId = entry.ruleId;
+            ruleBtn.dataset.ruleName = entry.ruleName || '';
+            const verb = disabled ? 'Enable rule' : 'Disable rule';
+            ruleBtn.textContent = verb;
+            ruleBtn.setAttribute('aria-label', verb + ' ' + (entry.ruleName || '(unnamed rule)'));
+            toolsEl.appendChild(ruleBtn);
+        }
+        if (viewer) toolsEl.appendChild(viewer);
+        if (focusedTool) {
+            const again = toolsEl.querySelector('[data-tool="' + focusedTool + '"]');
+            if (again) again.focus({ preventScroll: true });
+        }
+    }
+
+    // Read-only: status, headers, body of the captured response, built with DOM
+    // APIs like the rest of the row. The body can scroll, so it takes focus.
+    function buildResponseView(capture, id, target) {
+        const helpers = window.SpliceTapPanelHelpers;
+        const view = document.createElement('div');
+        view.className = 'response-view';
+        view.id = id;
+        view.setAttribute('role', 'region');
+        view.setAttribute('aria-label', 'Captured response for ' + target);
+
+        const status = document.createElement('p');
+        status.className = 'response-status';
+        status.textContent = helpers.formatStatus(capture) + (capture.contentType ? ' · ' + capture.contentType : '');
+        view.appendChild(status);
+
+        const headerLines = helpers.formatHeaders(capture.headers);
+        const headersLabel = document.createElement('p');
+        headersLabel.className = 'response-label';
+        headersLabel.textContent = 'Headers';
+        const headers = document.createElement('pre');
+        headers.className = 'response-pre response-headers';
+        headers.tabIndex = 0;
+        headers.setAttribute('aria-label', 'Response headers');
+        headers.textContent = headerLines.length ? headerLines.join('\n') : '(none recorded)';
+        view.appendChild(headersLabel);
+        view.appendChild(headers);
+
+        const bodyLabel = document.createElement('p');
+        bodyLabel.className = 'response-label';
+        bodyLabel.textContent = 'Body';
+        const formatted = helpers.formatBody(capture.body);
+        const body = document.createElement('pre');
+        body.className = 'response-pre response-body';
+        body.tabIndex = 0;
+        body.setAttribute('aria-label', 'Response body');
+        body.textContent = formatted.text || '(empty)';
+        view.appendChild(bodyLabel);
+        view.appendChild(body);
+        if (formatted.truncated) {
+            const more = document.createElement('p');
+            more.className = 'response-label';
+            more.textContent = 'Shown up to the first ' + helpers.BODY_VIEW_MAX + ' characters.';
+            view.appendChild(more);
+        }
+        return view;
+    }
+
+    // PER-57: open a rule in the full editor, in a new tab. DevTools pages have
+    // no chrome.tabs, so fall back to window.open on the extension's own URL.
+    function openRuleInEditor(ruleId) {
+        const url = chrome.runtime.getURL(window.SpliceTapPanelHelpers.editRulePath(ruleId));
+        try {
+            if (chrome.tabs && typeof chrome.tabs.create === 'function') {
+                chrome.tabs.create({ url });
+                return;
+            }
+        } catch (error) {
+            // fall through to window.open
+        }
+        window.open(url, '_blank', 'noopener');
+    }
+
+    async function toggleRuleFromRow(button) {
+        const ruleId = button.dataset.ruleId;
+        const name = button.dataset.ruleName || '(unnamed rule)';
+        const disabling = !disabledRuleIds.has(ruleId);
+        const announcer = byId('logAnnouncer');
+        const say = (text) => { if (announcer) announcer.textContent = text; };
+        button.setAttribute('aria-busy', 'true');
+        const response = await sendMessage({ type: 'toggleRule', ruleId, enabled: !disabling });
+        button.removeAttribute('aria-busy');
+        if (!response || !response.success) {
+            say('Could not ' + (disabling ? 'disable' : 'enable') + ' rule "' + name + '"' +
+                (response && response.error ? ': ' + response.error : '.'));
+            return;
+        }
+        if (disabling) disabledRuleIds.add(ruleId);
+        else disabledRuleIds.delete(ruleId);
+        refreshAllTools();
+        say('Rule "' + name + '" ' + (disabling ? 'disabled' : 'enabled') + '.');
     }
 
     function updateUrlCell(btn, entry, revealed) {
@@ -451,6 +628,11 @@
         urlBtn.className = 'url-toggle';
         urlBtn.dataset.key = key;
         urlCell.appendChild(urlBtn);
+        // PER-57: View response / Disable rule go under the URL, so the grid
+        // columns (and the narrow stacked layout of PER-79) are unchanged.
+        const toolsEl = document.createElement('div');
+        toolsEl.className = 'row-tools';
+        toolsEl.hidden = true;
         // PER-54: what the interceptor did instead of what the rule says (a
         // skipped patch and why). It is text in the row, and the URL button
         // carries it as its description, so it is read with the request
@@ -463,15 +645,25 @@
             urlBtn.setAttribute('aria-describedby', noteEl.id);
             urlCell.appendChild(noteEl);
         }
+        urlCell.appendChild(toolsEl);
         row.appendChild(urlCell);
 
         const ruleCell = document.createElement('div');
         ruleCell.className = 'rule-info';
         ruleCell.setAttribute('role', 'cell');
-        const ruleNameSpan = document.createElement('span');
-        ruleNameSpan.className = 'rule-name';
-        ruleNameSpan.textContent = entry.ruleName || (ruleType === 'chaos' ? 'Chaos mode' : '(unnamed rule)');
-        if (entry.ruleId) ruleNameSpan.title = 'Rule ID: ' + entry.ruleId;
+        const displayName = entry.ruleName || (ruleType === 'chaos' ? 'Chaos mode' : '(unnamed rule)');
+        // PER-57: a rule's name is a button that opens it in the editor. Chaos
+        // failures belong to no rule, so theirs stays plain text. The text is
+        // exactly the name; ", edit rule" is only in the accessible name.
+        const ruleNameSpan = document.createElement(entry.ruleId ? 'button' : 'span');
+        ruleNameSpan.className = 'rule-name' + (entry.ruleId ? ' rule-name-btn' : '');
+        ruleNameSpan.textContent = displayName;
+        if (entry.ruleId) {
+            ruleNameSpan.type = 'button';
+            ruleNameSpan.dataset.ruleId = entry.ruleId;
+            ruleNameSpan.setAttribute('aria-label', displayName + ', edit rule');
+            ruleNameSpan.title = 'Edit this rule (ID: ' + entry.ruleId + ')';
+        }
         const ruleTypeSpan = document.createElement('span');
         ruleTypeSpan.className = 'rule-type-badge';
         ruleTypeSpan.dataset.type = ruleType;
@@ -749,6 +941,27 @@
         const container = byId('requestItems');
         if (!container) return;
         container.addEventListener('click', (event) => {
+            // PER-57
+            const nameBtn = event.target.closest('.rule-name-btn');
+            if (nameBtn) {
+                openRuleInEditor(nameBtn.dataset.ruleId);
+                return;
+            }
+            const toolBtn = event.target.closest('.row-tool-btn');
+            if (toolBtn) {
+                if (toolBtn.dataset.tool === 'view') {
+                    const key = toolBtn.dataset.key;
+                    if (openResponseKeys.has(key)) openResponseKeys.delete(key);
+                    else openResponseKeys.add(key);
+                    const row = rowElements.get(key);
+                    const entry = entryByKey.get(key);
+                    if (row && entry) updateRowTools(row, entry);
+                } else if (toolBtn.dataset.tool === 'toggle') {
+                    toggleRuleFromRow(toolBtn);
+                }
+                return;
+            }
+
             const urlBtn = event.target.closest('.url-toggle');
             if (urlBtn) {
                 const key = urlBtn.dataset.key;
@@ -828,6 +1041,7 @@
     window.__spliceTapPanelShown = function () {
         panelHidden = false;
         updatePollingState();
+        capturesKeySignature = null; // captures may have been recorded while it was away
         if (!userPaused) refresh();
     };
 

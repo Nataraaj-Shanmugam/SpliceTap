@@ -49,6 +49,10 @@
       </div>
     </header>
 
+    <!-- PER-58: what has been intercepted on the active tab (not the global
+         counter in the footer). Filled by popup.js from getInterceptionLog. -->
+    <p class="tab-status" id="tabStatus" hidden></p>
+
     <!-- Tab strip: Rules / Data / Settings. All three moved here from the
          options page so everyday work never requires opening a new tab. -->
     <div class="tabs" role="tablist" aria-label="SpliceTap sections">
@@ -175,6 +179,8 @@
 
         <div class="sub-panel" id="importPanel" hidden>
           <textarea id="importJson" rows="4" spellcheck="false" aria-label="Rules JSON to import" placeholder='{ "rules": [ ... ] }'></textarea>
+          <!-- B2-F6: shown when the pasted JSON is a Requestly export. -->
+          <p class="sub-warn import-offer" id="importOffer" hidden></p>
           <label class="check-row">
             <input type="checkbox" id="importMerge" checked>
             <span>Keep existing rules</span>
@@ -183,6 +189,7 @@
           <div class="sub-actions">
             <button type="button" class="mini-btn" id="importCancelBtn">Cancel</button>
             <button type="button" class="mini-btn is-primary" id="importConfirmBtn">Import</button>
+            <button type="button" class="mini-btn is-primary" id="importConvertBtn" hidden>Convert Requestly rules</button>
           </div>
         </div>
 
@@ -370,6 +377,14 @@
   <div id="toastContainer" class="toast-container"></div>
 
   <script src="../src/common.js"></script>
+  <!-- B2-F6: the Requestly converter (another file; popup.js reads
+       window.SpliceTapImporters.requestly when it is time to import). It
+       validates what it produces with the schema, so the matcher and the
+       schema load first, in this order. -->
+  <script src="../src/matcher.js"></script>
+  <script src="../src/rule-schema.js"></script>
+  <script src="../src/importers/requestly.js"></script>
+  <script src="popup-helpers.js"></script>
   <script src="popup.js"></script>
   <script src="popup-host.js"></script>
 </body>
