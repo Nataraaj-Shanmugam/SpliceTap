@@ -101,7 +101,31 @@
         return merge(original, patch);
     }
 
-    const api = { jsonMergePatch, isPatchApplicable };
+    // B2-F8: the reason phrase a patch-mode status override is served with,
+    // from SpliceTap's table (src/templates.js getStatusText). That file is
+    // not loaded in the page, so the table is repeated here; a unit test
+    // (tests/b2-interceptor.test.js) keeps the two identical.
+    const REASON_PHRASES = objectCreate(null);
+    (function fill(entries) {
+        const codes = objectKeys(entries);
+        for (let i = 0; i < codes.length; i++) REASON_PHRASES[codes[i]] = entries[codes[i]];
+    })({
+        200: 'OK', 201: 'Created', 202: 'Accepted', 204: 'No Content',
+        301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified',
+        400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
+        404: 'Not Found', 409: 'Conflict', 418: "I'm a Teapot",
+        422: 'Unprocessable Entity', 429: 'Too Many Requests',
+        500: 'Internal Server Error', 502: 'Bad Gateway',
+        503: 'Service Unavailable', 504: 'Gateway Timeout'
+    });
+
+    /** B2-F8: the reason phrase for a status code, or '' for one the table lacks. */
+    function reasonPhrase(code) {
+        const key = typeof code === 'number' ? code : Number(code);
+        return hasOwn(REASON_PHRASES, key) ? REASON_PHRASES[key] : '';
+    }
+
+    const api = { jsonMergePatch, isPatchApplicable, reasonPhrase };
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;

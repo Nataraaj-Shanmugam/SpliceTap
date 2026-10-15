@@ -282,3 +282,74 @@ describe('B2-F7: the interceptor passes the frame host, resource type and body',
         expect((await sendXHR(h, { url: '/api/rel' })).body).toEqual({ mocked: 'rel' });
     });
 });
+
+// ---------------------------------------------------------------------------
+// F8: status override in patch mode
+
+describe('B2-F8: response.patchStatus', () => {
+    const { reasonPhrase } = require('../src/patch.js');
+    const templates = require('../src/templates.js');
+
+    const patchRule = (response = {}) => mockRule('p', { url: '*/api/*' },
+        { mode: 'patch', patch: { patched: true }, ...response });
+    const textFetch = async () => new Response('plain real text', { status: 200, statusText: 'OK', headers: { 'Content-Type': 'text/plain' } });
+    const realFetch = async () => new Response('{"origin":true}', { status: 201, statusText: 'Made it', headers: JSON_HEADERS });
+
+    test("the page's reason phrases are SpliceTap's table (src/templates.js)", () => {
+        for (let code = 100; code <= 599; code++) expect(reasonPhrase(code)).toBe(templates.getStatusText(code));
+        expect(reasonPhrase('404')).toBe('Not Found');
+        expect(reasonPhrase(undefined)).toBe('');
+    });
+
+    test('fetch: the patched body is served with the override status and its reason phrase', async () => {
+        const h = withRules([patchRule({ patchStatus: 503 })]);
+        const log = h.collect(h.channels.log);
+        const r = await pageFetch(h, 'https://example.test/api/x');
+        expect(r).toEqual({ status: 503, statusText: 'Service Unavailable', marker: 'true', body: { origin: true, patched: true } });
+        expect(log[0]).toEqual(expect.objectContaining({ ruleId: 'p', status: 503 }));
+    });
+
+    test('fetch: without an override the real status stays; a code outside the table gets no phrase', async () => {
+        const plain = await pageFetch(withRules([patchRule()], {}, { originalFetch: realFetch }), 'https://example.test/api/x');
+        const multi = await pageFetch(withRules([patchRule({ patchStatus: 207 })], {}, { originalFetch: realFetch }), 'https://example.test/api/x');
+        expect(plain).toEqual(expect.objectContaining({ status: 201, statusText: 'Made it', body: { origin: true, patched: true } }));
+        expect(multi).toEqual(expect.objectContaining({ status: 207, statusText: '', body: { origin: true, patched: true } }));
+    });
+
+    test('fetch: an override outside 200-599, or not an integer, is ignored', async () => {
+        for (const patchStatus of [199, 600, 503.5, '503']) {
+            const r = await pageFetch(withRules([patchRule({ patchStatus })]), 'https://example.test/api/x');
+            expect(r.status).toBe(200);
+        }
+    });
+
+    test('fetch: a body that cannot be patched is served unchanged, with the override status', async () => {
+        const text = await pageFetch(withRules([patchRule({ patchStatus: 500 })], {}, { originalFetch: textFetch }), 'https://example.test/api/x');
+        const empty = await pageFetch(withRules([patchRule({ patchStatus: 404, patch: {} })]), 'https://example.test/api/x');
+        expect(text).toEqual({ status: 500, statusText: 'Internal Server Error', marker: null, body: 'plain real text' });
+        expect(empty).toEqual(expect.objectContaining({ status: 404, statusText: 'Not Found', body: { origin: true } }));
+    });
+
+    test('fetch: an overridden response keeps the status on clone()', async () => {
+        const h = withRules([patchRule({ patchStatus: 503, patch: {} })]);
+        const response = await h.fetch('https://example.test/api/x');
+        const copy = response.clone();
+        expect([response.status, response.ok, copy.status, copy.statusText, copy.ok]).toEqual([503, false, 503, 'Service Unavailable', false]);
+    });
+
+    test('XHR: the patched body is served with the override status and its reason phrase', async () => {
+        const r = await sendXHR(withRules([patchRule({ patchStatus: 502 })]), { method: 'GET' });
+        expect(r).toEqual(expect.objectContaining({ status: 502, statusText: 'Bad Gateway', marker: 'true', body: { origin: true, patched: true } }));
+    });
+
+    test('XHR: a text response streams through unchanged, with the override status', async () => {
+        const h = withRules([patchRule({ patchStatus: 500 })], {}, { originalFetch: textFetch });
+        const r = await sendXHR(h, { method: 'GET' });
+        expect(r).toEqual(expect.objectContaining({ status: 500, statusText: 'Internal Server Error', body: 'plain real text' }));
+    });
+
+    test('XHR: without an override the real status stays', async () => {
+        const r = await sendXHR(withRules([patchRule()], {}, { originalFetch: realFetch }), { method: 'GET' });
+        expect(r).toEqual(expect.objectContaining({ status: 201, statusText: 'Made it', body: { origin: true, patched: true } }));
+    });
+});

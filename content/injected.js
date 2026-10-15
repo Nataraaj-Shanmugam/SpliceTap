@@ -40,6 +40,7 @@
     const processDynamicResponse = sharedPlaceholders && sharedPlaceholders.processDynamicResponse;
     const jsonMergePatch = sharedPatch && sharedPatch.jsonMergePatch;
     const isPatchApplicable = sharedPatch && sharedPatch.isPatchApplicable;
+    const reasonPhrase = (sharedPatch && sharedPatch.reasonPhrase) || (() => ''); // B2-F8
 
     // PER-2: the built-ins this file applies to rule data, captured for the
     // same reason. A page that later replaced JSON.stringify or Array.isArray
@@ -739,8 +740,22 @@
             // so a rule captured from one is faithful with an empty string.
             statusText: r.statusText !== undefined ? r.statusText : ((r.statusCode || 200) === 200 ? 'OK' : ''),
             headers: r.headers,
-            code: typeof r.code === 'string' ? r.code : '' // F4
+            code: typeof r.code === 'string' ? r.code : '', // F4
+            // B2-F8: patch mode's status override (200-599), or null to keep
+            // the real response's status.
+            patchStatus: Number.isInteger(r.patchStatus) && r.patchStatus >= 200 && r.patchStatus <= 599 ? r.patchStatus : null
         };
+    }
+
+    /**
+     * B2-F8: the status and reason phrase a patch-mode rule serves: its
+     * patchStatus with the phrase from SpliceTap's table, or the real ones.
+     */
+    function patchedStatus(cfg, real) {
+        const out = objectCreate(null);
+        out.status = cfg.patchStatus !== null ? cfg.patchStatus : real.status;
+        out.statusText = cfg.patchStatus !== null ? reasonPhrase(cfg.patchStatus) : real.statusText;
+        return out;
     }
 
     /**
@@ -1185,6 +1200,21 @@
             // Environment won't allow the override — keep the constructed values.
         }
         return response;
+    }
+
+    /**
+     * B2-F8: a real response a patch rule leaves unpatched (not JSON, an
+     * empty patch…) still has the rule's status override: the same
+     * response, unread, reporting that status.
+     */
+    function withServedStatus(real, cfg, served) {
+        if (cfg.patchStatus === null) return real;
+        return overrideResponse(real, {
+            __proto__: null,
+            status: served.status,
+            statusText: served.statusText,
+            ok: served.status >= 200 && served.status < 300
+        });
     }
 
     function absoluteHref(url) {
@@ -1770,6 +1800,8 @@
 
             if (cfg.mode === 'patch') {
                 const real = await reflectApply(originalFetch, this, args);
+                // B2-F8: the status served, whatever happens to the body.
+                const served = patchedStatus(cfg, real);
 
                 // PER-18: only a JSON response is patched. Waiting for any
                 // other body held an event stream or NDJSON feed back until
@@ -1777,8 +1809,8 @@
                 // straight through, unread.
                 const skippedUnread = patchSkipBeforeReading(real, method);
                 if (skippedUnread) {
-                    logInterception(rule, url, method, real.status, { note: skippedUnread });
-                    return real;
+                    logInterception(rule, url, method, served.status, { note: skippedUnread });
+                    return withServedStatus(real, cfg, served);
                 }
 
                 let data;
@@ -1786,8 +1818,8 @@
                     data = await real.clone().json();
                 } catch (e) {
                     log('Patch mode: real response is not valid JSON, returning it unmodified', e);
-                    logInterception(rule, url, method, real.status, { note: PATCH_NOT_JSON_NOTE });
-                    return real;
+                    logInterception(rule, url, method, served.status, { note: PATCH_NOT_JSON_NOTE });
+                    return withServedStatus(real, cfg, served);
                 }
 
                 const patchPayload = renderPatch(cfg.patch, { url, method });
@@ -1795,8 +1827,8 @@
                 // the real one untouched (no markers) and says why in the log.
                 const skipped = patchSkipReason(data, patchPayload);
                 if (skipped) {
-                    logInterception(rule, url, method, real.status, { note: skipped });
-                    return real;
+                    logInterception(rule, url, method, served.status, { note: skipped });
+                    return withServedStatus(real, cfg, served);
                 }
                 const merged = jsonMergePatch(data, patchPayload);
 
@@ -1812,12 +1844,12 @@
                 mergedHeaders['x-splicetap-rule'] = ruleMarker(rule.name);
 
                 log(`Patched ${method} ${url} (Rule: ${rule.name})`);
-                logInterception(rule, url, method, real.status);
+                logInterception(rule, url, method, served.status);
 
                 // Q-28: a freshly constructed Response can't carry url,
                 // redirected or type, but patch mode is "the real response,
                 // plus a merge" — restore them from the real response.
-                return buildMockResponse(jsonStringify(toNullProto(merged)), real.status, real.statusText, mergedHeaders,
+                return buildMockResponse(jsonStringify(toNullProto(merged)), served.status, served.statusText, mergedHeaders,
                     { url: real.url, redirected: real.redirected, type: real.type });
             }
 
@@ -2424,13 +2456,15 @@
                 if (!real || stale()) return;
 
                 const realHeaders = responseHeaderRecord(real);
+                // B2-F8: the status served, whatever happens to the body.
+                const served = patchedStatus(cfg, real);
 
                 // PER-18: only JSON is patched. Anything else (an event
                 // stream, NDJSON) is delivered as it arrives, unchanged.
                 const skippedUnread = patchSkipBeforeReading(real, requestMethod);
                 if (skippedUnread) {
-                    logInterception(rule, requestAbsUrl, requestMethod, real.status, { note: skippedUnread });
-                    await deliverStreaming(real, realHeaders, stale);
+                    logInterception(rule, requestAbsUrl, requestMethod, served.status, { note: skippedUnread });
+                    await deliverStreaming(real, realHeaders, stale, served);
                     return;
                 }
 
@@ -2454,8 +2488,8 @@
                     // delivers the real one, and the log says why.
                     const skipped = patchSkipReason(data, patchPayload);
                     if (skipped) {
-                        logInterception(rule, requestAbsUrl, requestMethod, real.status, { note: skipped });
-                        finishMock(realText, real.status, real.statusText, realHeaders, rawBody, real.url);
+                        logInterception(rule, requestAbsUrl, requestMethod, served.status, { note: skipped });
+                        finishMock(realText, served.status, served.statusText, realHeaders, rawBody, real.url);
                         return;
                     }
                     mergedText = jsonStringify(toNullProto(jsonMergePatch(data, patchPayload)));
@@ -2463,8 +2497,8 @@
                     // Not JSON (or nothing to merge into): deliver the real
                     // response unchanged, as fetch does.
                     log('XHR patch mode: real response is not valid JSON, delivering it unmodified', error);
-                    logInterception(rule, requestAbsUrl, requestMethod, real.status, { note: PATCH_NOT_JSON_NOTE });
-                    finishMock(realText, real.status, real.statusText, realHeaders, rawBody, real.url);
+                    logInterception(rule, requestAbsUrl, requestMethod, served.status, { note: PATCH_NOT_JSON_NOTE });
+                    finishMock(realText, served.status, served.statusText, realHeaders, rawBody, real.url);
                     return;
                 }
 
@@ -2474,9 +2508,10 @@
                 mergedHeaders['x-splicetap-rule'] = ruleMarker(rule.name);
 
                 log(`Patched XHR ${requestMethod} ${requestUrl} (Rule: ${rule.name})`);
-                logInterception(rule, requestAbsUrl, requestMethod, real.status);
+                logInterception(rule, requestAbsUrl, requestMethod, served.status);
 
-                finishMock(mergedText, real.status, real.statusText || 'OK', mergedHeaders, undefined, real.url);
+                finishMock(mergedText, served.status, cfg.patchStatus !== null ? served.statusText : (real.statusText || 'OK'),
+                    mergedHeaders, undefined, real.url);
             })();
         }
 
@@ -2518,9 +2553,13 @@
          * native XHR does — LOADING with the text so far and a progress
          * event per chunk — so a stream is not held back until it ends.
          */
-        async function deliverStreaming(real, headers, stale) {
+        // B2-F8: `served` (optional) is the status and reason phrase to
+        // report instead of the real ones.
+        async function deliverStreaming(real, headers, stale, served) {
+            const status = served ? served.status : real.status;
+            const statusText = served ? served.statusText : real.statusText;
             completeUpload();
-            advanceTo(2, real.status, real.statusText, headers);
+            advanceTo(2, status, statusText, headers);
             const responseType = xhr.responseType || '';
             const textual = responseType === '' || responseType === 'text';
             const total = Number(real.headers.get('content-length')) || 0;
@@ -2546,7 +2585,7 @@
                     chunks.push(step.value);
                     loaded += step.value.byteLength;
                     text += decoder.decode(step.value, { stream: true });
-                    advanceTo(3, real.status, real.statusText, headers);
+                    advanceTo(3, status, statusText, headers);
                     if (textual) {
                         setState('responseText', text);
                         setState('response', text);
@@ -2562,7 +2601,7 @@
                 raw.set(chunks[i], offset);
                 offset += chunks[i].byteLength;
             }
-            finishMock(text, real.status, real.statusText, headers, raw.buffer, real.url);
+            finishMock(text, status, statusText, headers, raw.buffer, real.url);
         }
 
         // Override open

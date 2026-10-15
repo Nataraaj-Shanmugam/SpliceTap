@@ -189,6 +189,49 @@ describe('b2-interceptor: in-page targeting, patch status and call filters', () 
         });
     });
 
+    // --- F8: patch-mode status ---------------------------------------------
+
+    describe('B2-F8: patch-mode status', () => {
+        const patch = (id, url, response) => mock(id, url, {}, { mode: 'patch', patch: { patched: true }, ...response });
+
+        test('fetch and XHR receive the override status and reason phrase, with the real body patched', async () => {
+            await setRules([patch('ps', '*/api/status-keep*', { patchStatus: 503 })]);
+            await open('/page');
+            const f = await pageFetch(page, '/api/status-keep');
+            const x = await pageXHR(page, '/api/status-keep');
+
+            expect(f).toEqual(expect.objectContaining({ ok: true, status: 503, statusText: 'Service Unavailable', marker: 'true' }));
+            expect(f.body).toEqual(expect.objectContaining({ real: true, path: '/api/status-keep', patched: true }));
+            expect(x).toEqual(expect.objectContaining({ status: 503, statusText: 'Service Unavailable', marker: 'true' }));
+            expect(x.body).toEqual(expect.objectContaining({ real: true, patched: true }));
+            expect(pageErrors()).toEqual([]);
+        });
+
+        test('a real 404 can be turned into a 200; a text response keeps its body and gets the status', async () => {
+            await setRules([
+                patch('found', '*/api/missing*', { patchStatus: 200, patch: { found: true } }),
+                patch('text', '*/text/plain*', { patchStatus: 500 })
+            ]);
+            await open('/page');
+            const found = await pageFetch(page, '/api/missing');
+            const foundXhr = await pageXHR(page, '/api/missing');
+            const text = await pageFetch(page, '/text/plain');
+            const textXhr = await pageXHR(page, '/text/plain');
+
+            expect(found).toEqual(expect.objectContaining({ status: 200, statusText: 'OK', body: { error: 'missing', found: true } }));
+            expect(foundXhr).toEqual(expect.objectContaining({ status: 200, statusText: 'OK', body: { error: 'missing', found: true } }));
+            expect(text).toEqual(expect.objectContaining({ status: 500, statusText: 'Internal Server Error', body: 'plain real text' }));
+            expect(textXhr).toEqual(expect.objectContaining({ status: 500, statusText: 'Internal Server Error', body: 'plain real text' }));
+        });
+
+        test('without patchStatus the real status is kept', async () => {
+            await setRules([patch('keep', '*/api/missing*', {})]);
+            await open('/page');
+            const r = await pageFetch(page, '/api/missing');
+            expect(r).toEqual(expect.objectContaining({ status: 404, body: { error: 'missing', patched: true } }));
+        });
+    });
+
     test('ran without errors', () => {
         expect(h.allErrors).toEqual([]);
     });
