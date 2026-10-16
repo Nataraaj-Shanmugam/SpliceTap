@@ -216,9 +216,10 @@ describe('deep: workflows', () => {
         }, { label: 'replaced rule set' });
     });
 
-    test('a Requestly export is recognised and reported clearly — conversion is a known gap', async () => {
+    test('a Requestly export converts on import, and every converted rule works on real traffic', async () => {
         // The documented Requestly rule shape (public API schema): ruleType,
         // status, pairs[].source {key, operator, value}, per-type fields.
+        // This used to pin "conversion is a known gap"; B2-F6 closed it.
         await h.reset();
         const requestlyExport = [
             {
@@ -241,12 +242,38 @@ describe('deep: workflows', () => {
                 }]
             }
         ];
-        // SpliceTap cannot convert Requestly rules yet (see PARITY.md). It used
-        // to call this well-formed file "4 invalid"; it must say what it is.
-        const message = await importJson(JSON.stringify(requestlyExport));
-        expect(message).toMatch(/Requestly export/);
-        expect(message).not.toMatch(/invalid/);
-        expect(await stored()).toEqual([]);
+        await openPopup();
+        await popup.click('#tabData');
+        await popup.click('#importToggleBtn');
+        await popup.$eval('#importJson', (el, v) => {
+            el.value = v;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+        }, JSON.stringify(requestlyExport));
+        await waitFor(() => popup.evaluate(() => {
+            const b = document.getElementById('importConvertBtn');
+            return !!b && !b.hidden && b.getClientRects().length > 0;
+        }), { label: 'the Convert action' });
+        await popup.click('#importConvertBtn');
+        await popup.waitForSelector('#importReport:not([hidden])');
+
+        const rules = await stored();
+        expect(rules.map((r) => [r.name, r.type, r.enabled])).toEqual([
+            ['RQ redirect', 'redirect', true],
+            ['RQ cancel', 'block', true],
+            ['RQ delay', 'delay', true],
+            ['RQ headers', 'headers', true]
+        ]);
+
+        const page = await h.openPage();
+        await waitFor(async () => (await page.evaluate(() => fetch('/api/rq-cancel').then(() => 'passed', () => 'blocked'))) === 'blocked',
+            { label: 'rules live on the page' });
+        const redirected = await pageFetch(page, '/api/rq-redirect');
+        expect(redirected.url).toMatch(/\/redirect-target/);
+        const delayed = await pageFetch(page, '/api/rq-delay');
+        expect(delayed.ms).toBeGreaterThanOrEqual(450);
+        await waitFor(async () => (await pageFetch(page, '/echo')).body.headers['x-from-requestly'] === 'yes',
+            { label: 'the converted header rule on the wire' });
+        await page.close();
     });
 
     // ---- theme --------------------------------------------------------------------------------

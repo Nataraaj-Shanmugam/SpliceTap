@@ -10,7 +10,7 @@ No proxy. No backend changes. No build step.
 
 [![Version](https://img.shields.io/badge/version-0.0.1-1e63f5?style=flat-square)](https://github.com/Nataraaj-Shanmugam/SpliceTap/releases)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-0bbcd4?style=flat-square)](https://developer.chrome.com/docs/extensions/mv3/intro/)
-[![Tests](https://img.shields.io/badge/tests-761%20unit%20%C2%B7%20408%20headless-22c55e?style=flat-square)](#contributing)
+[![Tests](https://img.shields.io/badge/tests-1673%20unit%20%C2%B7%20683%20headless-22c55e?style=flat-square)](#contributing)
 [![License](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
 
 [Website](https://nataraaj-shanmugam.github.io/SpliceTap/)&nbsp;·&nbsp;[Privacy Policy](https://nataraaj-shanmugam.github.io/SpliceTap/privacy.html)&nbsp;·&nbsp;[Report a bug](https://github.com/Nataraaj-Shanmugam/SpliceTap/issues)
@@ -82,7 +82,7 @@ Every rule has a `type`. Legacy rules exported without a `type` field are automa
 ### `mock` — Return a synthetic or patched response
 Two response **modes**:
 - **`static`** (default): Return a fully synthetic response you define — `statusCode`, `statusText`, `headers`, `body`, optional `delay`. Placeholders in the body are expanded at request time.
-- **`patch`**: Let the **real** request go to the network, then apply an RFC 7386 **JSON Merge Patch** to the response body. Objects merge recursively, `null` deletes a key, and arrays/scalars replace the existing value. A patch is skipped (the real response passes through, and the log notes why) when the response is not JSON, or its root is not an object. An empty patch `{}` changes nothing. Patch mode keeps the original status code.
+- **`patch`**: Let the **real** request go to the network, then apply an RFC 7386 **JSON Merge Patch** to the response body. Objects merge recursively, `null` deletes a key, and arrays/scalars replace the existing value. A patch is skipped (the real response passes through, and the log notes why) when the response is not JSON, or its root is not an object. An empty patch `{}` changes nothing. Patch mode keeps the original status code unless `response.patchStatus` (200–599) sets another — the real body, patched, with the status you choose.
 
 Mock rules also support two optional matching conditions:
 - **`match.graphql.operationName`** — matches `operationName` for POST bodies, batched (array) bodies, GET requests with `?operationName=`, and names declared in the `query`. This is the key to mocking a single query/mutation on a shared single-endpoint GraphQL API. (Method: POST, GET or Any (`*`).)
@@ -104,10 +104,10 @@ Rewrites the request URL to `redirect.destination` before it hits the network. W
 With "Also apply to scripts, images, styles and pages" ticked (`appliesTo: 'all'`), the same redirect also reaches scripts, stylesheets, images and page navigations — point a production bundle at your local build. The destination must then be a full `https://` (or `http://`) URL. Chrome's network layer performs those redirects, with the same whole-URL `$1`–`$9` substitution as the page.
 
 ### `headers` — Add/remove request or response headers
-Handled by `chrome.declarativeNetRequest` (see Architecture). `headersMod.request` and `headersMod.response` are each arrays of `{ op: 'set' | 'remove', name, value }`. Common use: a "CORS Unblock" preset that sets `Access-Control-Allow-Origin: *` on responses, or overriding `User-Agent` on requests.
+Handled by `chrome.declarativeNetRequest` (see Architecture). `headersMod.request` and `headersMod.response` are each arrays of `{ op: 'set' | 'remove', name, value }`; response headers also take `op: 'append'` (Chrome 120 cannot append request headers). By default header rules reach fetch/XHR; `match.resourceTypes` extends them to page navigations, scripts, images and other resources. Common use: a "CORS Unblock" preset that sets `Access-Control-Allow-Origin: *` on responses, or overriding `User-Agent` on requests.
 
 ### `queryparams` — Add or remove URL query parameters
-Also handled by declarativeNetRequest. `queryParams.add` is an array of `{ key, value }`; `queryParams.remove` is an array of keys to strip.
+Also handled by declarativeNetRequest. `queryParams.add` is an array of `{ key, value }`; `queryParams.remove` is an array of keys to strip; `queryParams.removeAll: true` clears the whole query string (before any `add`).
 
 ### `requestBody` — Modify the request body
 Rewrites the body of a fetch or XHR request before it is sent (methods other than GET and HEAD). `requestBody.mode` is:
@@ -128,6 +128,7 @@ The first enabled matching request-body rule applies; then the usual first match
 - `appliesTo` is only for block and redirect rules. A rule that applies to all requests cannot use header or GraphQL conditions (only fetch/XHR can be checked against them), and its wildcard pattern must be plain ASCII.
 - A request-body rule cannot use method GET or HEAD.
 - A code response is 1–20,000 characters, and only on mock rules.
+- `pageDomains`: 1–20 lowercase hostnames, without scheme, path, port or wildcard. `resourceTypes`: no duplicates, and only on all-request block/redirect and header/query rules. `payload` and `callFilter`: only on rules handled in the page, not on all-request, header or query rules. `patchStatus`: 200–599, patch mode only. Header `append`: response side only.
 
 ## Matching & Precedence
 
@@ -138,6 +139,12 @@ The first enabled matching request-body rule applies; then the usual first match
   - Otherwise → substring match
 - **Header and query-param rules** use the same anchored wildcard semantics as other rules: `*/echo` does not match `/echo/sub` or `/echo?x=1`.
 - **Method** `*` matches any method.
+- **Optional conditions** narrow a rule further:
+  - `match.pageDomains` — only when the request is made by a page (or frame) on one of these domains; a domain covers its subdomains. For network-layer rules this is Chrome's *initiator*, so a navigation typed in the address bar has none and never matches.
+  - `match.resourceTypes` — on all-request block/redirect and on header/query rules: which kinds of request (fetch/XHR, document, subdocument, script, stylesheet, image, font, media, websocket, ping, other).
+  - `match.payload` — `{ path, operator: 'equals' | 'contains', value }` against the JSON request body (in-page rules only).
+  - `match.callFilter` — `{ mode: 'first' | 'after' | 'every', n }`: apply only to the first n matching calls, only after the first n, or to every nth. Counted per rule per page load (reset on reload or any rule change); a call that doesn't qualify falls through to later rules — "fail once, then succeed" is a 500 mock with `first: 1`. In-page rules only.
+- **Try a URL** in the editor checks a URL against the rule you are editing, condition by condition, and warns when an earlier rule would take precedence.
 - **What they reach**: `mock`, `block`, `delay` and `redirect` act on requests the page makes with `fetch` or `XMLHttpRequest`. They do not reach scripts, stylesheets, images or page navigations — a `<script src>` is not redirected and an `<img>` is not blocked.
 - **Precedence**: For interceptor-handled types (`mock`, `block`, `delay`, `redirect`), enabled rules are evaluated in array order and the **first** rule whose URL + method + headers + GraphQL conditions all match wins — only that rule is applied.
 - `headers` / `queryparams` rules are applied independently by the browser's network layer via declarativeNetRequest and are not part of this first-match ordering.
@@ -210,9 +217,9 @@ produces `{ "user": { "name": "Real", "role": "admin" } }` — `role` is overwri
 
 ### Rule Templates
 The rule editor — the same one whether it opens over your page or on the
-options page — offers eight presets: GraphQL Mock, Patch Response, Block Request, Slow Request,
-Redirect to localhost, CORS Unblock (headers), Custom User-Agent (headers), and Modify request body
-(JSON patch).
+options page — offers eleven presets: GraphQL Mock, Patch Response, Block Request, Slow Request,
+Redirect to localhost, CORS Unblock (headers), Custom User-Agent (headers), User-Agent presets for
+iPhone (Safari), Android (Chrome) and Googlebot, and Modify request body (JSON patch).
 
 The two header templates are deliberately scoped to `localhost` and `127.0.0.1` (any port) rather
 than every site, because a CORS-disabling rule left on `*` is a real security
@@ -229,6 +236,7 @@ Both live in the popup's **Data** tab.
   moment an OS dialog takes focus, which would discard the import mid-flow
 - Every imported rule is validated, and invalid ones are skipped rather than
   failing the whole batch. Skipped or invalid rules are listed with reasons.
+- **From Requestly**: paste a Requestly export into Import and choose **Convert N Requestly rules**. Redirect, Cancel, Delay, Headers, Query Param, Modify Response (static and code), Modify Request Body (static), User-Agent and Replace rules are converted, with their URL conditions and page, resource-type, method and payload filters; Insert Script, local-file and compressed rules, and code request bodies are skipped, each with the reason, and anything approximated is listed as a warning. Requestly applies every matching rule while SpliceTap applies the first match, so review the order after importing.
 - **Migration**: v1 rule files (no `type` field) load transparently — each rule is normalized to `type: 'mock'` with `response.mode: 'static'`
 
 ### Popup & editor
@@ -236,7 +244,10 @@ Both live in the popup's **Data** tab.
 - **Move to top** is available in the rule list.
 - A new rule's method defaults to Any (`*`).
 - A blank response body is served empty.
-- A dirty in-page editor prompts before a page reload.
+- Unsaved work in the editor is kept as a draft (per tab, in session storage) and offered back the next time the editor opens — "Restore your unsaved rule?" — so a dev-server reload no longer loses it.
+- The editor's **Try a URL** box, and a **Captured response** panel when the rule was made from a capture.
+- Under the header: **This tab: N intercepted · last 5 s ago** (or "Nothing intercepted on this tab yet").
+- Rule rows show **Shadowed by …** when an earlier rule takes precedence for the same requests.
 - The context-menu entry is "New SpliceTap rule for this site…".
 - The popup footer counter is labelled "today".
 - Rule rows show chips for **All requests** (block/redirect that reach every resource type), **Request body** rules, and **Code** responses — dashed and marked "off in Settings" while code responses are switched off.
@@ -251,8 +262,9 @@ Capture removes that step. Switch it on in the popup's **Data** tab, trigger the
 request you care about, and the real response is recorded. Each capture then
 offers two buttons:
 
-- **Mock** — a rule replaying that exact status, content type and body, ready to
-  edit.
+- **Mock** — a rule replaying that exact status, content type and body, opened in
+  the editor over the page (or on the options page) with the captured response
+  shown beside it.
 - **Patch** — a rule that lets the real response through and merges your changes
   into it. Offered only when the captured body is a JSON object; open the
   capture's response in Chrome's Network tab to see which fields exist to change.
@@ -278,7 +290,7 @@ can see at a glance that failures are being injected deliberately rather than
 debugging a problem that isn't real.
 
 ### DevTools Panel
-Open Chrome DevTools and select the **SpliceTap** panel. Because mocked/blocked/delayed/redirected requests never reach the real network stack (and so can't appear in the normal Network tab), the panel instead shows SpliceTap's own interception log: it polls the background service worker every 3 seconds and renders each applied rule (method, URL, rule name, type, status, relative time), newest first. Delays and redirects show the status the page finally received (and where a redirect went); chaos failures and skipped patches appear too, with a note saying why. Header, query-param and all-request rules are applied by Chrome's network layer, which does not report which rule fired; switch on **Show header, query-param and all-request rules in the log** in Settings and SpliceTap matches those requests itself (marked "Seen on the network") and counts their hits. A "Clear" button empties the log, and **Export HAR** downloads the whole log as a HAR 1.2 file, with response bodies from Capture where one matches.
+Open Chrome DevTools and select the **SpliceTap** panel. Because mocked/blocked/delayed/redirected requests never reach the real network stack (and so can't appear in the normal Network tab), the panel instead shows SpliceTap's own interception log: it polls the background service worker every 3 seconds and renders each applied rule (method, URL, rule name, type, status, relative time), newest first. Delays and redirects show the status the page finally received (and where a redirect went); chaos failures and skipped patches appear too, with a note saying why. Header, query-param and all-request rules are applied by Chrome's network layer, which does not report which rule fired; switch on **Show header, query-param and all-request rules in the log** in Settings and SpliceTap matches those requests itself (marked "Seen on the network") and counts their hits. Each row's rule name opens that rule in the editor, **Disable rule** switches it off, and **View response** shows the captured response when Capture recorded one. A "Clear" button empties the log, and **Export HAR** downloads the whole log as a HAR 1.2 file, with response bodies from Capture where one matches.
 
 ## Technical Details
 
@@ -330,9 +342,9 @@ SpliceTap's single purpose is local API request mocking and modification for dev
 |---|---|---|---|
 | Page and frame fetch / XHR | yes | yes | yes |
 | Web Worker, SharedWorker, Service Worker fetch | no | no | yes |
-| EventSource | no | not verified | yes |
-| navigator.sendBeacon | no | not verified | no |
-| WebSocket | no | not verified | no |
+| EventSource | no | no — Chrome counts it as fetch/XHR, which the network rule leaves to the page | yes |
+| navigator.sendBeacon | no | yes, with "all requests" (the call still returns `true`) | no |
+| WebSocket | no | yes, with "all requests" (the handshake fails) | no |
 | `<script src>`, stylesheets, images, page navigation | no | yes, with "all requests" ticked | no |
 
 - Mock, delay and request-body rules act on **fetch and XHR only**. Block and redirect reach scripts, styles, images and navigations only when "Also apply to scripts, images, styles and pages" is ticked (see Rule Types).

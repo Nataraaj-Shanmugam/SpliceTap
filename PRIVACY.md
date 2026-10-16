@@ -30,6 +30,10 @@ remote server:
   fragment parameters whose names suggest secrets (token, secret, session,
   signature, auth, key, password, code, jwt…) and token-like path segments
   before a URL is written to it.
+- **Editor drafts** (`chrome.storage.session`) — while you are editing a rule,
+  the unsaved form, so a page reload doesn't lose it: one per tab, at most 20,
+  each up to 200 KB, dropped after 24 hours, when the tab closes, when you save
+  or discard, and on Reset; gone when the browser closes.
 - **Captures** (`chrome.storage.session`) — response bodies, and only when you
   explicitly switch on **Capture** in the popup's Data tab. This is the one
   feature that records a response body, and it exists so you can build a rule

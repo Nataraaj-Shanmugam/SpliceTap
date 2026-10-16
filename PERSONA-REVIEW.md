@@ -31,9 +31,9 @@ section records what has changed since.
 
 | Status | Count | Items |
 |---|---|---|
-| **Fixed** | 77 | Every High item. Every security, data-integrity and accessibility item. All of PER-1–19, 21–41, 43–46, 48–56, 62, 67–89. |
-| **Partly fixed** (limit documented in README) | 7 | PER-20 (data: frames: a request made while the frame's own HTML is still parsing can beat the state) · PER-42 (a mocked no-cors fetch stays readable; XHR doesn't follow mocked 3xx) · PER-47 (pages that restrict Trusted Types policy names get a plain-text document) · PER-59 (duplicates land below the original and "Move to top" exists; the shadowing warning is not built) · PER-60 (a capture-made rule is selected on the Rules tab; the editor hand-off is not built) · PER-61 (save toast and empty-state buttons; the whole-host prefill is unchanged) · PER-63 (an unsaved editor prompts before reload; drafts are not restored) |
-| **Not started** (enhancements, awaiting a go-ahead) | 5 | PER-57 (DevTools row → rule), PER-58 (per-tab popup status), PER-64 (key/value header editors), PER-65 (edit undo / history), PER-66 (response sequences) |
+| **Fixed** | 83 | Every High item. Every security, data-integrity and accessibility item. All of PER-1–19, 21–41, 43–46, 48–60, 62, 63, 66–89. (PER-57, 58, 59, 60, 63 and 66 were finished on 16 October 2026: DevTools row actions, per-tab status, shadowing warnings and Try a URL, capture → editor hand-off, restorable drafts, call filters.) |
+| **Partly fixed** (limit documented in README) | 4 | PER-20 (data: frames: a request made while the frame's own HTML is still parsing can beat the state) · PER-42 (a mocked no-cors fetch stays readable; XHR doesn't follow mocked 3xx) · PER-47 (pages that restrict Trusted Types policy names get a plain-text document) · PER-61 (save toast and empty-state buttons; the whole-host prefill is unchanged) |
+| **Not started** (enhancements) | 2 | PER-64 (key/value header editors), PER-65 (edit undo / history) |
 
 How the fixes were made and checked:
 

@@ -14,7 +14,7 @@
 const { launch, pageFetch, waitFor, sleep, auditA11y } = require('./harness');
 
 // The coordinator flips this to `test` once every group is merged.
-const afterMerge = test.failing; // coordinator flips
+const afterMerge = test; // flipped after the batch-2 merge
 
 const POPUP_SIZE = { width: 400, height: 600 };
 
@@ -88,7 +88,11 @@ describe('batch 2: popup and DevTools panel', () => {
         });
         const EXPORT = [
             requestlyRule('ads', 'Cancel', 'Block ads'),
-            requestlyRule('slow', 'Delay', 'Slow users', { status: 'Inactive' }),
+            requestlyRule('slow', 'Delay', 'Slow users', {
+                status: 'Inactive',
+                // A Delay pair carries its delay; without one the real converter rightly skips it.
+                pairs: [{ id: 'slow_p', source: { key: 'Url', operator: 'Contains', value: '/api/slow' }, delay: '300' }]
+            }),
             requestlyRule('inject', 'Script', 'Inject banner')
         ];
 
